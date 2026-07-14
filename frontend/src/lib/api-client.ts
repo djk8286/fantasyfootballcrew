@@ -22,7 +22,14 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
     config.body = JSON.stringify(body);
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+  const url = `${API_BASE_URL}${endpoint}`;
+  console.debug("[FFC] Fetch:", url, { method });
+  let response;
+  try {
+    response = await fetch(url, config);
+  } catch (e) {
+    throw new Error(`Failed to fetch ${url} — ${e instanceof Error ? e.message : "network error"}`);
+  }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`API error: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`);
