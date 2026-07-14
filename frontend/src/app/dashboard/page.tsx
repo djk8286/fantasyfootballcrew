@@ -5,7 +5,7 @@ import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8005";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface League {
   id: string;

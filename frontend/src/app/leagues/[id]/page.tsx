@@ -197,7 +197,7 @@ export default function LeagueDetailPage() {
         setTeams(Array.isArray(teamData) ? (teamData as Team[]) : []);
 
         if (l.draft_status !== "not_started") {
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8007"}/api/v1/drafts/find?league_id=${id}`)
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8005"}/api/v1/drafts/find?league_id=${id}`)
             .then((res) => res.json())
             .then((data) => setDraftId(data.id))
             .catch(() => {});

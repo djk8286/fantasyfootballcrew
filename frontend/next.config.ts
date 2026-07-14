@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* Production-optimized config for Vercel */
   trailingSlash: false,
   images: {
     remotePatterns: [
@@ -11,7 +10,15 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  // Output standalone for Vercel
+  // Proxy API requests to the backend during dev & production
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "http://localhost:8005/api/:path*",
+      },
+    ];
+  },
   output: "standalone",
 };
 
