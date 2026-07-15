@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/* Black + Gold Theme for FantasyFootballCrew */
+@theme {
+  --color-gold-50: #fdf8e8;
+  --color-gold-100: #f9edc5;
+  --color-gold-200: #f3df8e;
+  --color-gold-300: #eccd57;
+  --color-gold-400: #d4af37;
+  --color-gold-500: #b8960c;
+  --color-gold-600: #9a7b0a;
+  --color-gold-700: #7c6208;
+  --color-gold-800: #5e4a06;
+  --color-gold-900: #3f3104;
+
+  --color-surface-50: #f8f9fa;
+  --color-surface-100: #e9ecef;
+  --color-surface-200: #ced4da;
+  --color-surface-300: #adb5bd;
+  --color-surface-400: #6c757d;
+  --color-surface-500: #495057;
+  --color-surface-600: #343a40;
+  --color-surface-700: #212529;
+  --color-surface-800: #1a1a2e;
+  --color-surface-850: #12121f;
+  --color-surface-900: #0a0a0a;
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Base styles */
+body {
+  background-color: var(--color-surface-900);
+  color: #f0f0f0;
+  font-family: var(--font-sans, Arial, Helvetica, sans-serif);
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-600);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gold-400);
+}
