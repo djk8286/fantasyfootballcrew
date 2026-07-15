@@ -9,6 +9,7 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
 bcrypt>=4.0.0,<4.1.0  # pinned to avoid passlib compatibility issue if reverted
+PyJWT>=2.8.0
 
 # Testing
 pytest>=8.0.0
