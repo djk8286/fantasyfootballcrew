@@ -37,6 +37,20 @@ body {
   min-height: 100vh;
 }
 
+/* Stadium-at-night backdrop: faint yard-line stripes + vignette */
+.stadium-backdrop {
+  background-image:
+    repeating-linear-gradient(
+      115deg,
+      rgba(212, 175, 55, 0.025) 0px,
+      rgba(212, 175, 55, 0.025) 1px,
+      transparent 1px,
+      transparent 120px
+    ),
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(212, 175, 55, 0.06), transparent 60%),
+    radial-gradient(ellipse 100% 60% at 50% 110%, rgba(0, 0, 0, 0.4), transparent 60%);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi } from "@/lib/api-client";
+import { getAvatarStyle } from "@/lib/team-avatars";
+import RankBadge from "@/components/ui/RankBadge";
 import {
   ChevronRight,
   Trophy,
@@ -383,6 +385,7 @@ export default function StandingsPage() {
                       const rank = idx + 1;
                       const myTeam = isMyTeam(team);
                       const ownerLabel = getOwnerLabel(team);
+                      const avatar = getAvatarStyle(team.avatar_url);
 
                       return (
                         <tr
@@ -390,25 +393,25 @@ export default function StandingsPage() {
                           className={`transition-colors ${
                             myTeam
                               ? "bg-gold-400/5 border-l-2 border-l-gold-400"
+                              : rank === 1
+                              ? "bg-gold-400/3"
                               : "bg-surface-900 hover:bg-surface-800/80"
                           }`}
                         >
                           <td className="px-4 py-4">
-                            <span
-                              className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-xs font-bold ${
-                                rank <= 3
-                                  ? "bg-gold-400/10 text-gold-400 border border-gold-400/20"
-                                  : "bg-surface-800 text-surface-400 border border-surface-700"
-                              }`}
-                            >
-                              {rank}
-                            </span>
+                            <RankBadge rank={rank} />
                           </td>
                           <td className="px-4 py-4">
                             <div className="flex items-center gap-3">
+                              <div
+                                className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0 border border-white/10"
+                                style={{ backgroundColor: avatar.bg }}
+                              >
+                                {avatar.icon}
+                              </div>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-medium text-white truncate max-w-[180px]">
+                                  <span className="font-semibold text-white truncate max-w-[180px]">
                                     {team.name}
                                   </span>
                                   {myTeam && (
@@ -419,11 +422,7 @@ export default function StandingsPage() {
                                 </div>
                                 <span
                                   className={`text-xs ${
-                                    myTeam
-                                      ? "text-gold-400/70"
-                                      : team.is_cpu || team.owner_id === "cpu"
-                                      ? "text-surface-500"
-                                      : "text-surface-500"
+                                    myTeam ? "text-gold-400/70" : "text-surface-500"
                                   }`}
                                 >
                                   {ownerLabel}
@@ -431,19 +430,23 @@ export default function StandingsPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-4 text-center text-white font-semibold">
-                            {team.wins}
+                          <td className="px-3 py-4 text-center">
+                            <span className="text-white font-bold font-mono tabular-nums text-base">
+                              {team.wins}
+                            </span>
                           </td>
-                          <td className="px-3 py-4 text-center text-white">
-                            {team.losses}
+                          <td className="px-3 py-4 text-center">
+                            <span className="text-white font-bold font-mono tabular-nums text-base">
+                              {team.losses}
+                            </span>
                           </td>
-                          <td className="px-3 py-4 text-center text-surface-400">
+                          <td className="px-3 py-4 text-center text-surface-400 font-mono tabular-nums">
                             {team.ties}
                           </td>
-                          <td className="px-4 py-4 text-right text-white font-medium">
+                          <td className="px-4 py-4 text-right text-white font-bold font-mono tabular-nums">
                             {team.points_for?.toFixed(1) || "0.0"}
                           </td>
-                          <td className="px-4 py-4 text-right text-surface-400">
+                          <td className="px-4 py-4 text-right text-surface-400 font-mono tabular-nums">
                             {team.points_against?.toFixed(1) || "0.0"}
                           </td>
                         </tr>
@@ -488,7 +491,7 @@ export default function StandingsPage() {
                             >
                               {m.home_team}
                             </span>
-                            <span className="text-gold-400 font-bold text-sm tabular-nums shrink-0">
+                            <span className="text-gold-400 font-bold font-mono text-lg tabular-nums shrink-0">
                               {m.home_score?.toFixed(1) || "0.0"}
                             </span>
                           </div>
@@ -504,7 +507,7 @@ export default function StandingsPage() {
                             >
                               @ {m.away_team}
                             </span>
-                            <span className="text-gold-400 font-bold text-sm tabular-nums shrink-0">
+                            <span className="text-gold-400 font-bold font-mono text-lg tabular-nums shrink-0">
                               {m.away_score?.toFixed(1) || "0.0"}
                             </span>
                           </div>

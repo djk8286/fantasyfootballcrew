@@ -6,7 +6,9 @@ import {
   Shield,
   Target,
   Sparkles,
+  Infinity as InfinityIcon,
 } from "lucide-react";
+import StatTile from "@/components/ui/StatTile";
 
 const features = [
   {
@@ -103,31 +105,10 @@ export default function Home() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-8 mt-20 max-w-lg mx-auto">
-              <div>
-                <div className="text-2xl md:text-3xl font-bold text-gold-400">
-                  ∞
-                </div>
-                <div className="text-surface-500 text-sm mt-1">
-                  Scoring Combos
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl md:text-3xl font-bold text-gold-400">
-                  🏆
-                </div>
-                <div className="text-surface-500 text-sm mt-1">
-                  League Types
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl md:text-3xl font-bold text-gold-400">
-                  🤖
-                </div>
-                <div className="text-surface-500 text-sm mt-1">
-                  AI Analysis
-                </div>
-              </div>
+            <div className="grid grid-cols-3 gap-8 mt-20 max-w-lg mx-auto py-6 border-y border-surface-700/60">
+              <StatTile icon={InfinityIcon} value="∞" label="Scoring Combos" accent />
+              <StatTile icon={Trophy} value="3" label="League Types" accent />
+              <StatTile icon={Bot} value="AI" label="Powered Analysis" accent />
             </div>
           </div>
         </div>

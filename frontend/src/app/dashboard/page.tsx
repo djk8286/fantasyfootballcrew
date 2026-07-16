@@ -85,6 +85,7 @@ function LeagueCard({ league }: { league: League }) {
   const slotsOpen = league.max_teams - teamCount;
   const isFull = slotsOpen <= 0;
   const hasDraft = league.draft_status !== "not_started";
+  const isLive = league.draft_status === "in_progress";
   const createdLabel = timeAgo(league.created_at);
 
   // Fetch draft ID when the league has an active/completed draft
@@ -137,39 +138,57 @@ function LeagueCard({ league }: { league: League }) {
   );
 
   return (
-    <div className="relative group bg-surface-800 border border-surface-700 rounded-2xl p-6 hover:border-gold-400/30 transition-all hover:-translate-y-1 hover:shadow-xl hover:shadow-gold-400/5">
+    <div
+      className={`relative group rounded-2xl p-6 transition-all hover:-translate-y-1 ${
+        isLive
+          ? "bg-gold-400/10 border-2 border-gold-400/40 ring-2 ring-gold-400/20 shadow-[0_0_30px_rgba(255,215,0,0.12)]"
+          : "bg-surface-800 border border-surface-700 hover:border-gold-400/30 hover:shadow-xl hover:shadow-gold-400/5"
+      }`}
+    >
       {/* Main card link — wraps everything except quick actions */}
       <Link href={`/leagues/${league.id}`} className="block">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gold-400/10 border border-gold-400/20 flex items-center justify-center">
-              <TypeIcon className="w-5 h-5 text-gold-400" />
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                isLive
+                  ? "bg-gold-400/20 border border-gold-400/40"
+                  : "bg-gold-400/10 border border-gold-400/20"
+              }`}
+            >
+              <TypeIcon className="w-6 h-6 text-gold-400" />
             </div>
-            <h3 className="font-semibold text-white group-hover:text-gold-400 transition-colors">
+            <h3 className="text-lg font-bold text-white group-hover:text-gold-400 transition-colors truncate">
               {league.name}
             </h3>
           </div>
           <span
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${statusConf.color}`}
+            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${statusConf.color}`}
           >
+            {isLive && <span className="inline-block w-1.5 h-1.5 bg-current rounded-full animate-pulse mr-1" />}
             {statusConf.label}
           </span>
         </div>
 
+        {/* Stat row */}
+        <div className="flex items-center gap-4 mb-3">
+          <div className="flex items-baseline gap-1" title={`${teamCount} of ${league.max_teams} teams`}>
+            <span className="text-xl font-bold font-mono tabular-nums text-white">{teamCount}</span>
+            <span className="text-surface-500 text-sm font-mono">/{league.max_teams}</span>
+            <Users className="w-3.5 h-3.5 text-surface-500 ml-1" />
+          </div>
+          {isFull ? (
+            <span className="text-xs text-green-400 font-semibold">Full</span>
+          ) : (
+            <span className="text-xs text-gold-400 font-semibold">
+              {slotsOpen} slot{slotsOpen !== 1 ? "s" : ""} open
+            </span>
+          )}
+        </div>
+
         {/* Details */}
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-surface-400">
-          <span className="inline-flex items-center gap-1.5" title={`${teamCount} of ${league.max_teams} teams`}>
-            <Users className="w-3.5 h-3.5" />
-            {teamCount}/{league.max_teams}
-            {isFull ? (
-              <span className="text-xs text-green-400 font-medium ml-1">Full</span>
-            ) : (
-              <span className="text-xs text-gold-400 font-medium ml-1">
-                {slotsOpen} slot{slotsOpen !== 1 ? "s" : ""} open
-              </span>
-            )}
-          </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-gold-400/60" />
             {typeLabel}

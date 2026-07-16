@@ -38,10 +38,14 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-surface-900 text-white">
-        <Header />
-        <main className="flex-1">{children}</main>
-        <Footer />
+      <body className="min-h-full flex flex-col bg-surface-900 text-white relative">
+        {/* Stadium-at-night backdrop: faint yard-line stripes + vignette, fixed behind all content */}
+        <div className="stadium-backdrop fixed inset-0 pointer-events-none z-0" />
+        <div className="relative z-10 flex flex-col min-h-full">
+          <Header />
+          <main className="flex-1">{children}</main>
+          <Footer />
+        </div>
       </body>
     </html>
   );
