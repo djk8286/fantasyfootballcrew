@@ -158,3 +158,65 @@ def transform_player_position(sleeper_position: str) -> str:
         "LB": "LB",
     }
     return mapping.get(sleeper_position, "UNKNOWN")
+
+
+def sleeper_avatar_url(sleeper_id: Optional[str]) -> Optional[str]:
+    """Build a player's Sleeper CDN headshot URL. Single source of truth —
+    every endpoint that serializes a player should use this instead of
+    building the URL inline."""
+    if not sleeper_id:
+        return None
+    return f"https://sleepercdn.com/content/nfl/players/{sleeper_id}.jpg"
+
+
+# Compact, position-appropriate stat keys to surface as a "headline" summary
+# rather than dumping the full raw stat blob everywhere.
+HEADLINE_STAT_KEYS: Dict[str, list] = {
+    "QB": ["pass_yd", "pass_td", "pass_int"],
+    "RB": ["rush_yd", "rush_td", "rec"],
+    "WR": ["rec", "rec_yd", "rec_td"],
+    "TE": ["rec", "rec_yd", "rec_td"],
+    "K": ["fgm", "xpm"],
+    "DEF": ["idp_tkl", "idp_sack"],
+    "DL": ["idp_tkl", "idp_sack"],
+    "LB": ["idp_tkl", "idp_sack"],
+    "DB": ["idp_tkl", "idp_int"],
+}
+
+
+def headline_stats(position: str, stats: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """Pick a compact set of stat lines for a player based on position.
+    Returns {} if there's no stats data yet (nothing synced, or unknown position)."""
+    if not stats:
+        return {}
+    keys = HEADLINE_STAT_KEYS.get(position, [])
+    return {k: stats[k] for k in keys if k in stats and stats[k] is not None}
+
+
+async def sync_season_stats(db: AsyncSession, season: str) -> int:
+    """Fetch full-season aggregate stats for every player and store them on
+    Player.stats. Mirrors sync_weekly_stats's batched-commit pattern."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SLEEPER_API}/stats/nfl/regular/{season}", timeout=60
+        )
+        response.raise_for_status()
+        stats_data = response.json()
+
+    count = 0
+    for sleeper_id, stats in stats_data.items():
+        result = await db.execute(
+            select(Player).where(Player.sleeper_id == sleeper_id)
+        )
+        player = result.scalar_one_or_none()
+        if not player:
+            continue
+
+        player.stats = stats
+        count += 1
+
+        if count % 500 == 0:
+            await db.flush()
+
+    await db.commit()
+    return count

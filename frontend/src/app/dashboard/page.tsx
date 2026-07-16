@@ -246,6 +246,32 @@ interface Prospect {
   team: string | null;
   bye_week: number | null;
   injury_status: string | null;
+  avatar_url?: string | null;
+  sleeper_id?: string | null;
+  headline_stats?: Record<string, number> | null;
+}
+
+const PROSPECT_STAT_LABELS: Record<string, string> = {
+  pass_yd: "pass yd",
+  pass_td: "pass TD",
+  pass_int: "INT",
+  rush_yd: "rush yd",
+  rush_td: "rush TD",
+  rec: "rec",
+  rec_yd: "rec yd",
+  rec_td: "rec TD",
+  fgm: "FG",
+  xpm: "XP",
+  idp_tkl: "tkl",
+  idp_sack: "sack",
+  idp_int: "INT",
+};
+
+function prospectStatLine(stats?: Record<string, number> | null): string {
+  if (!stats) return "";
+  return Object.entries(stats)
+    .map(([key, value]) => `${Math.round(value * 10) / 10} ${PROSPECT_STAT_LABELS[key] || key}`)
+    .join(" · ");
 }
 
 function TopProspectsWidget() {
@@ -303,10 +329,11 @@ function TopProspectsWidget() {
                   bye_week: p.bye_week,
                   injury_status: p.injury_status,
                   fantasy_positions: null,
-                  avatar_url: null,
-                  sleeper_id: null,
+                  avatar_url: p.avatar_url ?? null,
+                  sleeper_id: p.sleeper_id ?? null,
                   rank_score: p.rank,
                   pos_rank: 0,
+                  headline_stats: p.headline_stats,
                 }}
                 size="sm"
               />
@@ -318,6 +345,11 @@ function TopProspectsWidget() {
                   <PositionBadge pos={p.position} />
                 </div>
                 <span className="text-surface-500 text-xs">{p.team || "FA"}</span>
+                {p.headline_stats && Object.keys(p.headline_stats).length > 0 && (
+                  <p className="text-[10px] text-surface-500 truncate">
+                    {prospectStatLine(p.headline_stats)}
+                  </p>
+                )}
               </div>
             </Link>
           ))}

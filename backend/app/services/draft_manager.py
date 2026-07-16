@@ -13,6 +13,7 @@ from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League
+from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats
 
 
 def generate_snake_order(team_ids: list[str], total_rounds: int) -> list[str]:
@@ -291,6 +292,9 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "bye_week": player.bye_week if player else None,
                 "injury_status": player.injury_status if player else None,
                 "fantasy_positions": player.fantasy_positions if player else None,
+                "avatar_url": sleeper_avatar_url(player.sleeper_id) if player else None,
+                "headline_stats": compute_headline_stats(player.position, player.stats) if player else {},
+                "stats": player.stats if player else None,
                 "rank_score": get_player_rank_from_list(f"{player.first_name} {player.last_name}") if player else 0,
                 "pos_rank": pos_rank_map.get(player.id, 0) if player else 0,
             },
@@ -333,11 +337,13 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "team": p.team or "FA",
                 "age": p.age,
                 "number": p.number,
-                "avatar_url": f"https://sleepercdn.com/content/nfl/players/{p.sleeper_id}.jpg" if p.sleeper_id else None,
+                "avatar_url": sleeper_avatar_url(p.sleeper_id),
                 "sleeper_id": p.sleeper_id,
                 "bye_week": p.bye_week,
                 "injury_status": p.injury_status,
                 "fantasy_positions": p.fantasy_positions,
+                "headline_stats": compute_headline_stats(p.position, p.stats),
+                "stats": p.stats,
                 "rank_score": get_player_rank_from_list(f"{p.first_name} {p.last_name}"),
                 "pos_rank": pos_rank_map.get(p.id, 0),
             }

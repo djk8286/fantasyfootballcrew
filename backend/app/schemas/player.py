@@ -14,6 +14,9 @@ class PlayerRead(BaseModel):
     injury_status: Optional[str] = None
     fantasy_positions: Optional[list] = None
     age: Optional[int] = None
+    avatar_url: Optional[str] = None
+    headline_stats: Optional[dict] = None
+    stats: Optional[dict] = None
 
     class Config:
         from_attributes = True

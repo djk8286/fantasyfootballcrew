@@ -587,6 +587,7 @@ export default function DraftPage() {
               }
               onClaimTeam={claimTeam}
               onUnclaimTeam={unclaimTeam}
+              onPlayerHover={handlePlayerHover}
             />
           </div>
         )}

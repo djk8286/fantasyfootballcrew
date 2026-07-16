@@ -19,7 +19,24 @@ interface HoverPlayer {
   sleeper_id: string | null;
   rank_score: number;
   pos_rank: number;
+  headline_stats?: Record<string, number> | null;
 }
+
+const STAT_LABELS: Record<string, string> = {
+  pass_yd: "Pass Yd",
+  pass_td: "Pass TD",
+  pass_int: "INT",
+  rush_yd: "Rush Yd",
+  rush_td: "Rush TD",
+  rec: "Rec",
+  rec_yd: "Rec Yd",
+  rec_td: "Rec TD",
+  fgm: "FG Made",
+  xpm: "XP Made",
+  idp_tkl: "Tackles",
+  idp_sack: "Sacks",
+  idp_int: "INT",
+};
 
 function PlayerAvatar({
   player,
@@ -172,6 +189,28 @@ function PlayerCardOverlay({
                 </div>
               )}
           </div>
+          {"headline_stats" in player &&
+            player.headline_stats &&
+            Object.keys(player.headline_stats).length > 0 && (
+              <>
+                <div className="h-px bg-surface-700/60 my-2" />
+                <p className="text-[9px] text-surface-600 uppercase mb-1.5">
+                  Last Season
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {Object.entries(player.headline_stats).map(([key, value]) => (
+                    <div key={key} className="flex items-center gap-1">
+                      <span className="text-[10px] text-surface-300 font-semibold">
+                        {typeof value === "number" ? Math.round(value * 10) / 10 : String(value)}
+                      </span>
+                      <span className="text-[9px] text-surface-600">
+                        {STAT_LABELS[key] || key}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
         </div>
       </div>
     </div>

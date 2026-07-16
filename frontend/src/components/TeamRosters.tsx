@@ -2,6 +2,7 @@
 
 import { Star } from "lucide-react";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
+import { PlayerAvatar } from "./PlayerAvatar";
 
 interface TeamRosterPick {
   id: string;
@@ -11,6 +12,16 @@ interface TeamRosterPick {
     full_name: string;
     position: string;
     team: string;
+    number?: number | null;
+    age?: number | null;
+    bye_week?: number | null;
+    injury_status?: string | null;
+    fantasy_positions?: string[] | null;
+    avatar_url?: string | null;
+    sleeper_id?: string | null;
+    rank_score?: number;
+    pos_rank?: number;
+    headline_stats?: Record<string, number> | null;
   } | null;
   team: { id: string; name: string };
 }
@@ -28,6 +39,7 @@ interface TeamRostersProps {
   onToggleExpand: (teamId: string) => void;
   onClaimTeam: (teamId: string) => void;
   onUnclaimTeam: () => void;
+  onPlayerHover: (player: any, el: HTMLElement | null) => void;
 }
 
 export default function TeamRosters({
@@ -43,6 +55,7 @@ export default function TeamRosters({
   onToggleExpand,
   onClaimTeam,
   onUnclaimTeam,
+  onPlayerHover,
 }: TeamRostersProps) {
   return (
     <div className="w-full xl:w-[380px] shrink-0">
@@ -73,10 +86,16 @@ export default function TeamRosters({
                       {pos} ({myRosterByPos[pos].length})
                     </div>
                     {myRosterByPos[pos].map((p) => (
-                      <div key={p.id} className="flex items-center gap-2 px-4 py-1.5">
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-2 px-4 py-1.5"
+                        onMouseEnter={(e) => p.player && onPlayerHover(p.player, e.currentTarget)}
+                        onMouseLeave={() => onPlayerHover(null, null)}
+                      >
                         <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">
                           {p.pick_number}
                         </span>
+                        {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
                         <span className="text-sm text-white truncate flex-1">
                           {p.player?.full_name}
                         </span>
@@ -197,10 +216,13 @@ export default function TeamRosters({
                           <div
                             key={p.id}
                             className="flex items-center gap-2 px-4 py-1.5 text-xs hover:bg-surface-800/20"
+                            onMouseEnter={(e) => p.player && onPlayerHover(p.player, e.currentTarget)}
+                            onMouseLeave={() => onPlayerHover(null, null)}
                           >
                             <span className="text-surface-500 text-[10px] font-mono w-5 shrink-0">
                               {p.pick_number}
                             </span>
+                            {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
                             <span className="text-white truncate flex-1">
                               {p.player?.full_name || "—"}
                             </span>

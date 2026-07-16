@@ -19,6 +19,9 @@ interface BoardViewPick {
     full_name: string;
     position: string;
     team: string;
+    avatar_url?: string | null;
+    sleeper_id?: string | null;
+    headline_stats?: Record<string, number> | null;
   } | null;
   team: { id: string; name: string };
 }

@@ -5,10 +5,29 @@ from app.core.database import get_db
 from app.models.player import Player
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import get_tier_names, build_sequential_ranking
+from app.services.sleeper_sync import sleeper_avatar_url, headline_stats
 
 router = APIRouter(prefix="/players", tags=["players"])
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+
+def _serialize_player(p: Player) -> dict:
+    return {
+        "id": p.id,
+        "sleeper_id": p.sleeper_id,
+        "first_name": p.first_name,
+        "last_name": p.last_name,
+        "position": p.position,
+        "team": p.team,
+        "bye_week": p.bye_week,
+        "injury_status": p.injury_status,
+        "fantasy_positions": p.fantasy_positions,
+        "age": p.age,
+        "avatar_url": sleeper_avatar_url(p.sleeper_id),
+        "headline_stats": headline_stats(p.position, p.stats),
+        "stats": p.stats,
+    }
 
 
 @router.get("", response_model=list[PlayerRead])
@@ -34,7 +53,7 @@ async def list_players(
     query = query.limit(limit)
     result = await db.execute(query)
     players = result.scalars().all()
-    return players
+    return [_serialize_player(p) for p in players]
 
 
 @router.get("/top-prospects")
@@ -61,13 +80,7 @@ async def top_prospects(limit: int = 100, db: AsyncSession = Depends(get_db)):
                 seen_ids.add(player.id)
                 matched.append({
                     "rank": rank,
-                    "id": player.id,
-                    "first_name": player.first_name,
-                    "last_name": player.last_name,
-                    "position": player.position,
-                    "team": player.team,
-                    "bye_week": player.bye_week,
-                    "injury_status": player.injury_status,
+                    **_serialize_player(player),
                 })
                 break
 
@@ -80,4 +93,4 @@ async def get_player(player_id: str, db: AsyncSession = Depends(get_db)):
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    return player
+    return _serialize_player(player)

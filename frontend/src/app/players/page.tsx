@@ -20,6 +20,31 @@ interface PlayerRead {
   fantasy_positions?: string[] | null;
   age?: number | null;
   rank?: number;
+  avatar_url?: string | null;
+  headline_stats?: Record<string, number> | null;
+}
+
+const STAT_LABELS: Record<string, string> = {
+  pass_yd: "pass yd",
+  pass_td: "pass TD",
+  pass_int: "INT",
+  rush_yd: "rush yd",
+  rush_td: "rush TD",
+  rec: "rec",
+  rec_yd: "rec yd",
+  rec_td: "rec TD",
+  fgm: "FG",
+  xpm: "XP",
+  idp_tkl: "tkl",
+  idp_sack: "sack",
+  idp_int: "INT",
+};
+
+function statLine(stats?: Record<string, number> | null): string {
+  if (!stats) return "";
+  return Object.entries(stats)
+    .map(([key, value]) => `${Math.round(value * 10) / 10} ${STAT_LABELS[key] || key}`)
+    .join(" · ");
 }
 
 // PlayerAvatar/PlayerCardOverlay were built for the draft room's richer player
@@ -37,10 +62,11 @@ function toHoverPlayer(p: PlayerRead): HoverPlayer {
     bye_week: p.bye_week,
     injury_status: p.injury_status,
     fantasy_positions: p.fantasy_positions ?? null,
-    avatar_url: null,
+    avatar_url: p.avatar_url ?? null,
     sleeper_id: p.sleeper_id ?? null,
     rank_score: p.rank ?? 9999,
     pos_rank: 0,
+    headline_stats: p.headline_stats ?? null,
   };
 }
 
@@ -197,6 +223,12 @@ export default function PlayersPage() {
                         <span className="text-yellow-400">{p.injury_status}</span>
                       )}
                     </div>
+                    {p.headline_stats && Object.keys(p.headline_stats).length > 0 && (
+                      <p className="text-[11px] text-surface-400 mt-0.5">
+                        {statLine(p.headline_stats)}{" "}
+                        <span className="text-surface-600">(last season)</span>
+                      </p>
+                    )}
                   </div>
                 </div>
               );
