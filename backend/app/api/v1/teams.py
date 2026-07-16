@@ -157,7 +157,7 @@ async def bulk_add_cpu_teams(
         team_num = current_count + i + 1
         team = Team(
             name=f"{req.name_prefix} {team_num}",
-            owner_id="cpu",
+            owner_id=None,
             league_id=league_id,
             roster=[],
             is_cpu=True,

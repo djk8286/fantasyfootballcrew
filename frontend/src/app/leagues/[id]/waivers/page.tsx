@@ -9,7 +9,7 @@ import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "
 interface Team {
   id: string;
   name: string;
-  owner_id: string;
+  owner_id: string | null;
   co_owner_id: string | null;
   roster: string[] | null;
 }

@@ -34,7 +34,7 @@ import {
 interface Team {
   id: string;
   name: string;
-  owner_id: string;
+  owner_id: string | null;
   league_id: string;
   avatar_url: string | null;
   is_cpu: boolean;

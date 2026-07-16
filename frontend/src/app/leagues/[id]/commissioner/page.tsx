@@ -36,7 +36,7 @@ interface League {
 interface Team {
   id: string;
   name: string;
-  owner_id: string;
+  owner_id: string | null;
 }
 
 interface Adjustment {

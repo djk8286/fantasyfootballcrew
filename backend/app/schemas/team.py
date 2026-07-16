@@ -19,7 +19,7 @@ class TeamUpdate(BaseModel):
 class TeamRead(BaseModel):
     id: str
     name: str
-    owner_id: str
+    owner_id: Optional[str] = None
     co_owner_id: Optional[str] = None
     league_id: str
     avatar_url: Optional[str] = None

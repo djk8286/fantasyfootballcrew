@@ -21,7 +21,7 @@ import {
 interface Standing {
   id: string;
   name: string;
-  owner_id: string;
+  owner_id: string | null;
   is_cpu: boolean;
   wins: number;
   losses: number;

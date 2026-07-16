@@ -11,7 +11,7 @@ class Team(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String, nullable=False)
-    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     co_owner_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
