@@ -1,23 +1,25 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Trophy } from "lucide-react";
 import { playersApi } from "@/lib/api-client";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import type { HoverPlayer } from "@/components/PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
+import RankBadge from "@/components/ui/RankBadge";
 
 interface PlayerRead {
   id: string;
-  sleeper_id: string;
+  sleeper_id?: string;
   first_name: string;
   last_name: string;
   position: string;
   team: string | null;
   bye_week: number | null;
   injury_status: string | null;
-  fantasy_positions: string[] | null;
-  age: number | null;
+  fantasy_positions?: string[] | null;
+  age?: number | null;
+  rank?: number;
 }
 
 // PlayerAvatar/PlayerCardOverlay were built for the draft room's richer player
@@ -30,14 +32,14 @@ function toHoverPlayer(p: PlayerRead): HoverPlayer {
     last_name: p.last_name,
     position: p.position,
     team: p.team || "",
-    age: p.age,
+    age: p.age ?? null,
     number: null,
     bye_week: p.bye_week,
     injury_status: p.injury_status,
-    fantasy_positions: p.fantasy_positions,
+    fantasy_positions: p.fantasy_positions ?? null,
     avatar_url: null,
-    sleeper_id: p.sleeper_id,
-    rank_score: 9999,
+    sleeper_id: p.sleeper_id ?? null,
+    rank_score: p.rank ?? 9999,
     pos_rank: 0,
   };
 }
@@ -65,8 +67,20 @@ export default function PlayersPage() {
     [],
   );
 
+  const showingProspects = !search.trim() && positionFilter === "ALL";
+
   const loadPlayers = useCallback(() => {
     setLoading(true);
+
+    if (showingProspects) {
+      playersApi
+        .topProspects(100)
+        .then((data) => setPlayers(Array.isArray(data) ? (data as PlayerRead[]) : []))
+        .catch((err) => setError(err instanceof Error ? err.message : "Failed to load players"))
+        .finally(() => setLoading(false));
+      return;
+    }
+
     const params: Record<string, string> = { limit: "100" };
     if (search.trim()) params.search = search.trim();
     if (positionFilter !== "ALL") params.position = positionFilter;
@@ -76,7 +90,7 @@ export default function PlayersPage() {
       .then((data) => setPlayers(Array.isArray(data) ? (data as PlayerRead[]) : []))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load players"))
       .finally(() => setLoading(false));
-  }, [search, positionFilter]);
+  }, [search, positionFilter, showingProspects]);
 
   useEffect(() => {
     const handle = setTimeout(loadPlayers, 300);
@@ -90,7 +104,9 @@ export default function PlayersPage() {
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">Players</h1>
           <p className="text-surface-400 mt-2 text-sm md:text-base">
-            Browse NFL players, positions, and status.
+            {showingProspects
+              ? "Top 100 draft prospects, ranked. Search or filter to browse everyone else."
+              : "Browse NFL players, positions, and status."}
           </p>
         </div>
       </section>
@@ -150,6 +166,12 @@ export default function PlayersPage() {
           </div>
         ) : (
           <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden divide-y divide-surface-700/50">
+            {showingProspects && (
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-900/50 text-xs font-semibold text-gold-400 uppercase tracking-wider">
+                <Trophy className="w-3.5 h-3.5" />
+                Top 100 Draft Prospects
+              </div>
+            )}
             {players.map((p) => {
               const hp = toHoverPlayer(p);
               return (
@@ -157,6 +179,7 @@ export default function PlayersPage() {
                   key={p.id}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-surface-700/30 transition-colors"
                 >
+                  {showingProspects && p.rank && <RankBadge rank={p.rank} size="sm" />}
                   <PlayerAvatar player={hp} size="md" onHover={handleHover} />
                   <div
                     className="flex-1 min-w-0"

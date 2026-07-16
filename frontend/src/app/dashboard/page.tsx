@@ -2,8 +2,11 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { leaguesApi, isLoggedIn } from "@/lib/api-client";
-import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar } from "lucide-react";
+import { leaguesApi, playersApi, isLoggedIn } from "@/lib/api-client";
+import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight } from "lucide-react";
+import { PlayerAvatar } from "@/components/PlayerAvatar";
+import PositionBadge from "@/components/PositionBadge";
+import RankBadge from "@/components/ui/RankBadge";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -232,6 +235,98 @@ function LeagueCard({ league }: { league: League }) {
   );
 }
 
+/* ---------- Top draft prospects widget ---------- */
+
+interface Prospect {
+  rank: number;
+  id: string;
+  first_name: string;
+  last_name: string;
+  position: string;
+  team: string | null;
+  bye_week: number | null;
+  injury_status: string | null;
+}
+
+function TopProspectsWidget() {
+  const [prospects, setProspects] = useState<Prospect[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    playersApi
+      .topProspects(10)
+      .then((data) => setProspects(Array.isArray(data) ? (data as Prospect[]) : []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (!loading && prospects.length === 0) return null;
+
+  return (
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-10">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <Trophy className="w-4 h-4 text-gold-400" />
+          Top Draft Prospects
+        </h2>
+        <Link
+          href="/players"
+          className="inline-flex items-center gap-1 text-gold-400 hover:text-gold-300 text-xs font-semibold"
+        >
+          View all 100 <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {prospects.map((p) => (
+            <Link
+              key={p.id}
+              href="/players"
+              className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-surface-700/50 transition-colors"
+            >
+              <RankBadge rank={p.rank} size="sm" />
+              <PlayerAvatar
+                player={{
+                  id: p.id,
+                  full_name: `${p.first_name} ${p.last_name}`.trim(),
+                  first_name: p.first_name,
+                  last_name: p.last_name,
+                  position: p.position,
+                  team: p.team || "",
+                  age: null,
+                  number: null,
+                  bye_week: p.bye_week,
+                  injury_status: p.injury_status,
+                  fantasy_positions: null,
+                  avatar_url: null,
+                  sleeper_id: null,
+                  rank_score: p.rank,
+                  pos_rank: 0,
+                }}
+                size="sm"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-medium text-white truncate">
+                    {p.first_name} {p.last_name}
+                  </span>
+                  <PositionBadge pos={p.position} />
+                </div>
+                <span className="text-surface-500 text-xs">{p.team || "FA"}</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- Dashboard Page ---------- */
 
 export default function DashboardPage() {
@@ -285,8 +380,13 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* Top Draft Prospects */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+        <TopProspectsWidget />
+      </section>
+
       {/* League Cards */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-10">
         {loading ? (
           <div className="flex items-center justify-center py-24">
             <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />

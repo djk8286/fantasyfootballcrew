@@ -123,6 +123,7 @@ export const playersApi = {
     return apiRequest(`/api/v1/players${query}`);
   },
   get: (id: string) => apiRequest(`/api/v1/players/${id}`),
+  topProspects: (limit = 100) => apiRequest(`/api/v1/players/top-prospects?limit=${limit}`),
 };
 
 // Scoring
