@@ -77,7 +77,8 @@ export const authApi = {
 
 // Leagues
 export const leaguesApi = {
-  list: () => apiRequest("/api/v1/leagues"),
+  list: (mine?: boolean) =>
+    apiRequest(`/api/v1/leagues${mine ? "?mine=true" : ""}`),
   get: (id: string) => apiRequest(`/api/v1/leagues/${id}`),
   create: (data: Record<string, unknown>) =>
     apiRequest("/api/v1/leagues", { method: "POST", body: data }),
@@ -181,20 +182,20 @@ export const standingsApi = {
 
 // AI
 export const aiApi = {
-  analyze: (leagueId: string, prompt: string) =>
-    apiRequest("/api/v1/ai/analyze", {
-      method: "POST",
-      body: { league_id: leagueId, prompt },
-    }),
-  lineup: (leagueId: string, prompt: string) =>
+  lineup: (teamId: string) =>
     apiRequest("/api/v1/ai/lineup", {
       method: "POST",
-      body: { league_id: leagueId, prompt },
+      body: { team_id: teamId },
     }),
-  trade: (leagueId: string, prompt: string) =>
+  trade: (tradeId: string) =>
     apiRequest("/api/v1/ai/trade", {
       method: "POST",
-      body: { league_id: leagueId, prompt },
+      body: { trade_id: tradeId },
+    }),
+  bet: (prompt: string) =>
+    apiRequest("/api/v1/ai/bet", {
+      method: "POST",
+      body: { prompt },
     }),
 };
 

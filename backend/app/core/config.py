@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     ]
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
+    OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
 
     @field_validator("DATABASE_URL")
     @classmethod

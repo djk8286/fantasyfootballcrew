@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { leaguesApi } from "@/lib/api-client";
+import { leaguesApi, isLoggedIn } from "@/lib/api-client";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
@@ -238,10 +238,16 @@ export default function DashboardPage() {
   const [leagues, setLeagues] = useState<League[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loggedIn, setLoggedIn] = useState(true);
 
   useEffect(() => {
+    if (!isLoggedIn()) {
+      setLoggedIn(false);
+      setLoading(false);
+      return;
+    }
     leaguesApi
-      .list()
+      .list(true)
       .then((data) => {
         setLeagues(Array.isArray(data) ? data : []);
       })
@@ -286,6 +292,22 @@ export default function DashboardPage() {
             <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
             <span className="ml-3 text-surface-400">Loading leagues...</span>
           </div>
+        ) : !loggedIn ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-surface-800 border border-surface-700 flex items-center justify-center mb-4">
+              <Trophy className="w-8 h-8 text-gold-400/60" />
+            </div>
+            <h2 className="text-lg font-semibold text-white mb-1">Log in to see your leagues</h2>
+            <p className="text-surface-400 text-sm mb-4">
+              Sign in to manage the leagues you own or play in.
+            </p>
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-2.5 rounded-xl font-bold text-sm transition-all"
+            >
+              Log In
+            </Link>
+          </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <div className="w-16 h-16 rounded-2xl bg-surface-800 border border-surface-700 flex items-center justify-center mb-4">
@@ -315,19 +337,26 @@ export default function DashboardPage() {
               <Trophy className="w-10 h-10 text-gold-400/60" />
             </div>
             <h2 className="text-xl font-semibold text-white mb-2">
-              No leagues yet
+              You&apos;re not in any leagues yet
             </h2>
             <p className="text-surface-400 text-sm max-w-md">
-              Join or create your first league to get started on your fantasy
-              football journey.
+              Create your own league, or browse existing ones with open slots.
             </p>
-            <Link
-              href="/leagues/create"
-              className="mt-6 inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-lg hover:shadow-gold-400/25"
-            >
-              <Plus className="w-4 h-4" />
-              Create Your First League
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-3 mt-6">
+              <Link
+                href="/leagues/create"
+                className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-lg hover:shadow-gold-400/25"
+              >
+                <Plus className="w-4 h-4" />
+                Create a League
+              </Link>
+              <Link
+                href="/leagues"
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-6 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                Browse Leagues
+              </Link>
+            </div>
           </div>
         )}
       </section>

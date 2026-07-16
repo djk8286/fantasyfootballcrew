@@ -82,10 +82,10 @@ Provide:
 class AIService:
     """Service for AI-powered fantasy football analysis."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "default"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "default", provider: str = "openai"):
         self.api_key = api_key
         self.model = model
-        self.provider = "openai"  # Will make configurable
+        self.provider = provider
 
     async def analyze_lineup(
         self,

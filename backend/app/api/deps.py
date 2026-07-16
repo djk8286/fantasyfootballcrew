@@ -30,6 +30,20 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Like get_current_user, but returns None instead of raising when no/invalid token is given."""
+    if credentials is None:
+        return None
+    payload = decode_access_token(credentials.credentials)
+    if not payload or "sub" not in payload:
+        return None
+    result = await db.execute(select(User).where(User.id == payload["sub"]))
+    return result.scalar_one_or_none()
+
+
 def require_commissioner(league: League, current_user: User) -> None:
     """Raise 403 unless current_user is the league's commissioner or a co-commissioner."""
     allowed_ids = {league.commissioner_id, *(league.co_commissioner_ids or [])}

@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from app.core.database import get_db
 from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING
-from app.api.deps import get_current_user, require_commissioner
+from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
@@ -45,14 +45,28 @@ async def create_league(
 
 
 @router.get("", response_model=list[LeagueRead])
-async def list_leagues(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(
-            League,
-            func.count(Team.id).label("team_count")
-        ).outerjoin(Team, Team.league_id == League.id)
-        .group_by(League.id)
-    )
+async def list_leagues(
+    mine: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    query = select(
+        League,
+        func.count(Team.id).label("team_count")
+    ).outerjoin(Team, Team.league_id == League.id)
+
+    if mine:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        my_league_ids = select(Team.league_id).where(
+            or_(Team.owner_id == current_user.id, Team.co_owner_id == current_user.id)
+        )
+        query = query.where(
+            or_(League.commissioner_id == current_user.id, League.id.in_(my_league_ids))
+        )
+
+    query = query.group_by(League.id)
+    result = await db.execute(query)
     rows = result.all()
     leagues = []
     for league, team_count in rows:
