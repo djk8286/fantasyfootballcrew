@@ -29,12 +29,19 @@ async def create_league(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # New leagues default to standard PPR scoring, not an empty config.
+    # standings_service.calculate_week reads league.scoring_config directly
+    # (no defaults merge -- that merge only happens in the GET /scoring
+    # display endpoint), so a league whose commissioner never visits the
+    # scoring settings page would otherwise score every player 0, all
+    # season, with no error anywhere. Deep copy, not a shared reference --
+    # see the DEFAULT_SCORING mutation bug fixed elsewhere in this file.
     league = League(
         name=league_data.name,
         description=league_data.description,
         commissioner_id=current_user.id,
         league_type=league_data.league_type,
-        scoring_config=league_data.scoring_config or {},
+        scoring_config=league_data.scoring_config or copy.deepcopy(DEFAULT_SCORING),
         max_teams=league_data.max_teams,
         draft_type=league_data.draft_type,
         co_commissioner_ids=[],
