@@ -179,6 +179,8 @@ export const standingsApi = {
     apiRequest(`/api/v1/leagues/${leagueId}/standings/calculate?week=${week}&year=${year}`, {
       method: "POST",
     }),
+  getSchedule: (leagueId: string, year: number, weeks = 14) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/standings/schedule?year=${year}&weeks=${weeks}`),
 };
 
 // AI

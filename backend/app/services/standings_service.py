@@ -350,6 +350,75 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
     return sorted_standings
 
 
+DEFAULT_SEASON_WEEKS = 14
+
+
+async def get_season_schedule(
+    league_id: str,
+    year: int,
+    db: AsyncSession,
+    num_weeks: int = DEFAULT_SEASON_WEEKS,
+) -> List[Dict[str, Any]]:
+    """
+    Full-season, week-by-week matchup schedule for a league.
+
+    For a week that already has a real WeeklyScore on record, that actual
+    score is used. For a week that hasn't been played/calculated yet, each
+    team's score is *projected* as the average of that same team's own
+    actual scores from completed weeks earlier in the season -- a simple,
+    honest baseline (there's no per-player projection model in this app
+    yet). A team with zero completed weeks gets a null projection rather
+    than a fabricated number.
+    """
+    teams_result = await db.execute(select(Team).where(Team.league_id == league_id))
+    teams = teams_result.scalars().all()
+    team_map = {t.id: t.name for t in teams}
+    team_ids = [t.id for t in teams]
+
+    if len(team_ids) < 2:
+        return []
+
+    scores_result = await db.execute(
+        select(WeeklyScore).where(WeeklyScore.league_id == league_id, WeeklyScore.year == year)
+    )
+    all_scores = scores_result.scalars().all()
+
+    # scores_by_team[team_id][week] = total_score, for O(1) lookups below
+    # instead of a query per team per week.
+    scores_by_team: Dict[str, Dict[int, float]] = {}
+    for ws in all_scores:
+        scores_by_team.setdefault(ws.team_id, {})[ws.week] = ws.total_score
+
+    def project(team_id: str, week: int) -> Optional[float]:
+        played = [s for w, s in scores_by_team.get(team_id, {}).items() if w < week]
+        if not played:
+            return None
+        return round(sum(played) / len(played), 2)
+
+    def team_entry(team_id: str, week: int) -> Dict[str, Any]:
+        actual = scores_by_team.get(team_id, {}).get(week)
+        return {
+            "id": team_id,
+            "name": team_map.get(team_id, "Unknown"),
+            "score": actual,
+            "projected_score": actual if actual is not None else project(team_id, week),
+            "is_projected": actual is None,
+        }
+
+    schedule = []
+    for week in range(1, num_weeks + 1):
+        matchups = _build_round_robin_schedule(team_ids, week)
+        schedule.append({
+            "week": week,
+            "matchups": [
+                {"team_a": team_entry(a, week), "team_b": team_entry(b, week)}
+                for a, b in matchups
+            ],
+        })
+
+    return schedule
+
+
 async def get_weekly_matchups(
     league_id: str,
     week: int,

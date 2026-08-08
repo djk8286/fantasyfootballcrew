@@ -596,6 +596,13 @@ export default function LeagueDetailPage() {
                 Standings
               </Link>
               <Link
+                href={`/leagues/${id}/schedule`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <Calendar className="w-4 h-4" />
+                Schedule
+              </Link>
+              <Link
                 href={`/leagues/${id}/trades`}
                 className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
               >
@@ -823,6 +830,12 @@ export default function LeagueDetailPage() {
                             {isMyTeam && (
                               <span className="ml-2 text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded">Your Team</span>
                             )}
+                            <Link
+                              href={`/leagues/${id}/teams/${team.id}`}
+                              className="ml-2 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium"
+                            >
+                              Team →
+                            </Link>
                             <Link
                               href={`/leagues/${id}/standings`}
                               className="ml-2 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium"

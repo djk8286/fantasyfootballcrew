@@ -8,6 +8,8 @@ from app.services.standings_service import (
     calculate_week,
     get_standings,
     get_weekly_matchups,
+    get_season_schedule,
+    DEFAULT_SEASON_WEEKS,
 )
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
@@ -86,6 +88,33 @@ async def get_weekly_scores(
         "year": year,
         "team_scores": team_scores,
         "matchups": matchups,
+    }
+
+
+@router.get("/schedule")
+async def get_season_schedule_endpoint(
+    league_id: str,
+    year: int = Query(..., ge=2020, le=2030, description="Season year"),
+    weeks: int = Query(DEFAULT_SEASON_WEEKS, ge=1, le=18, description="Regular-season week count"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Full-season, week-by-week schedule. Weeks already calculated show real
+    scores; future weeks show a simple projection (each team's own average
+    from completed weeks so far -- see standings_service.get_season_schedule
+    for why, and its limits).
+    """
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+
+    schedule = await get_season_schedule(league_id, year, db, num_weeks=weeks)
+    return {
+        "league_id": league_id,
+        "league_name": league.name,
+        "year": year,
+        "schedule": schedule,
     }
 
 
