@@ -87,8 +87,14 @@ async def sync_players_to_db(db: AsyncSession) -> int:
 async def fetch_weekly_stats(year: int, week: int) -> Dict[str, Any]:
     """Fetch weekly stats for all players from Sleeper."""
     async with httpx.AsyncClient() as client:
+        # The season_type ("regular") path segment is required. Without it,
+        # Sleeper doesn't 404 -- it silently returns a degenerate payload of
+        # rank fields only (pos_rank_ppr, rank_std, ...) with none of the
+        # actual box-score stat keys (pass_yd, rush_td, rec, ...), so every
+        # scoring calculation against synced weekly stats silently comes out
+        # to 0. Confirmed against the live API before applying this fix.
         response = await client.get(
-            f"{SLEEPER_API}/stats/nfl/{year}/{week}"
+            f"{SLEEPER_API}/stats/nfl/regular/{year}/{week}"
         )
         response.raise_for_status()
         return response.json()

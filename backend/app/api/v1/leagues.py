@@ -1,3 +1,4 @@
+import copy
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
@@ -87,8 +88,13 @@ async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db))
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
     config = league.scoring_config if league.scoring_config else {}
-    # Merge with defaults so missing keys are filled in
-    merged = {**DEFAULT_SCORING}
+    # Merge with defaults so missing keys are filled in. Must be a DEEP copy:
+    # {**DEFAULT_SCORING} only copies the outer dict, so merged["passing"] was
+    # the *same object* as DEFAULT_SCORING["passing"], and merged[category]
+    # .update(rules) below mutated that shared global in place -- one league
+    # customizing its scoring silently corrupted the "defaults" template
+    # served to every other league for the rest of the process's uptime.
+    merged = copy.deepcopy(DEFAULT_SCORING)
     for category, rules in config.items():
         if isinstance(rules, dict) and category in merged:
             merged[category].update(rules)

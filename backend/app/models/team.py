@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, func, ForeignKey
 from sqlalchemy.types import JSON
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -16,7 +17,11 @@ class Team(Base):
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_cpu: Mapped[bool] = mapped_column(default=False)
-    roster: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)  # list of player IDs
+    # MutableList wrapper: without it, in-place .append()/.remove() on this
+    # column is invisible to SQLAlchemy's change tracking (only whole-attribute
+    # reassignment is), so mutations silently fail to persist. See draft_manager
+    # .make_pick, which used to lose every pick after a team's first.
+    roster: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True, default=list)  # list of player IDs
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     ties: Mapped[int] = mapped_column(Integer, default=0)

@@ -15,40 +15,64 @@ Design:
 
 from typing import Dict, Any, Optional, List, Union
 
-# Default PPR scoring template
+# Default PPR scoring template.
+#
+# IMPORTANT: these stat_name keys must exactly match the raw keys Sleeper's
+# stats API returns (confirmed empirically against
+# /v1/stats/nfl/regular/{season}/{week} -- note the required "regular"
+# season_type segment, see sleeper_sync.fetch_weekly_stats). The engine only
+# does exact key lookups (calculate_player_score: `if stat_name in
+# player_stats`), so any mismatch here silently scores that stat as 0 for
+# every player, every week -- which is what every category previously did:
+#   - "pass_yds"/"rush_yds"/"rec_yds" -> Sleeper uses singular "_yd"
+#   - "int" (passing) -> Sleeper's thrown-interception key is "pass_int";
+#     bare "int" is the *defense's* takeaway count
+#   - "def_sack"/"def_int"/"def_fum_rec"/"def_safety" -> Sleeper's team
+#     defense keys have no "def_" prefix: "sack"/"int"/"fum_rec"/"safe"
+#   - "def_ret_yds" -> doesn't exist; real keys are separate "kr_yd" (kick
+#     return) and "pr_yd" (punt return) -- kept as two additive entries
+#     since the engine sums whichever keys are present rather than combining
+#     them under one name
+#   - kicking "fg_0_39"/"fg_40_49"/"fg_50_plus" -> Sleeper buckets makes as
+#     fgm_20_29/fgm_30_39/fgm_40_49/fgm_50_59/fgm_50p (no bucket below 20
+#     was observed; omitted rather than guessing a key that may not exist)
+#   - "xp" -> Sleeper's made-extra-point key is "xpm"
 DEFAULT_SCORING = {
     "passing": {
-        "pass_yds": 0.04,
+        "pass_yd": 0.04,
         "pass_td": 4,
-        "int": -2,
+        "pass_int": -2,
         "pass_2pt": 2,
     },
     "rushing": {
-        "rush_yds": 0.1,
+        "rush_yd": 0.1,
         "rush_td": 6,
         "rush_2pt": 2,
     },
     "receiving": {
         "rec": 1.0,
-        "rec_yds": 0.1,
+        "rec_yd": 0.1,
         "rec_td": 6,
         "rec_2pt": 2,
     },
     "defense": {
-        "def_sack": 1,
-        "def_int": 2,
-        "def_fum_rec": 2,
-        "def_safety": 2,
+        "sack": 1,
+        "int": 2,
+        "fum_rec": 2,
+        "safe": 2,
         "def_td": 6,
         "st_fum_rec": 2,
         "st_td": 6,
-        "def_ret_yds": 0.02,
+        "kr_yd": 0.02,
+        "pr_yd": 0.02,
     },
     "kicking": {
-        "fg_0_39": 3,
-        "fg_40_49": 4,
-        "fg_50_plus": 5,
-        "xp": 1,
+        "fgm_20_29": 3,
+        "fgm_30_39": 3,
+        "fgm_40_49": 4,
+        "fgm_50_59": 5,
+        "fgm_50p": 5,
+        "xpm": 1,
     },
     "bonus": {
         "pass_300_yds": 3,
@@ -119,15 +143,15 @@ def _calculate_bonus(player_stats: Dict[str, Any], bonus_rules: Dict[str, float]
     bonus_points = 0.0
 
     bonus_mappings = {
-        "pass_300_yds": ("pass_yds", 300),
-        "pass_350_yds": ("pass_yds", 350),
-        "pass_400_yds": ("pass_yds", 400),
-        "rush_100_yds": ("rush_yds", 100),
-        "rush_150_yds": ("rush_yds", 150),
-        "rush_200_yds": ("rush_yds", 200),
-        "rec_100_yds": ("rec_yds", 100),
-        "rec_150_yds": ("rec_yds", 150),
-        "rec_200_yds": ("rec_yds", 200),
+        "pass_300_yds": ("pass_yd", 300),
+        "pass_350_yds": ("pass_yd", 350),
+        "pass_400_yds": ("pass_yd", 400),
+        "rush_100_yds": ("rush_yd", 100),
+        "rush_150_yds": ("rush_yd", 150),
+        "rush_200_yds": ("rush_yd", 200),
+        "rec_100_yds": ("rec_yd", 100),
+        "rec_150_yds": ("rec_yd", 150),
+        "rec_200_yds": ("rec_yd", 200),
         "long_td_bonus": ("long_td", 1),
     }
 
@@ -165,7 +189,7 @@ def _estimate_long_tds(player_stats: Dict[str, Any], position: str) -> int:
     """
     if position == "QB":
         td_count = player_stats.get("pass_td", 0) or 0
-        pass_yds = player_stats.get("pass_yds", 0) or 0
+        pass_yds = player_stats.get("pass_yd", 0) or 0
         if td_count == 0:
             return 0
         # If QB had 400+ yards passing AND 4+ TDs, likely some were long
@@ -178,8 +202,8 @@ def _estimate_long_tds(player_stats: Dict[str, Any], position: str) -> int:
     if position in ("RB", "WR", "TE"):
         rush_tds = player_stats.get("rush_td", 0) or 0
         rec_tds = player_stats.get("rec_td", 0) or 0
-        rush_yds = player_stats.get("rush_yds", 0) or 0
-        rec_yds = player_stats.get("rec_yds", 0) or 0
+        rush_yds = player_stats.get("rush_yd", 0) or 0
+        rec_yds = player_stats.get("rec_yd", 0) or 0
 
         # Check for explicit long TD stats from advanced data
         explicit_long = int(player_stats.get("long_rush_td", 0) or 0) + int(player_stats.get("long_rec_td", 0) or 0)

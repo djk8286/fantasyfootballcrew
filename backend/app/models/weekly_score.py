@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, func, UniqueConstraint
 from sqlalchemy.types import JSON
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -16,7 +17,7 @@ class WeeklyScore(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     total_score: Mapped[float] = mapped_column(Float, default=0.0)
     projected_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    lineup_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # Player scores breakdown
+    lineup_data: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)  # Player scores breakdown
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

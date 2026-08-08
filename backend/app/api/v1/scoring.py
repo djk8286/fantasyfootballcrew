@@ -86,7 +86,12 @@ async def delete_scoring_config(config_id: str, db: AsyncSession = Depends(get_d
 @router.get("/defaults")
 async def get_default_scoring():
     """Return the default PPR scoring configuration as a template."""
-    return DEFAULT_SCORING
+    # Return a copy, not the module-level singleton -- a caller mutating the
+    # response object (or a future endpoint doing the same shallow-copy
+    # mistake leagues.py used to make) must never be able to corrupt this
+    # shared default for every other request.
+    import copy
+    return copy.deepcopy(DEFAULT_SCORING)
 
 
 @router.post("/calculate", response_model=ScoringCalculatorResult)
@@ -135,15 +140,15 @@ async def calculate_score(input: ScoringCalculatorInput):
     active_bonuses = {}
     for bonus_name, bonus_val in bonuses.items():
         threshold_map = {
-            "pass_300_yds": ("pass_yds", 300),
-            "pass_350_yds": ("pass_yds", 350),
-            "pass_400_yds": ("pass_yds", 400),
-            "rush_100_yds": ("rush_yds", 100),
-            "rush_150_yds": ("rush_yds", 150),
-            "rush_200_yds": ("rush_yds", 200),
-            "rec_100_yds": ("rec_yds", 100),
-            "rec_150_yds": ("rec_yds", 150),
-            "rec_200_yds": ("rec_yds", 200),
+            "pass_300_yds": ("pass_yd", 300),
+            "pass_350_yds": ("pass_yd", 350),
+            "pass_400_yds": ("pass_yd", 400),
+            "rush_100_yds": ("rush_yd", 100),
+            "rush_150_yds": ("rush_yd", 150),
+            "rush_200_yds": ("rush_yd", 200),
+            "rec_100_yds": ("rec_yd", 100),
+            "rec_150_yds": ("rec_yd", 150),
+            "rec_200_yds": ("rec_yd", 200),
         }
         if bonus_name in threshold_map:
             stat, thresh = threshold_map[bonus_name]
