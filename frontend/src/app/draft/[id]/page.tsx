@@ -517,6 +517,28 @@ export default function DraftPage() {
         </div>
       )}
 
+      {/* Draft complete — nothing used to point people anywhere from here */}
+      {isCompleted && (
+        <div className="bg-gold-400/10 border-b border-gold-400/25 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-gold-300">
+              <Trophy className="w-5 h-5" />
+              <span className="font-semibold">Draft complete!</span>
+              <span className="text-surface-300 text-sm hidden sm:inline">
+                Head to the league to see standings and matchups.
+              </span>
+            </div>
+            <Link
+              href={`/leagues/${draftInfo.league_id}`}
+              className="inline-flex items-center gap-1.5 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+            >
+              View League
+              <ChevronLeft className="w-4 h-4 rotate-180" />
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* Draft Header */}
       <DraftHeader
         leagueId={draftInfo.league_id}
