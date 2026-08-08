@@ -286,6 +286,8 @@ export const waiversApi = {
     apiRequest(`/api/v1/leagues/${leagueId}/waivers/process`, {
       method: "POST",
     }),
+  freeAgents: (leagueId: string, limitPerPosition = 25) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/waivers/free-agents?limit_per_position=${limitPerPosition}`),
 };
 
 // Coaches

@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, ListOrdered, Send, X, PlayCircle } from "lucide-react";
+import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
+import PositionBadge from "@/components/PositionBadge";
+import { PlayerAvatar } from "@/components/PlayerAvatar";
 
 interface Team {
   id: string;
@@ -43,11 +45,26 @@ interface ProcessReport {
   updated_priority: string[];
 }
 
+interface FreeAgent {
+  id: string;
+  first_name: string;
+  last_name: string;
+  position: string;
+  team: string | null;
+  avatar_url: string | null;
+  sleeper_id: string | null;
+  injury_status: string | null;
+  rank: number | null;
+  pos_rank: number;
+}
+
 const statusColor: Record<string, string> = {
   pending: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
   approved: "bg-green-500/15 text-green-400 border-green-500/25",
   denied: "bg-red-500/15 text-red-400 border-red-500/25",
 };
+
+const FA_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 
 export default function WaiversPage() {
   const params = useParams();
@@ -68,6 +85,11 @@ export default function WaiversPage() {
   const [searchResults, setSearchResults] = useState<PlayerSearchResult[]>([]);
   const [addPlayerId, setAddPlayerId] = useState("");
   const [dropPlayerId, setDropPlayerId] = useState("");
+
+  // Top available free agents, ranked and grouped by position.
+  const [freeAgents, setFreeAgents] = useState<Record<string, FreeAgent[]>>({});
+  const [faLoading, setFaLoading] = useState(true);
+  const [faPosition, setFaPosition] = useState("QB");
 
   const userId = getCurrentUserId();
   const myTeam = teams.find((t) => t.owner_id === userId || t.co_owner_id === userId);
@@ -92,6 +114,18 @@ export default function WaiversPage() {
     }
   }, [leagueId]);
 
+  const loadFreeAgents = useCallback(async () => {
+    setFaLoading(true);
+    try {
+      const data = await waiversApi.freeAgents(leagueId);
+      setFreeAgents((data as Record<string, FreeAgent[]>) || {});
+    } catch {
+      // silent
+    } finally {
+      setFaLoading(false);
+    }
+  }, [leagueId]);
+
   useEffect(() => {
     Promise.all([
       leaguesApi.get(leagueId) as Promise<League>,
@@ -105,7 +139,8 @@ export default function WaiversPage() {
       .finally(() => setLoading(false));
     loadClaims();
     loadPriority();
-  }, [leagueId, loadClaims, loadPriority]);
+    loadFreeAgents();
+  }, [leagueId, loadClaims, loadPriority, loadFreeAgents]);
 
   // Resolve names for roster players (drop candidates) + claim history
   useEffect(() => {
@@ -185,7 +220,7 @@ export default function WaiversPage() {
     try {
       const report = (await waiversApi.process(leagueId)) as ProcessReport;
       setProcessReport(report);
-      await Promise.all([loadClaims(), loadPriority()]);
+      await Promise.all([loadClaims(), loadPriority(), loadFreeAgents()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process waivers");
     } finally {
@@ -222,7 +257,7 @@ export default function WaiversPage() {
         )}
 
         {/* Submit a claim */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
+        <div id="waiver-claim-form" className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
           <h2 className="text-sm font-semibold text-white mb-4">Submit a Waiver Claim</h2>
 
           {!myTeam ? (
@@ -288,6 +323,80 @@ export default function WaiversPage() {
                 {submitting ? "Submitting..." : "Submit Claim"}
               </button>
             </form>
+          )}
+        </div>
+
+        {/* Top free agents by position */}
+        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
+          <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <Star className="w-4 h-4 text-gold-400" />
+            Top Available Free Agents
+          </h2>
+
+          <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1">
+            {FA_POSITIONS.map((pos) => (
+              <button
+                key={pos}
+                type="button"
+                onClick={() => setFaPosition(pos)}
+                className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  pos === faPosition
+                    ? "bg-gold-400 text-surface-900"
+                    : "bg-surface-900 border border-surface-700 text-surface-400 hover:text-white"
+                }`}
+              >
+                {pos}
+              </button>
+            ))}
+          </div>
+
+          {faLoading ? (
+            <p className="text-surface-500 text-sm">Loading free agents…</p>
+          ) : (freeAgents[faPosition] || []).length === 0 ? (
+            <p className="text-surface-500 text-sm">No available {faPosition}s right now.</p>
+          ) : (
+            <div className="space-y-1">
+              {(freeAgents[faPosition] || []).map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-surface-900/60 transition-colors"
+                >
+                  <span className="text-surface-500 text-[10px] font-mono w-6 shrink-0 text-right">
+                    {p.position}{p.pos_rank}
+                  </span>
+                  <PlayerAvatar
+                    player={{ ...p, full_name: `${p.first_name} ${p.last_name}` } as any}
+                    size="sm"
+                  />
+                  <span className="text-sm text-white truncate flex-1">
+                    {p.first_name} {p.last_name}
+                  </span>
+                  {p.injury_status && (
+                    <span className="text-[9px] text-red-400 uppercase shrink-0">{p.injury_status}</span>
+                  )}
+                  <span className="text-[10px] text-surface-500 shrink-0">{p.team || "FA"}</span>
+                  {myTeam && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddPlayerId(p.id);
+                        setSearch(`${p.first_name} ${p.last_name}`);
+                        setSearchResults([]);
+                        document.getElementById("waiver-claim-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                      className={`shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold transition-all ${
+                        addPlayerId === p.id
+                          ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
+                          : "border border-surface-600 text-surface-300 hover:border-gold-400/50 hover:text-gold-400"
+                      }`}
+                    >
+                      <Plus className="w-3 h-3" />
+                      {addPlayerId === p.id ? "Selected" : "Add"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

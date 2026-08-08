@@ -5,12 +5,19 @@ from sqlalchemy import select
 from app.core.database import get_db
 from app.models.league import League
 from app.models.team import Team
+from app.models.player import Player
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
 from app.api.deps import get_current_user, require_commissioner
+from app.services.draft_manager import get_player_rank_from_list, FANTASY_POSITIONS
+from app.services.sleeper_sync import sleeper_avatar_url
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
+
+# Display order for grouping the free-agent list, matching the frontend's
+# PositionBadge.POSITION_ORDER convention.
+POSITION_DISPLAY_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
 
 async def _get_league(league_id: str, db: AsyncSession) -> League:
@@ -37,6 +44,64 @@ async def _priority_order(league: League, league_id: str, db: AsyncSession) -> l
         select(Team).where(Team.league_id == league_id).order_by(Team.created_at)
     )
     return [t.id for t in result.scalars().all()]
+
+
+@router.get("/free-agents")
+async def list_free_agents(
+    league_id: str,
+    limit_per_position: int = 25,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Best available (unrostered) free agents for this league, ranked by the
+    same tier system the draft room uses, grouped by position and capped
+    per position. Capped rather than returning every unrostered player
+    because early in a season that's most of the player pool -- nobody
+    browsing waivers needs the 300th-ranked free agent WR, and an
+    unbounded list here would reintroduce the exact payload-bloat problem
+    fixed in the draft room (see get_draft_state).
+    """
+    await _get_league(league_id, db)
+
+    teams_result = await db.execute(select(Team).where(Team.league_id == league_id))
+    teams = teams_result.scalars().all()
+    rostered_ids = set()
+    for t in teams:
+        rostered_ids.update(t.roster or [])
+
+    players_result = await db.execute(
+        select(Player).where(
+            Player.position.in_(FANTASY_POSITIONS),
+            ~Player.id.in_(rostered_ids),
+        )
+    )
+    free_agents = players_result.scalars().all()
+
+    ranked_by_position: dict[str, list[tuple[int, Player]]] = {pos: [] for pos in POSITION_DISPLAY_ORDER}
+    for p in free_agents:
+        rank = get_player_rank_from_list(f"{p.first_name} {p.last_name}")
+        ranked_by_position.setdefault(p.position, []).append((rank, p))
+
+    result: dict[str, list[dict]] = {}
+    for pos in POSITION_DISPLAY_ORDER:
+        entries = sorted(ranked_by_position.get(pos, []), key=lambda e: e[0])
+        result[pos] = [
+            {
+                "id": p.id,
+                "first_name": p.first_name,
+                "last_name": p.last_name,
+                "position": p.position,
+                "team": p.team,
+                "avatar_url": sleeper_avatar_url(p.sleeper_id),
+                "sleeper_id": p.sleeper_id,
+                "injury_status": p.injury_status,
+                "rank": rank if rank < 1000 else None,
+                "pos_rank": i + 1,
+            }
+            for i, (rank, p) in enumerate(entries[:limit_per_position])
+        ]
+
+    return result
 
 
 @router.post("/claims", status_code=201)
