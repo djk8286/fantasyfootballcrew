@@ -5,6 +5,7 @@ Handles draft creation, pick making, snake order generation, and mock AI picks.
 import json
 import random
 import math
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,14 @@ from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats
+
+
+# Positions the scoring engine (DEFAULT_SCORING) actually has point values
+# for. The synced player pool also contains individual-defense/O-line
+# positions (CB, DE, DT, OL, G, OT, T, OLB, C, SS, P, FS, LS, ILB, FB, NT,
+# OG, S, ...) that this app cannot currently score at all -- those are
+# excluded from the draft pool, not from general player browsing/search.
+FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
 
 
 def generate_snake_order(team_ids: list[str], total_rounds: int) -> list[str]:
@@ -223,37 +232,31 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
     current_team_id = team_order[pick_index] if pick_index < len(team_order) else None
 
-    # Get available players (not drafted) — sort by fantasy relevance and rank
+    # Get available players (not drafted) — sort by fantasy relevance and rank.
+    # Scoped to positions the scoring engine actually scores (FANTASY_POSITIONS,
+    # module level) -- without this, ~65% of the synced player pool (CB/DE/DT/
+    # OL/G/OT/etc., none of which DEFAULT_SCORING has any keys for) was loaded,
+    # ranked, and shipped in this response for no reason, on an endpoint the
+    # frontend polls every 5 seconds during a live draft.
     from sqlalchemy import case
     pos_priority = case(
-        {v: i for i, v in enumerate(["RB", "WR", "QB", "TE", "K", "DEF", "DB", "DL", "LB"])},
+        {v: i for i, v in enumerate(["RB", "WR", "QB", "TE", "K", "DEF"])},
         value=Player.position,
         else_=99
     )
     available_query = (
         select(Player)
-        .where(~Player.id.in_(drafted_ids))
+        .where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
         .order_by(pos_priority, Player.last_name)
         .limit(10000)
     )
     result = await db.execute(available_query)
     available_players = result.scalars().all()
 
-    # Get proper sequential ranks for all players
-    tier_names = get_tier_names()
-    sequential_rankings = build_sequential_ranking(tier_names)
-
-    def get_player_rank_from_list(full_name: str) -> int:
-        """Get actual sequential rank from the master ranking."""
-        name_lower = full_name.lower()
-        for rank, ranked_name in sequential_rankings:
-            name_check = ranked_name.lower()
-            if name_check in name_lower or name_lower in name_check:
-                return rank
-        # Unknown player: rank after all known players
-        return 1000
-    
-    # Sort by rank (now truly sequential), then position priority
+    # Sort by rank (now truly sequential), then position priority.
+    # get_player_rank_from_list is an O(1) precomputed lookup (see module
+    # level) -- it used to rebuild the tier list and linearly substring-scan
+    # it for every one of these players on every call.
     pos_order = ["RB", "WR", "QB", "TE", "K", "DEF", "DB", "DL", "LB"]
     def sort_key(p: Player) -> tuple:
         full_name = f"{p.first_name} {p.last_name}"
@@ -271,13 +274,25 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
         pos_ranks[pos] = pos_ranks.get(pos, 0) + 1
         pos_rank_map[p.id] = pos_ranks[pos]
 
-    # Build pick details with player info
+    # Build pick details with player info. Batch-fetch every player/team
+    # referenced by these picks in 2 queries total instead of 2 queries PER
+    # pick (an N+1 that grew every round -- 40+ sequential round trips by
+    # round 10 of a 12-team draft, on an endpoint polled every 5s).
+    pick_player_ids = {p.player_id for p in picks}
+    pick_team_ids = {p.team_id for p in picks}
+    picked_players_by_id: dict[str, Player] = {}
+    if pick_player_ids:
+        # Reuse available_players where possible -- most picks reference
+        # players NOT in available_players (they're drafted), so this is
+        # still a real lookup for the drafted set specifically.
+        result = await db.execute(select(Player).where(Player.id.in_(pick_player_ids)))
+        picked_players_by_id = {pl.id: pl for pl in result.scalars().all()}
+    picked_teams_by_id: dict[str, Team] = {t.id: t for t in teams if t.id in pick_team_ids}
+
     picks_with_players = []
     for p in picks:
-        player_result = await db.execute(select(Player).where(Player.id == p.player_id))
-        player = player_result.scalar_one_or_none()
-        team_result = await db.execute(select(Team).where(Team.id == p.team_id))
-        team = team_result.scalar_one_or_none()
+        player = picked_players_by_id.get(p.player_id)
+        team = picked_teams_by_id.get(p.team_id)
         picks_with_players.append({
             "id": p.id,
             "round": p.round,
@@ -350,6 +365,15 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
             for p in available_players
         ],
     }
+
+
+_SUFFIX_RE = re.compile(r"\s+(jr\.?|sr\.?|ii|iii|iv|v)$", re.IGNORECASE)
+
+
+def _normalize_name(name: str) -> str:
+    """Lowercase and strip a trailing generational suffix, for matching a
+    synced player's name against the static tier lists below."""
+    return _SUFFIX_RE.sub("", name.strip().lower())
 
 
 def build_sequential_ranking(tier_names: dict) -> list[tuple[int, str]]:
@@ -435,7 +459,37 @@ def get_tier_names() -> dict:
             "Harrison Bryant", "Brenton Strange", "Brevyn Spann-Ford",
         },
     }
-    
+
+
+# Precomputed ONCE at import time, not per-request. get_tier_names()/
+# build_sequential_ranking() are pure static data -- get_draft_state and
+# get_ai_mock_pick used to rebuild them on every single call, then rank
+# every available player (up to ~9,400 in production) with a linear
+# substring scan over all ~250 known names -- millions of string
+# comparisons per request, done synchronously, on a page the frontend
+# polls every 5 seconds. This is an O(1) dict lookup instead.
+_TIER_NAMES = get_tier_names()
+_SEQUENTIAL_RANKINGS = build_sequential_ranking(_TIER_NAMES)
+_RANK_BY_NORMALIZED_NAME: dict[str, int] = {
+    _normalize_name(name): rank for rank, name in _SEQUENTIAL_RANKINGS
+}
+_TIER_BY_NORMALIZED_NAME: dict[str, int] = {
+    _normalize_name(name): tier
+    for tier_key, tier in [("tier1", 1), ("tier2", 2), ("tier3", 3), ("tier4", 4)]
+    for name in _TIER_NAMES[tier_key]
+}
+
+
+def get_player_rank_from_list(full_name: str) -> int:
+    """Sequential rank (1 = best) for a known star player, else 1000."""
+    return _RANK_BY_NORMALIZED_NAME.get(_normalize_name(full_name), 1000)
+
+
+def get_player_tier(full_name: str) -> int:
+    """Tier 1-4 for a known star player, else 5 (unranked)."""
+    return _TIER_BY_NORMALIZED_NAME.get(_normalize_name(full_name), 5)
+
+
 async def get_ai_mock_pick(
     db: AsyncSession,
     draft_id: str,
@@ -465,26 +519,23 @@ async def get_ai_mock_pick(
     )
     team_picks = result.scalars().all()
     team_positions = {}
-    for p in team_picks:
-        presult = await db.execute(select(Player).where(Player.id == p.player_id))
-        player = presult.scalar_one_or_none()
-        if player:
+    if team_picks:
+        # Batch-fetch instead of one query per pick this team has made.
+        team_pick_player_ids = {p.player_id for p in team_picks}
+        presult = await db.execute(select(Player).where(Player.id.in_(team_pick_player_ids)))
+        for player in presult.scalars().all():
             team_positions[player.position] = team_positions.get(player.position, 0) + 1
 
-    tier_names = get_tier_names()
+    # get_player_tier is an O(1) precomputed lookup (see module level) --
+    # this used to rebuild the tier dict and linearly substring-scan it for
+    # every available player (up to ~9,400 in production) on every call.
 
-    # Tier scores
-    def get_player_tier(full_name: str) -> int:
-        name_lower = full_name.lower()
-        for name_set, tier in [(tier_names["tier1"], 1), (tier_names["tier2"], 2), (tier_names["tier3"], 3), (tier_names["tier4"], 4)]:
-            for n in name_set:
-                if n.lower() in name_lower or name_lower in n.lower():
-                    return tier
-        return 5  # Unknown player
-
-    # Get available players
+    # Get available players. Filtered to FANTASY_POSITIONS at the query level
+    # now -- the scoring loop below already skipped anything outside
+    # pos_rank's keys, so this is a pure efficiency change (less loaded from
+    # the DB and iterated in Python), not a behavior change.
     result = await db.execute(
-        select(Player).where(~Player.id.in_(drafted_ids))
+        select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
     )
     available = result.scalars().all()
 

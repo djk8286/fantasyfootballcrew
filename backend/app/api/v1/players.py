@@ -4,7 +4,7 @@ from sqlalchemy import select, or_
 from app.core.database import get_db
 from app.models.player import Player
 from app.schemas.player import PlayerRead
-from app.services.draft_manager import get_tier_names, build_sequential_ranking
+from app.services.draft_manager import get_player_rank_from_list
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -61,28 +61,28 @@ async def top_prospects(limit: int = 100, db: AsyncSession = Depends(get_db)):
     """Top fantasy-relevant players by the same tiered ranking the draft room's
     mock-AI uses (backend/app/services/draft_manager.py), cross-referenced
     against real synced player records."""
-    sequential_rankings = build_sequential_ranking(get_tier_names())
-
     result = await db.execute(select(Player).where(Player.position.in_(SKILL_POSITIONS)))
     all_players = result.scalars().all()
-    by_name = [(f"{p.first_name} {p.last_name}".lower(), p) for p in all_players]
+
+    # get_player_rank_from_list is an O(1) precomputed lookup. This used to
+    # rebuild the tier list and nested-loop it against every skill player
+    # (rank_names x players) on every request with no caching.
+    ranked = [
+        (get_player_rank_from_list(f"{p.first_name} {p.last_name}"), p)
+        for p in all_players
+    ]
+    ranked = [(rank, p) for rank, p in ranked if rank < 1000]
+    ranked.sort(key=lambda rp: rp[0])
 
     matched: list[dict] = []
-    seen_ids: set[str] = set()
-    for rank, ranked_name in sequential_rankings:
+    seen_ranks: set[int] = set()
+    for rank, player in ranked:
+        if rank in seen_ranks:
+            continue  # a name could theoretically map to >1 synced player
+        seen_ranks.add(rank)
+        matched.append({"rank": rank, **_serialize_player(player)})
         if len(matched) >= limit:
             break
-        name_lower = ranked_name.lower()
-        for full_name, player in by_name:
-            if player.id in seen_ids:
-                continue
-            if name_lower in full_name or full_name in name_lower:
-                seen_ids.add(player.id)
-                matched.append({
-                    "rank": rank,
-                    **_serialize_player(player),
-                })
-                break
 
     return matched
 
