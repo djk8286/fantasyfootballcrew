@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { leaguesApi, teamsApi, draftsApi, isLoggedIn } from "@/lib/api-client";
+import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
+import PositionBadge from "@/components/PositionBadge";
+import { PlayerAvatar } from "@/components/PlayerAvatar";
 import {
   Trophy,
   Users,
@@ -31,6 +33,17 @@ import {
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
+
+interface RosterPlayer {
+  id: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
+  position: string;
+  team: string | null;
+  avatar_url: string | null;
+  sleeper_id: string | null;
+}
 
 interface Team {
   id: string;
@@ -181,6 +194,37 @@ export default function LeagueDetailPage() {
       })
       .finally(() => setLoading(false));
   }, [id]);
+
+  // Resolve roster player IDs into actual player data. Team Roster used to
+  // show nothing but team name badges -- teams[].roster is a list of player
+  // IDs, not player objects, so drafted rosters were never actually visible
+  // anywhere on this page.
+  const [playersById, setPlayersById] = useState<Record<string, RosterPlayer>>({});
+  useEffect(() => {
+    const ids = new Set<string>();
+    teams.forEach((t) => (t.roster || []).forEach((pid) => ids.add(pid)));
+    const unresolved = [...ids].filter((pid) => !(pid in playersById));
+    if (unresolved.length === 0) return;
+
+    Promise.all(
+      unresolved.map((pid) =>
+        playersApi
+          .get(pid)
+          .then((p) => {
+            const raw = p as Omit<RosterPlayer, "full_name">;
+            const full_name = `${raw.first_name ?? ""} ${raw.last_name ?? ""}`.trim() || "Unknown Player";
+            return [pid, { ...raw, full_name } as RosterPlayer] as const;
+          })
+          .catch(() => [pid, null] as const),
+      ),
+    ).then((pairs) => {
+      setPlayersById((prev) => {
+        const next = { ...prev };
+        for (const [pid, p] of pairs) if (p) next[pid] = p;
+        return next;
+      });
+    });
+  }, [teams, playersById]);
 
   const refreshTeams = async () => {
     try {
@@ -881,34 +925,58 @@ export default function LeagueDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Team roster summary */}
+          {/* Team rosters — used to only show name badges, never the
+              actual drafted players. teams[].roster is a list of player
+              IDs resolved via playersById (see fetch effect above). */}
           <div className="lg:col-span-2 bg-surface-800 border border-surface-700 rounded-2xl p-6">
-            <h3 className="text-sm font-semibold text-surface-300 mb-3">Team Roster</h3>
-            <div className="flex flex-wrap gap-2">
+            <h3 className="text-sm font-semibold text-surface-300 mb-3">Team Rosters</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sortedTeams.map((team) => {
                 const avatar = getAvatarStyle(team.avatar_url);
                 const isMyTeam = myTeamIds.includes(team.id);
                 const isCpu = team.is_cpu || team.owner_id === "cpu";
+                const rosterIds = team.roster || [];
+                const roster = rosterIds
+                  .map((pid) => playersById[pid])
+                  .filter((p): p is RosterPlayer => !!p);
                 return (
                   <div
                     key={team.id}
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs ${
+                    className={`rounded-xl border p-3 ${
                       isMyTeam
-                        ? "bg-gold-400/10 border border-gold-400/20 text-gold-300"
-                        : isCpu
-                        ? "bg-surface-900 border border-surface-700 text-surface-400"
-                        : "bg-surface-900 border border-surface-700 text-surface-300"
+                        ? "bg-gold-400/5 border-gold-400/20"
+                        : "bg-surface-900 border-surface-700"
                     }`}
                   >
-                    <span className="text-sm">{avatar.icon}</span>
-                    <span className="font-medium truncate max-w-[120px]">{team.name}</span>
-                    {isCpu && <Bot className="w-3 h-3 text-surface-500" />}
-                    {isMyTeam && <Crown className="w-3 h-3 text-gold-500" />}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm shrink-0">{avatar.icon}</span>
+                      <span className="font-medium text-sm text-white truncate flex-1">{team.name}</span>
+                      {isCpu && <Bot className="w-3 h-3 text-surface-500 shrink-0" />}
+                      {isMyTeam && <Crown className="w-3 h-3 text-gold-500 shrink-0" />}
+                      {rosterIds.length > 0 && (
+                        <span className="text-[10px] text-surface-500 shrink-0">{rosterIds.length}</span>
+                      )}
+                    </div>
+                    {rosterIds.length === 0 ? (
+                      <p className="text-surface-600 text-xs">No players drafted yet</p>
+                    ) : roster.length < rosterIds.length ? (
+                      <p className="text-surface-600 text-xs">Loading roster…</p>
+                    ) : (
+                      <div className="space-y-1 max-h-40 overflow-y-auto">
+                        {roster.map((p) => (
+                          <div key={p.id} className="flex items-center gap-1.5 text-xs">
+                            <PlayerAvatar player={p as any} size="sm" />
+                            <span className="text-surface-300 truncate flex-1">{p.full_name}</span>
+                            <PositionBadge pos={p.position} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
               {teams.length < league.max_teams && Array.from({ length: league.max_teams - teams.length }).map((_, i) => (
-                <div key={`empty-${i}`} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs bg-surface-900/50 border border-dashed border-surface-700 text-surface-600">
+                <div key={`empty-${i}`} className="rounded-xl border border-dashed border-surface-700 bg-surface-900/50 p-3 flex items-center gap-2 text-surface-600 text-xs">
                   <Plus className="w-3 h-3" />
                   <span>Empty Slot</span>
                 </div>

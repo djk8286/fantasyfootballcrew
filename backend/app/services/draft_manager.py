@@ -13,7 +13,7 @@ from sqlalchemy import select, and_, or_
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
-from app.models.league import League
+from app.models.league import League, DraftStatus
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats
 
 
@@ -101,6 +101,17 @@ async def start_draft(db: AsyncSession, draft_id: str) -> Draft:
     draft.current_round = 1
     draft.current_pick = 1
     draft.current_pick_started_at = datetime.now(timezone.utc)
+
+    # League.draft_status is a separate field from Draft.status -- the
+    # league page reads league.draft_status to decide whether to show
+    # "Start Draft" or "View Draft"/roster info, so it has to be kept in
+    # sync here (and on completion in make_pick below), not just left at
+    # its NOT_STARTED default forever.
+    league_result = await db.execute(select(League).where(League.id == draft.league_id))
+    league = league_result.scalar_one_or_none()
+    if league:
+        league.draft_status = DraftStatus.IN_PROGRESS
+
     await db.commit()
     await db.refresh(draft)
     return draft
@@ -187,6 +198,11 @@ async def make_pick(
     # Check if draft is complete
     if draft.current_round > draft.total_rounds:
         draft.status = DraftRunStatus.COMPLETED
+        # Keep League.draft_status in sync -- see start_draft for why.
+        league_result = await db.execute(select(League).where(League.id == draft.league_id))
+        league = league_result.scalar_one_or_none()
+        if league:
+            league.draft_status = DraftStatus.COMPLETED
     else:
         # Reset the pick timer for the next team
         draft.current_pick_started_at = datetime.now(timezone.utc)
