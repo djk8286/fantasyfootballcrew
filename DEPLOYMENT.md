@@ -151,16 +151,25 @@ asyncio.run(sync())
 # Backend
 cd backend
 source venv/Scripts/activate
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8005
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 
 # Frontend
 cd frontend
 npm run dev
+
+# Or start both together (from frontend/):
+npm run dev:all
 ```
 
 - Frontend: http://localhost:3000
-- Backend API: http://localhost:8005
-- API Docs: http://localhost:8005/docs
+- Backend API: http://localhost:8001
+- API Docs: http://localhost:8001/docs
+
+Note: `next.config.ts` proxies `/api/*` to `http://localhost:8001` in dev, and
+several frontend files fall back to that same port when `NEXT_PUBLIC_API_URL`
+isn't set. Running the backend on any other port will silently break local
+API calls (they fail quietly — the pages catch errors and show empty states
+rather than surfacing a fetch failure).
 
 ---
 
@@ -212,6 +221,7 @@ npm run dev
 | ✅ Commissioner controls | Complete |
 | ✅ Player sync (Sleeper) | Complete |
 | ✅ Bulk CPU team add | Complete |
-| 🔲 AI Chat (The Oracle) | Needs API key |
-| 🔲 Coach/Coordinator UI | Backend ready, frontend bonus |
-| 🔲 Waivers/Trades | Backend endpoints ready, frontend TBD |
+| ✅ Waivers (claims, priority, commissioner process) | Complete |
+| ✅ Trades (propose, history, commissioner approve/deny) | Complete |
+| ✅ Coach/Coordinator UI | Complete (commissioner panel) |
+| 🔲 AI Chat (The Oracle) | Wired to OpenAI/Anthropic, needs API key set in env |

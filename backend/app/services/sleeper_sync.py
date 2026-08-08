@@ -37,8 +37,12 @@ async def sync_players_to_db(db: AsyncSession) -> int:
     count = 0
 
     for sleeper_id, data in players_data.items():
-        # Skip non-NFL players or incomplete data
-        if not data.get("first_name") or not data.get("last_name"):
+        # Skip non-NFL players or incomplete data. Sleeper's payload includes
+        # junk placeholder entries (e.g. "Duplicate Player") with no position;
+        # `position` is required (NOT NULL), so these must be filtered here
+        # rather than relying on a .get(..., "UNKNOWN") default, which only
+        # applies when the key is absent -- not when it's present and null.
+        if not data.get("first_name") or not data.get("last_name") or not data.get("position"):
             continue
 
         # Check if player already exists
