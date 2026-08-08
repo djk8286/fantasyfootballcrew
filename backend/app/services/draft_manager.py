@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, update
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
@@ -60,6 +60,21 @@ async def create_draft(db: AsyncSession, league_id: str, total_rounds: int = 15)
     league = result.scalar_one_or_none()
     if not league:
         raise ValueError("League not found")
+
+    # A league should only ever have one real draft. Without this guard,
+    # anyone hitting POST /drafts for a league that already has one (e.g. a
+    # stale "Start Draft" button that hadn't yet learned the draft was
+    # already underway/done) creates a second, independent Draft -- and
+    # since team.roster accumulates picks by player ID across *all* drafts
+    # for that team, the two drafts' rosters silently merge into one
+    # oversized roster. Confirmed in production: a league with 5 separate
+    # Draft rows for the same 14 teams, one team's roster showing 27
+    # players instead of 15.
+    existing = await db.execute(
+        select(Draft).where(Draft.league_id == league_id, Draft.status != DraftRunStatus.COMPLETED)
+    )
+    if existing.scalars().first():
+        raise ValueError("This league already has an active draft")
 
     # Get teams in the league
     result = await db.execute(
@@ -131,8 +146,11 @@ async def make_pick(
     - Player exists
     Advances the draft state.
     """
-    # Get draft
-    result = await db.execute(select(Draft).where(Draft.id == draft_id))
+    # Row-level lock on the Draft row for this transaction: a real lock on
+    # Postgres (production), a no-op on SQLite (local dev, which has no
+    # per-row lock) -- see the compare-and-swap note below for why locking
+    # alone isn't the actual correctness guarantee here.
+    result = await db.execute(select(Draft).where(Draft.id == draft_id).with_for_update())
     draft = result.scalar_one_or_none()
     if not draft:
         raise ValueError("Draft not found")
@@ -140,19 +158,21 @@ async def make_pick(
         raise ValueError("Draft is not in progress")
 
     team_order = json.loads(draft.team_order)
-    global_pick = (draft.current_round - 1) * 0 + draft.current_pick
-    # Recalculate properly
+
     # Get number of teams
     result = await db.execute(select(Team).where(Team.league_id == draft.league_id))
     teams = result.scalars().all()
     num_teams = len(teams)
-    
+
+    observed_round = draft.current_round
+    observed_pick = draft.current_pick
+
     # Calculate global pick index
-    pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
-    
+    pick_index = (observed_round - 1) * num_teams + (observed_pick - 1)
+
     if pick_index >= len(team_order):
         raise ValueError("Draft is already complete")
-    
+
     expected_team_id = team_order[pick_index]
     if team_id != expected_team_id:
         raise ValueError(f"It's not your turn. Team {expected_team_id} is drafting.")
@@ -173,10 +193,47 @@ async def make_pick(
     if not player:
         raise ValueError("Player not found")
 
-    # Make the pick
-    round_num = draft.current_round
-    pick_num = draft.current_pick
+    round_num = observed_round
     global_pick_number = pick_index + 1
+
+    # Advance draft state
+    if observed_pick >= num_teams:
+        new_round, new_pick = observed_round + 1, 1
+    else:
+        new_round, new_pick = observed_round, observed_pick + 1
+    is_complete = new_round > draft.total_rounds
+    new_status = DraftRunStatus.COMPLETED if is_complete else DraftRunStatus.IN_PROGRESS
+    new_timer_started_at = None if is_complete else datetime.now(timezone.utc)
+
+    # Atomic, conditional advance -- only succeeds if the draft's state
+    # still matches what was observed above (current_round/current_pick
+    # unchanged since the read at the top of this function). If another
+    # concurrent request already advanced it in the meantime -- e.g. a
+    # human clicking while the mock-draft loop is also picking for the
+    # current team, or a double-submitted click -- rowcount is 0 and this
+    # request aborts instead of racing through to a duplicate pick.
+    # Confirmed in production: the same pick_number recorded twice for one
+    # team, once even with two different players. with_for_update() above
+    # makes this the common (non-racing) path on Postgres by serializing
+    # concurrent transactions; this WHERE-clause compare-and-swap is what
+    # actually guarantees correctness, including on SQLite where the lock
+    # is a no-op.
+    advance_result = await db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.current_round == observed_round,
+            Draft.current_pick == observed_pick,
+        )
+        .values(
+            current_round=new_round,
+            current_pick=new_pick,
+            status=new_status,
+            current_pick_started_at=new_timer_started_at,
+        )
+    )
+    if advance_result.rowcount == 0:
+        raise ValueError("It's not your turn. Someone else just picked.")
 
     draft_pick = DraftPick(
         draft_id=draft_id,
@@ -188,24 +245,12 @@ async def make_pick(
     )
     db.add(draft_pick)
 
-    # Advance draft state
-    if pick_num >= num_teams:
-        draft.current_round += 1
-        draft.current_pick = 1
-    else:
-        draft.current_pick += 1
-
-    # Check if draft is complete
-    if draft.current_round > draft.total_rounds:
-        draft.status = DraftRunStatus.COMPLETED
-        # Keep League.draft_status in sync -- see start_draft for why.
+    # Keep League.draft_status in sync -- see start_draft for why.
+    if is_complete:
         league_result = await db.execute(select(League).where(League.id == draft.league_id))
         league = league_result.scalar_one_or_none()
         if league:
             league.draft_status = DraftStatus.COMPLETED
-    else:
-        # Reset the pick timer for the next team
-        draft.current_pick_started_at = datetime.now(timezone.utc)
 
     # Add player to team's roster
     result = await db.execute(select(Team).where(Team.id == team_id))
