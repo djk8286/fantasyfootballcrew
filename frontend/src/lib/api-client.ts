@@ -107,6 +107,10 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/${teamId}/claim`, {
       method: "POST",
     }),
+  claimCoOwner: (teamId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/claim-co-owner`, {
+      method: "POST",
+    }),
   bulkAddCpu: (leagueId: string, count: number, namePrefix = "CPU Team") =>
     apiRequest(`/api/v1/teams/bulk-add/${leagueId}`, {
       method: "POST",

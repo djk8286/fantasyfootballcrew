@@ -36,6 +36,7 @@ async def get_league_standings(
     return {
         "league_id": league_id,
         "league_name": league.name,
+        "league_type": league.league_type.value,
         "standings": standings,
     }
 

@@ -51,9 +51,11 @@ interface Team {
   id: string;
   name: string;
   owner_id: string | null;
+  co_owner_id: string | null;
   league_id: string;
   avatar_url: string | null;
   is_cpu: boolean;
+  conference: string | null;
   wins: number;
   losses: number;
   ties: number;
@@ -288,6 +290,17 @@ export default function LeagueDetailPage() {
     setClaimingTeamId(null);
   };
 
+  const handleClaimCoOwner = async (teamId: string) => {
+    setClaimingTeamId(teamId);
+    try {
+      await teamsApi.claimCoOwner(teamId);
+      await refreshTeams();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
+    }
+    setClaimingTeamId(null);
+  };
+
   const handleDeleteTeam = async (teamId: string) => {
     try {
       await teamsApi.delete(teamId);
@@ -420,13 +433,25 @@ export default function LeagueDetailPage() {
   function getOwnerDisplay(team: Team): { label: string; isHuman: boolean; isMe: boolean; isCommish: boolean } {
     const currentUserId = getCurrentUserId();
     const isCpu = team.is_cpu || team.owner_id === "cpu";
-    const isMe = team.owner_id === currentUserId || (team.owner_id === "placeholder" && getMyTeams().includes(team.id));
+    const isOwnerMe = team.owner_id === currentUserId || (team.owner_id === "placeholder" && getMyTeams().includes(team.id));
+    const isCoOwnerMe = !!team.co_owner_id && team.co_owner_id === currentUserId;
+    const isMe = isOwnerMe || isCoOwnerMe;
     const isCommishFlag = isCommissioner && team.owner_id === league?.commissioner_id;
 
     if (isCpu) return { label: "CPU", isHuman: false, isMe: false, isCommish: false };
     if (team.owner_id === "placeholder") return { label: "Unclaimed", isHuman: false, isMe: false, isCommish: false };
-    if (isMe) return { label: "You", isHuman: true, isMe: true, isCommish: false };
+    if (isMe) {
+      const label = isCoOwnerMe && !isOwnerMe
+        ? team.co_owner_id
+          ? "You (Co-Owner)"
+          : "You"
+        : team.co_owner_id
+          ? "You + Co-Owner"
+          : "You";
+      return { label, isHuman: true, isMe: true, isCommish: false };
+    }
     if (isCommishFlag) return { label: "Commish", isHuman: true, isMe: false, isCommish: true };
+    if (team.co_owner_id) return { label: "Joined (2 owners)", isHuman: true, isMe: false, isCommish: false };
     return { label: "Joined", isHuman: true, isMe: false, isCommish: false };
   }
 
@@ -462,7 +487,20 @@ export default function LeagueDetailPage() {
   const StatusIcon = statusConfig.icon;
   const typeLabel = leagueTypeLabels[league.league_type] || league.league_type;
   const TypeIcon = typeIcons[league.league_type] || Users;
-  const myTeamIds = getMyTeams();
+  // getMyTeams() is the legacy localStorage-based claim record; teams
+  // where the current user is owner_id or co_owner_id (the real,
+  // account-backed source of truth) weren't being recognized as "mine"
+  // here even though every permission check elsewhere in the backend
+  // already treats co-owners as equal team managers.
+  const currentUserIdForTeams = getCurrentUserId();
+  const myTeamIds = Array.from(
+    new Set([
+      ...getMyTeams(),
+      ...teams
+        .filter((t) => t.owner_id === currentUserIdForTeams || t.co_owner_id === currentUserIdForTeams)
+        .map((t) => t.id),
+    ]),
+  );
 
   return (
     <div className="min-h-screen bg-surface-900">
@@ -843,6 +881,11 @@ export default function LeagueDetailPage() {
                           </div>
                           <div>
                             <span className="font-medium text-white">{team.name}</span>
+                            {league.league_type === "conference" && team.conference && (
+                              <span className="ml-2 text-[10px] text-surface-400 font-semibold uppercase tracking-wider bg-surface-700/60 px-1.5 py-0.5 rounded">
+                                Conf {team.conference}
+                              </span>
+                            )}
                             {isMyTeam && (
                               <span className="ml-2 text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded">Your Team</span>
                             )}
@@ -863,12 +906,24 @@ export default function LeagueDetailPage() {
                       </td>
                       <td className="px-5 py-4">
                         {owner.isHuman ? (
-                          <span className={`inline-flex items-center gap-1 ${
-                            owner.isMe ? "text-gold-400" : "text-surface-400"
-                          }`}>
-                            <UserCheck className="w-3.5 h-3.5" />
-                            {owner.label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`inline-flex items-center gap-1 ${
+                              owner.isMe ? "text-gold-400" : "text-surface-400"
+                            }`}>
+                              <UserCheck className="w-3.5 h-3.5" />
+                              {owner.label}
+                            </span>
+                            {!team.co_owner_id && !owner.isMe && isLoggedIn() && (
+                              <button
+                                onClick={() => handleClaimCoOwner(team.id)}
+                                disabled={claimingTeamId === team.id}
+                                className="text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
+                                title="Join this team as co-owner — you'll share management with the primary owner"
+                              >
+                                {claimingTeamId === team.id ? "Joining…" : "Join as Co-Owner"}
+                              </button>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-surface-500 italic flex items-center gap-1">
                             <Bot className="w-3.5 h-3.5" />

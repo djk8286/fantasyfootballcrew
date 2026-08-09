@@ -254,7 +254,9 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
 
     Returns:
         List of dicts with: team_id, team_name, wins, losses, ties,
-        points_for, points_against
+        points_for, points_against, conference (None outside conference
+        leagues -- grouping by it is left to the caller/frontend so this
+        shape stays a flat list for every other consumer)
     """
     # Get all teams for name lookup
     teams_result = await db.execute(
@@ -278,6 +280,7 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
             {
                 "team_id": t.id,
                 "team_name": t.name,
+                "conference": t.conference,
                 "wins": 0,
                 "losses": 0,
                 "ties": 0,
@@ -301,6 +304,7 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
         standings[t.id] = {
             "team_id": t.id,
             "team_name": t.name,
+            "conference": t.conference,
             "wins": 0,
             "losses": 0,
             "ties": 0,

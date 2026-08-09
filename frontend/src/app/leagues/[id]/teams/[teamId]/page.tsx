@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { teamsApi, leaguesApi, playersApi, standingsApi } from "@/lib/api-client";
+import { teamsApi, leaguesApi, playersApi, standingsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -26,6 +26,7 @@ interface Team {
   league_id: string;
   avatar_url: string | null;
   is_cpu: boolean;
+  conference: string | null;
   wins: number;
   losses: number;
   ties: number;
@@ -83,6 +84,20 @@ export default function TeamPage() {
   const [schedule, setSchedule] = useState<ScheduleWeek[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [claimingCoOwner, setClaimingCoOwner] = useState(false);
+
+  const currentUserId = getCurrentUserId();
+
+  const handleClaimCoOwner = async () => {
+    setClaimingCoOwner(true);
+    try {
+      const updated = await teamsApi.claimCoOwner(teamId);
+      setTeam(updated as Team);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
+    }
+    setClaimingCoOwner(false);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -199,15 +214,38 @@ export default function TeamPage() {
             {avatar.icon}
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-bold text-white truncate">{team.name}</h2>
-            <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1">
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold text-white truncate">{team.name}</h2>
+              {team.conference && (
+                <span className="text-[10px] text-surface-400 font-semibold uppercase tracking-wider bg-surface-700/60 px-1.5 py-0.5 rounded shrink-0">
+                  Conf {team.conference}
+                </span>
+              )}
+            </div>
+            <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
               {team.is_cpu ? (
                 <>
                   <Bot className="w-3.5 h-3.5" /> CPU-controlled
                 </>
               ) : (
                 <>
-                  <UserCheck className="w-3.5 h-3.5" /> Owner-managed
+                  <UserCheck className="w-3.5 h-3.5" />
+                  {team.owner_id === currentUserId ? "You own this team" : "Owner-managed"}
+                  {team.co_owner_id && (
+                    <span className="text-surface-500">
+                      {" "}
+                      &middot; {team.co_owner_id === currentUserId ? "you're co-owner" : "has a co-owner"}
+                    </span>
+                  )}
+                  {!team.co_owner_id && team.owner_id !== currentUserId && isLoggedIn() && (
+                    <button
+                      onClick={handleClaimCoOwner}
+                      disabled={claimingCoOwner}
+                      className="ml-1 text-[11px] text-gold-400 hover:text-gold-300 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
+                    >
+                      {claimingCoOwner ? "Joining…" : "Join as Co-Owner"}
+                    </button>
+                  )}
                 </>
               )}
             </p>

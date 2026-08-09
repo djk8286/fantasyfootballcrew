@@ -17,6 +17,10 @@ class Team(Base):
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_cpu: Mapped[bool] = mapped_column(default=False)
+    # Only meaningful for League.league_type == "conference" -- which of the
+    # two conferences ("A"/"B") this team belongs to. Null for standard/
+    # two_man leagues.
+    conference: Mapped[str | None] = mapped_column(String, nullable=True)
     # MutableList wrapper: without it, in-place .append()/.remove() on this
     # column is invisible to SQLAlchemy's change tracking (only whole-attribute
     # reassignment is), so mutations silently fail to persist. See draft_manager

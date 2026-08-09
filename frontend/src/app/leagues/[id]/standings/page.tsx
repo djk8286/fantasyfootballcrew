@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi } from "@/lib/api-client";
+import { standingsApi, leaguesApi, teamsApi } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
 import RankBadge from "@/components/ui/RankBadge";
 import {
@@ -24,7 +24,9 @@ interface Standing {
   id: string;
   name: string;
   owner_id: string | null;
+  co_owner_id: string | null;
   is_cpu: boolean;
+  conference: string | null;
   wins: number;
   losses: number;
   ties: number;
@@ -47,6 +49,27 @@ interface WeeklyScoresResponse {
   week: number;
   year: number;
   matchups: Matchup[];
+}
+
+interface RawTeam {
+  id: string;
+  name: string;
+  owner_id: string | null;
+  co_owner_id: string | null;
+  is_cpu: boolean;
+  conference: string | null;
+  avatar_url: string | null;
+}
+
+interface RawStandingEntry {
+  team_id: string;
+  team_name: string;
+  conference: string | null;
+  wins: number;
+  losses: number;
+  ties: number;
+  points_for: number;
+  points_against: number;
 }
 
 interface LeagueData {
@@ -110,20 +133,57 @@ export default function StandingsPage() {
 
   // ─── Data fetching ─────────────────────────────────────
 
+  // GET /standings returns {league_id, league_name, league_type,
+  // standings: [...]} -- Array.isArray() on that whole object is always
+  // false, which silently rendered zero standings forever regardless of
+  // whether any weeks had been calculated. And the standings entries only
+  // carry computed record fields (team_id, wins, ...), not team metadata
+  // (owner_id, is_cpu, avatar_url) -- that's why teams is fetched
+  // separately and merged in here. Shared by the initial load and both
+  // refresh paths below so the fix (and the merge) lives in one place.
+  const loadStandings = useCallback(async (): Promise<Standing[]> => {
+    const [teamsData, standingsResponse] = await Promise.all([
+      teamsApi.getByLeague(leagueId).catch(() => [] as RawTeam[]),
+      standingsApi.getStandings(leagueId).catch(() => null),
+    ]);
+    const teams = Array.isArray(teamsData) ? (teamsData as RawTeam[]) : [];
+    const teamById = new Map(teams.map((t) => [t.id, t]));
+    const rawStandings: RawStandingEntry[] = Array.isArray((standingsResponse as any)?.standings)
+      ? (standingsResponse as any).standings
+      : [];
+
+    return rawStandings.map((s) => {
+      const team = teamById.get(s.team_id);
+      return {
+        id: s.team_id,
+        name: s.team_name,
+        owner_id: team?.owner_id ?? null,
+        co_owner_id: team?.co_owner_id ?? null,
+        is_cpu: team?.is_cpu ?? false,
+        conference: s.conference ?? team?.conference ?? null,
+        wins: s.wins,
+        losses: s.losses,
+        ties: s.ties,
+        points_for: s.points_for,
+        points_against: s.points_against,
+        avatar_url: team?.avatar_url ?? null,
+      };
+    });
+  }, [leagueId]);
+
   useEffect(() => {
     if (!leagueId) return;
 
     Promise.all([
       leaguesApi.get(leagueId).catch(() => null),
-      standingsApi.getStandings(leagueId).catch(() => [] as Standing[]),
+      loadStandings(),
     ])
-      .then(([leagueData, standingData]) => {
+      .then(([leagueData, st]) => {
         if (!leagueData) {
           setError("League not found");
           return;
         }
         setLeague(leagueData as LeagueData);
-        const st = Array.isArray(standingData) ? (standingData as Standing[]) : [];
         setStandings(st);
 
         // Determine max week — try to infer from data or default to 1
@@ -135,7 +195,7 @@ export default function StandingsPage() {
         setError(err instanceof Error ? err.message : "Failed to load standings");
       })
       .finally(() => setLoading(false));
-  }, [leagueId]);
+  }, [leagueId, loadStandings]);
 
   // Fetch weekly scores when week changes
   useEffect(() => {
@@ -161,8 +221,7 @@ export default function StandingsPage() {
       const result = await standingsApi.calculateWeek(leagueId, selectedWeek, CURRENT_YEAR);
       setCalcMessage(`Week ${selectedWeek} scores calculated successfully!`);
       // Refresh standings and weekly data
-      const newStandings = await standingsApi.getStandings(leagueId);
-      setStandings(Array.isArray(newStandings) ? (newStandings as Standing[]) : []);
+      setStandings(await loadStandings());
       const newWeekly = await standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR);
       setWeeklyData(newWeekly as WeeklyScoresResponse);
       // Clear message after 3 seconds
@@ -178,8 +237,7 @@ export default function StandingsPage() {
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      const data = await standingsApi.getStandings(leagueId);
-      setStandings(Array.isArray(data) ? (data as Standing[]) : []);
+      setStandings(await loadStandings());
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh");
@@ -197,7 +255,132 @@ export default function StandingsPage() {
   }
 
   function isMyTeam(team: Standing): boolean {
-    return team.id === myTeamId || team.owner_id === currentUserId;
+    return team.id === myTeamId || team.owner_id === currentUserId || team.co_owner_id === currentUserId;
+  }
+
+  // Renders one standings table for a given team list. Used once for a
+  // combined table, or twice (filtered per conference) for conference
+  // leagues -- rank is relative to whichever list is passed in.
+  function renderStandingsTable(teamsForTable: Standing[], label?: string) {
+    return (
+      <div key={label || "combined"}>
+        {label && (
+          <h3 className="text-xs font-bold text-gold-400 uppercase tracking-wider mb-2 px-1">
+            {label}
+          </h3>
+        )}
+        <div className="overflow-x-auto rounded-xl border border-surface-700">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-800 border-b border-surface-700">
+                <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-12">
+                  Rank
+                </th>
+                <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Team
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  W
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  L
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  T
+                </th>
+                <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Pts For
+                </th>
+                <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Pts Against
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-700">
+              {teamsForTable.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-center text-surface-500 text-sm">
+                    No teams in this conference yet.
+                  </td>
+                </tr>
+              ) : (
+                teamsForTable.map((team, idx) => {
+                  const rank = idx + 1;
+                  const myTeam = isMyTeam(team);
+                  const ownerLabel = getOwnerLabel(team);
+                  const avatar = getAvatarStyle(team.avatar_url);
+
+                  return (
+                    <tr
+                      key={team.id}
+                      className={`transition-colors ${
+                        myTeam
+                          ? "bg-gold-400/5 border-l-2 border-l-gold-400"
+                          : rank === 1
+                          ? "bg-gold-400/3"
+                          : "bg-surface-900 hover:bg-surface-800/80"
+                      }`}
+                    >
+                      <td className="px-4 py-4">
+                        <RankBadge rank={rank} />
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0 border border-white/10"
+                            style={{ backgroundColor: avatar.bg }}
+                          >
+                            {avatar.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-white truncate max-w-[180px]">
+                                {team.name}
+                              </span>
+                              {myTeam && (
+                                <span className="text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded shrink-0">
+                                  Your Team
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`text-xs ${
+                                myTeam ? "text-gold-400/70" : "text-surface-500"
+                              }`}
+                            >
+                              {ownerLabel}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-4 text-center">
+                        <span className="text-white font-bold font-mono tabular-nums text-base">
+                          {team.wins}
+                        </span>
+                      </td>
+                      <td className="px-3 py-4 text-center">
+                        <span className="text-white font-bold font-mono tabular-nums text-base">
+                          {team.losses}
+                        </span>
+                      </td>
+                      <td className="px-3 py-4 text-center text-surface-400 font-mono tabular-nums">
+                        {team.ties}
+                      </td>
+                      <td className="px-4 py-4 text-right text-white font-bold font-mono tabular-nums">
+                        {team.points_for?.toFixed(1) || "0.0"}
+                      </td>
+                      <td className="px-4 py-4 text-right text-surface-400 font-mono tabular-nums">
+                        {team.points_against?.toFixed(1) || "0.0"}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
   }
 
   // ─── Loading ────────────────────────────────────────────
@@ -351,110 +534,20 @@ export default function StandingsPage() {
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {sortedStandings.length > 0 ? (
           <div className="grid grid-cols-1 xl:grid-cols-5 gap-8">
-            {/* Standings Table */}
-            <div className="xl:col-span-3">
-              <div className="overflow-x-auto rounded-xl border border-surface-700">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-surface-800 border-b border-surface-700">
-                      <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-12">
-                        Rank
-                      </th>
-                      <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
-                        Team
-                      </th>
-                      <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
-                        W
-                      </th>
-                      <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
-                        L
-                      </th>
-                      <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
-                        T
-                      </th>
-                      <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
-                        Pts For
-                      </th>
-                      <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
-                        Pts Against
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-surface-700">
-                    {sortedStandings.map((team, idx) => {
-                      const rank = idx + 1;
-                      const myTeam = isMyTeam(team);
-                      const ownerLabel = getOwnerLabel(team);
-                      const avatar = getAvatarStyle(team.avatar_url);
-
-                      return (
-                        <tr
-                          key={team.id}
-                          className={`transition-colors ${
-                            myTeam
-                              ? "bg-gold-400/5 border-l-2 border-l-gold-400"
-                              : rank === 1
-                              ? "bg-gold-400/3"
-                              : "bg-surface-900 hover:bg-surface-800/80"
-                          }`}
-                        >
-                          <td className="px-4 py-4">
-                            <RankBadge rank={rank} />
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0 border border-white/10"
-                                style={{ backgroundColor: avatar.bg }}
-                              >
-                                {avatar.icon}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-white truncate max-w-[180px]">
-                                    {team.name}
-                                  </span>
-                                  {myTeam && (
-                                    <span className="text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded shrink-0">
-                                      Your Team
-                                    </span>
-                                  )}
-                                </div>
-                                <span
-                                  className={`text-xs ${
-                                    myTeam ? "text-gold-400/70" : "text-surface-500"
-                                  }`}
-                                >
-                                  {ownerLabel}
-                                </span>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-3 py-4 text-center">
-                            <span className="text-white font-bold font-mono tabular-nums text-base">
-                              {team.wins}
-                            </span>
-                          </td>
-                          <td className="px-3 py-4 text-center">
-                            <span className="text-white font-bold font-mono tabular-nums text-base">
-                              {team.losses}
-                            </span>
-                          </td>
-                          <td className="px-3 py-4 text-center text-surface-400 font-mono tabular-nums">
-                            {team.ties}
-                          </td>
-                          <td className="px-4 py-4 text-right text-white font-bold font-mono tabular-nums">
-                            {team.points_for?.toFixed(1) || "0.0"}
-                          </td>
-                          <td className="px-4 py-4 text-right text-surface-400 font-mono tabular-nums">
-                            {team.points_against?.toFixed(1) || "0.0"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            {/* Standings Table(s) — split into Conference A / B for
+                conference leagues, one combined table otherwise. Rank is
+                relative to whichever list is being rendered, so conference
+                tables show conference-relative rank, matching how real
+                conference standings read. */}
+            <div className="xl:col-span-3 space-y-6">
+              {league?.league_type === "conference" ? (
+                <>
+                  {renderStandingsTable(sortedStandings.filter((t) => t.conference === "A"), "Conference A")}
+                  {renderStandingsTable(sortedStandings.filter((t) => t.conference === "B"), "Conference B")}
+                </>
+              ) : (
+                renderStandingsTable(sortedStandings)
+              )}
             </div>
 
             {/* Weekly Matchups */}

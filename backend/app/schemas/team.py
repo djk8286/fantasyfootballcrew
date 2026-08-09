@@ -14,6 +14,7 @@ class TeamUpdate(BaseModel):
     name: Optional[str] = None
     avatar_url: Optional[str] = None
     co_owner_id: Optional[str] = None
+    conference: Optional[str] = None
 
 
 class TeamRead(BaseModel):
@@ -24,6 +25,7 @@ class TeamRead(BaseModel):
     league_id: str
     avatar_url: Optional[str] = None
     is_cpu: bool = False
+    conference: Optional[str] = None
     roster: Optional[list] = None
     wins: int
     losses: int
