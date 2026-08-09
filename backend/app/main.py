@@ -1,9 +1,11 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import engine, Base
+from app.services.scheduler import run_scheduler
 from app.api.v1 import (
     auth_router, users_router, leagues_router,
     teams_router, players_router, scoring_router,
@@ -18,8 +20,20 @@ async def lifespan(app: FastAPI):
     # Startup: Create database tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Background player/stats sync -- see app/services/scheduler.py. Runs
+    # for the lifetime of the process; replaces the manual "run this script
+    # after every deploy" step documented in DEPLOYMENT.md.
+    scheduler_task = asyncio.create_task(run_scheduler())
+
     yield
+
     # Shutdown
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
 
 
