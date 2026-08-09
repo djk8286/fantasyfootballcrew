@@ -12,6 +12,7 @@ from app.schemas.waiver import WaiverClaimCreate
 from app.api.deps import get_current_user, require_commissioner
 from app.services.draft_manager import get_player_rank_from_list, FANTASY_POSITIONS
 from app.services.sleeper_sync import sleeper_avatar_url
+from app.services.scoring_engine import calculate_player_score
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
 
@@ -61,7 +62,8 @@ async def list_free_agents(
     unbounded list here would reintroduce the exact payload-bloat problem
     fixed in the draft room (see get_draft_state).
     """
-    await _get_league(league_id, db)
+    league = await _get_league(league_id, db)
+    scoring_config = league.scoring_config or {}
 
     teams_result = await db.execute(select(Team).where(Team.league_id == league_id))
     teams = teams_result.scalars().all()
@@ -97,6 +99,7 @@ async def list_free_agents(
                 "injury_status": p.injury_status,
                 "rank": rank if rank < 1000 else None,
                 "pos_rank": i + 1,
+                "season_points": calculate_player_score(p.stats or {}, scoring_config, p.position),
             }
             for i, (rank, p) in enumerate(entries[:limit_per_position])
         ]

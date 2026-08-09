@@ -138,6 +138,18 @@ function PlayerCardOverlay({
               </span>
             )}
           </div>
+          {/* Season points — league-scoped, so only present when the page
+              fetched this player with a league_id (see api-client). Shown
+              as its own headline row since it's the number people actually
+              make add/drop/draft decisions on. */}
+          {"season_points" in player && player.season_points != null && (
+            <div className="flex items-center justify-between bg-surface-900/60 rounded-lg px-2.5 py-1.5 mb-2">
+              <span className="text-[9px] text-surface-500 uppercase tracking-wider">Season Pts</span>
+              <span className="text-sm font-bold text-gold-400">
+                {Math.round(player.season_points * 10) / 10}
+              </span>
+            </div>
+          )}
           {/* Detail grid: 2-col */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
             {"age" in player && player.age && (

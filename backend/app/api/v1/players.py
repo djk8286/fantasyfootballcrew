@@ -3,17 +3,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from app.core.database import get_db
 from app.models.player import Player
+from app.models.league import League
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import get_player_rank_from_list
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats
+from app.services.scoring_engine import calculate_player_score
 
 router = APIRouter(prefix="/players", tags=["players"])
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 
 
-def _serialize_player(p: Player) -> dict:
-    return {
+def _serialize_player(p: Player, scoring_config: dict | None = None) -> dict:
+    data = {
         "id": p.id,
         "sleeper_id": p.sleeper_id,
         "first_name": p.first_name,
@@ -28,6 +30,20 @@ def _serialize_player(p: Player) -> dict:
         "headline_stats": headline_stats(p.position, p.stats),
         "stats": p.stats,
     }
+    # season_points is league-scoped (scoring rules differ per league), so
+    # it's only computed when a scoring_config is supplied -- callers that
+    # don't pass league_id skip this and get season_points: None.
+    if scoring_config is not None:
+        data["season_points"] = calculate_player_score(p.stats or {}, scoring_config, p.position)
+    return data
+
+
+async def _get_scoring_config(league_id: str | None, db: AsyncSession) -> dict | None:
+    if not league_id:
+        return None
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    return (league.scoring_config or {}) if league else None
 
 
 @router.get("", response_model=list[PlayerRead])
@@ -36,6 +52,7 @@ async def list_players(
     team: str = None,
     search: str = None,
     limit: int = 100,
+    league_id: str = None,
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Player)
@@ -53,7 +70,8 @@ async def list_players(
     query = query.limit(limit)
     result = await db.execute(query)
     players = result.scalars().all()
-    return [_serialize_player(p) for p in players]
+    scoring_config = await _get_scoring_config(league_id, db)
+    return [_serialize_player(p, scoring_config) for p in players]
 
 
 @router.get("/top-prospects")
@@ -88,9 +106,10 @@ async def top_prospects(limit: int = 100, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{player_id}", response_model=PlayerRead)
-async def get_player(player_id: str, db: AsyncSession = Depends(get_db)):
+async def get_player(player_id: str, league_id: str = None, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Player).where(Player.id == player_id))
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    return _serialize_player(player)
+    scoring_config = await _get_scoring_config(league_id, db)
+    return _serialize_player(player, scoring_config)

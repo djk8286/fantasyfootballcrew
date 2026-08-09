@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
-import { PlayerAvatar } from "@/components/PlayerAvatar";
+import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 
 interface Team {
   id: string;
@@ -56,6 +56,7 @@ interface FreeAgent {
   injury_status: string | null;
   rank: number | null;
   pos_rank: number;
+  season_points: number | null;
 }
 
 const statusColor: Record<string, string> = {
@@ -90,6 +91,20 @@ export default function WaiversPage() {
   const [freeAgents, setFreeAgents] = useState<Record<string, FreeAgent[]>>({});
   const [faLoading, setFaLoading] = useState(true);
   const [faPosition, setFaPosition] = useState("QB");
+
+  // Fixed hover card state -- same pattern the draft room already uses.
+  const [hoveredPlayer, setHoveredPlayer] = useState<FreeAgent | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+  const handlePlayerHover = useCallback((player: FreeAgent | null, el: HTMLElement | null) => {
+    if (player && el) {
+      setHoveredPlayer(player);
+      const rect = el.getBoundingClientRect();
+      setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
+    } else {
+      setHoveredPlayer(null);
+      setHoverPos(null);
+    }
+  }, []);
 
   const userId = getCurrentUserId();
   const myTeam = teams.find((t) => t.owner_id === userId || t.co_owner_id === userId);
@@ -367,12 +382,18 @@ export default function WaiversPage() {
                   <PlayerAvatar
                     player={{ ...p, full_name: `${p.first_name} ${p.last_name}` } as any}
                     size="sm"
+                    onHover={handlePlayerHover as any}
                   />
                   <span className="text-sm text-white truncate flex-1">
                     {p.first_name} {p.last_name}
                   </span>
                   {p.injury_status && (
                     <span className="text-[9px] text-red-400 uppercase shrink-0">{p.injury_status}</span>
+                  )}
+                  {p.season_points != null && (
+                    <span className="text-[10px] text-gold-400/80 font-semibold shrink-0 w-10 text-right">
+                      {Math.round(p.season_points * 10) / 10}
+                    </span>
                   )}
                   <span className="text-[10px] text-surface-500 shrink-0">{p.team || "FA"}</span>
                   {myTeam && (
@@ -495,6 +516,8 @@ export default function WaiversPage() {
           </div>
         )}
       </div>
+
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
     </div>
   );
 }

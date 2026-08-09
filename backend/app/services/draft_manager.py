@@ -15,6 +15,7 @@ from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League, DraftStatus
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats
+from app.services.scoring_engine import calculate_player_score
 
 
 # Positions the scoring engine (DEFAULT_SCORING) actually has point values
@@ -273,6 +274,10 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     if not draft:
         raise ValueError("Draft not found")
 
+    league_result = await db.execute(select(League).where(League.id == draft.league_id))
+    league = league_result.scalar_one_or_none()
+    scoring_config = (league.scoring_config or {}) if league else {}
+
     team_order = json.loads(draft.team_order)
     
     # Get number of teams
@@ -373,6 +378,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "stats": player.stats if player else None,
                 "rank_score": get_player_rank_from_list(f"{player.first_name} {player.last_name}") if player else 0,
                 "pos_rank": pos_rank_map.get(player.id, 0) if player else 0,
+                "season_points": calculate_player_score(player.stats or {}, scoring_config, player.position) if player else None,
             },
             "team": {
                 "id": team.id if team else None,
@@ -422,6 +428,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "stats": p.stats,
                 "rank_score": get_player_rank_from_list(f"{p.first_name} {p.last_name}"),
                 "pos_rank": pos_rank_map.get(p.id, 0),
+                "season_points": calculate_player_score(p.stats or {}, scoring_config, p.position),
             }
             for p in available_players
         ],

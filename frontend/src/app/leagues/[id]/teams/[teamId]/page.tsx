@@ -6,7 +6,7 @@ import Link from "next/link";
 import { teamsApi, leaguesApi, playersApi, standingsApi } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
-import { PlayerAvatar } from "@/components/PlayerAvatar";
+import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import {
   ChevronLeft,
   Bot,
@@ -48,6 +48,7 @@ interface RosterPlayer {
   team: string | null;
   avatar_url: string | null;
   sleeper_id: string | null;
+  season_points: number | null;
 }
 
 interface ScheduleTeamEntry {
@@ -110,7 +111,7 @@ export default function TeamPage() {
     Promise.all(
       ids.map((pid) =>
         playersApi
-          .get(pid)
+          .get(pid, leagueId)
           .then((p) => {
             const raw = p as Omit<RosterPlayer, "full_name">;
             const full_name = `${raw.first_name ?? ""} ${raw.last_name ?? ""}`.trim() || "Unknown Player";
@@ -125,7 +126,21 @@ export default function TeamPage() {
         return next;
       });
     });
-  }, [team, playersById]);
+  }, [team, playersById, leagueId]);
+
+  // Fixed hover card state -- same pattern the draft room already uses.
+  const [hoveredPlayer, setHoveredPlayer] = useState<RosterPlayer | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+  const handlePlayerHover = useCallback((player: RosterPlayer | null, el: HTMLElement | null) => {
+    if (player && el) {
+      setHoveredPlayer(player);
+      const rect = el.getBoundingClientRect();
+      setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
+    } else {
+      setHoveredPlayer(null);
+      setHoverPos(null);
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -230,8 +245,13 @@ export default function TeamPage() {
                 <div key={pos} className="contents">
                   {rosterByPos[pos].map((p) => (
                     <div key={p.id} className="flex items-center gap-2 py-1.5 border-b border-surface-800/50">
-                      <PlayerAvatar player={p as any} size="sm" />
+                      <PlayerAvatar player={p as any} size="sm" onHover={handlePlayerHover as any} />
                       <span className="text-sm text-white truncate flex-1">{p.full_name}</span>
+                      {p.season_points != null && (
+                        <span className="text-[10px] text-gold-400/80 font-semibold">
+                          {Math.round(p.season_points * 10) / 10}
+                        </span>
+                      )}
                       <span className="text-[10px] text-surface-500">{p.team}</span>
                       <PositionBadge pos={p.position} />
                     </div>
@@ -288,6 +308,8 @@ export default function TeamPage() {
           )}
         </div>
       </div>
+
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
     </div>
   );
 }

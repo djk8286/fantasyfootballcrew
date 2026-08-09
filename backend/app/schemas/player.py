@@ -17,6 +17,7 @@ class PlayerRead(BaseModel):
     avatar_url: Optional[str] = None
     headline_stats: Optional[dict] = None
     stats: Optional[dict] = None
+    season_points: Optional[float] = None
 
     class Config:
         from_attributes = True

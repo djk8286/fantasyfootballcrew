@@ -122,7 +122,8 @@ export const playersApi = {
       : "";
     return apiRequest(`/api/v1/players${query}`);
   },
-  get: (id: string) => apiRequest(`/api/v1/players/${id}`),
+  get: (id: string, leagueId?: string) =>
+    apiRequest(`/api/v1/players/${id}${leagueId ? `?league_id=${leagueId}` : ""}`),
   topProspects: (limit = 100) => apiRequest(`/api/v1/players/top-prospects?limit=${limit}`),
 };
 
