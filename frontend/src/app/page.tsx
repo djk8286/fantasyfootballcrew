@@ -70,7 +70,7 @@ export default function Home() {
             <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-gold-400/10 border border-gold-400/20 rounded-full mb-8">
               <span className="w-2 h-2 bg-gold-400 rounded-full animate-pulse" />
               <span className="text-gold-400 text-sm font-medium">
-                Beta Coming August 2026
+                Beta is Live
               </span>
             </div>
 
@@ -162,14 +162,13 @@ export default function Home() {
             <span className="text-gold-400">Perfect League?</span>
           </h2>
           <p className="text-surface-400 text-lg mb-8">
-            Beta launches August 2026. Sign up now and be the first to draft
-            when we go live.
+            Beta is live now. Create your league and start drafting today.
           </p>
           <Link
             href="/register"
             className="inline-flex bg-gold-400 hover:bg-gold-300 text-surface-900 px-10 py-4 rounded-xl font-bold text-lg transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0"
           >
-            Join the Waitlist
+            Get Started Free
           </Link>
         </div>
       </section>
