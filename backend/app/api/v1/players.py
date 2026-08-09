@@ -6,7 +6,7 @@ from app.models.player import Player
 from app.models.league import League
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import get_player_rank_from_list
-from app.services.sleeper_sync import sleeper_avatar_url, headline_stats
+from app.services.sleeper_sync import sleeper_avatar_url, headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -33,8 +33,15 @@ def _serialize_player(p: Player, scoring_config: dict | None = None) -> dict:
     # season_points is league-scoped (scoring rules differ per league), so
     # it's only computed when a scoring_config is supplied -- callers that
     # don't pass league_id skip this and get season_points: None.
+    # effective_season_stats picks current-season live data if the season
+    # has actually started and synced anything yet, else falls back to the
+    # archived last-season reference -- season_points_year says which one,
+    # so the frontend can label it correctly instead of presenting a
+    # possibly-stale number as if it were live.
     if scoring_config is not None:
-        data["season_points"] = calculate_player_score(p.stats or {}, scoring_config, p.position)
+        stats, year = effective_season_stats(p)
+        data["season_points"] = calculate_player_score(stats, scoring_config, p.position)
+        data["season_points_year"] = year
     return data
 
 

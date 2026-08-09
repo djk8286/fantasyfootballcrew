@@ -14,7 +14,7 @@ from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League, DraftStatus
-from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats
+from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
 
 
@@ -267,6 +267,19 @@ async def make_pick(
     return draft_pick
 
 
+def _season_points_fields(player: Player | None, scoring_config: dict) -> dict:
+    """season_points + season_points_year for a (possibly None) player, via
+    effective_season_stats -- shared by both the picks history and the
+    available-players list below."""
+    if not player:
+        return {"season_points": None, "season_points_year": None}
+    stats, year = effective_season_stats(player)
+    return {
+        "season_points": calculate_player_score(stats, scoring_config, player.position),
+        "season_points_year": year,
+    }
+
+
 async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     """Get full draft state including all picks and current team."""
     result = await db.execute(select(Draft).where(Draft.id == draft_id))
@@ -378,7 +391,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "stats": player.stats if player else None,
                 "rank_score": get_player_rank_from_list(f"{player.first_name} {player.last_name}") if player else 0,
                 "pos_rank": pos_rank_map.get(player.id, 0) if player else 0,
-                "season_points": calculate_player_score(player.stats or {}, scoring_config, player.position) if player else None,
+                **_season_points_fields(player, scoring_config),
             },
             "team": {
                 "id": team.id if team else None,
@@ -428,7 +441,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "stats": p.stats,
                 "rank_score": get_player_rank_from_list(f"{p.first_name} {p.last_name}"),
                 "pos_rank": pos_rank_map.get(p.id, 0),
-                "season_points": calculate_player_score(p.stats or {}, scoring_config, p.position),
+                **_season_points_fields(p, scoring_config),
             }
             for p in available_players
         ],

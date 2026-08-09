@@ -23,8 +23,15 @@ class Player(Base):
     # is invisible to SQLAlchemy's change tracking -- only whole-attribute
     # reassignment is. That silently dropped every week's stats after the
     # first sync for a given player before this fix (see sleeper_sync).
-    stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)  # career/non-weekly stats
+    stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)  # current-season aggregate stats
+    stats_year: Mapped[int | None] = mapped_column(Integer, nullable=True)  # which season `stats` actually represents
     week_stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)  # {week_number: {stat_key: value}}
+    # Static reference snapshot of the last fully-completed season, used as
+    # a season_points fallback before the new season has any real synced
+    # data -- see sleeper_sync.effective_season_stats for how the two are
+    # chosen between.
+    last_season_stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    last_season_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

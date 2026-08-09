@@ -18,6 +18,7 @@ class PlayerRead(BaseModel):
     headline_stats: Optional[dict] = None
     stats: Optional[dict] = None
     season_points: Optional[float] = None
+    season_points_year: Optional[int] = None
 
     class Config:
         from_attributes = True

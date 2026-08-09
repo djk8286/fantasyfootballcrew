@@ -49,6 +49,7 @@ interface RosterPlayer {
   avatar_url: string | null;
   sleeper_id: string | null;
   season_points: number | null;
+  season_points_year: number | null;
 }
 
 interface ScheduleTeamEntry {

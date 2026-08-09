@@ -12,7 +12,8 @@ Endpoints used:
 """
 
 import httpx
-from typing import Dict, Any, Optional
+from datetime import date
+from typing import Dict, Any, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.config import settings
@@ -20,6 +21,30 @@ from app.models.player import Player
 
 
 SLEEPER_API = "https://api.sleeper.app/v1"
+
+
+def current_nfl_season_year(today: Optional[date] = None) -> int:
+    """The NFL season is named for the year it starts in and runs into the
+    following spring, so from January through August we're still in the
+    PREVIOUS year's season for fantasy purposes (e.g. a game in Feb 2026
+    belongs to the 2025 season; the 2026 season doesn't start until
+    September). Used to decide whether Player.stats holds real current-
+    season data yet or should fall back to last_season_stats."""
+    today = today or date.today()
+    return today.year if today.month >= 9 else today.year - 1
+
+
+def effective_season_stats(player: Player) -> Tuple[Dict[str, Any], Optional[int]]:
+    """Which stats blob season_points should be computed from, and which
+    year it represents: the current season's live data if the season has
+    actually started AND we've synced something for it, otherwise last
+    season's archived totals as a reference. Returns (stats, year) so
+    callers can label which one they got (e.g. "2025 Season" vs
+    "2026 Season") rather than presenting a stale number as if it were
+    live."""
+    if player.stats_year == current_nfl_season_year() and player.stats:
+        return player.stats, player.stats_year
+    return (player.last_season_stats or {}), player.last_season_year
 
 
 async def fetch_all_players() -> Dict[str, Any]:
@@ -129,6 +154,15 @@ async def sync_weekly_stats(db: AsyncSession, year: int, week: int) -> int:
         if not player:
             continue
 
+        # A new season starting resets accumulated stats instead of piling
+        # onto whatever the previous season left behind -- without this,
+        # week 1 of a new year would silently add on top of last year's
+        # final totals rather than starting fresh from zero.
+        if player.stats_year != year:
+            player.stats = {}
+            player.week_stats = {}
+            player.stats_year = year
+
         # Update week stats
         week_key = str(week)
         if not player.week_stats:
@@ -205,7 +239,11 @@ def headline_stats(position: str, stats: Optional[Dict[str, Any]]) -> Dict[str, 
 
 async def sync_season_stats(db: AsyncSession, season: str) -> int:
     """Fetch full-season aggregate stats for every player and store them on
-    Player.stats. Mirrors sync_weekly_stats's batched-commit pattern."""
+    Player.stats -- the CURRENT season's live totals (see stats_year /
+    effective_season_stats). For archiving a completed prior season as the
+    season_points fallback reference instead, use
+    archive_last_season_stats, which writes to a separate field so the two
+    don't collide."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{SLEEPER_API}/stats/nfl/regular/{season}", timeout=60
@@ -223,6 +261,41 @@ async def sync_season_stats(db: AsyncSession, season: str) -> int:
             continue
 
         player.stats = stats
+        player.stats_year = int(season)
+        count += 1
+
+        if count % 500 == 0:
+            await db.flush()
+
+    await db.commit()
+    return count
+
+
+async def archive_last_season_stats(db: AsyncSession, season: int) -> int:
+    """Snapshot a fully-completed season's aggregate stats into
+    Player.last_season_stats/last_season_year -- a static reference kept
+    separate from Player.stats (which tracks the CURRENT, in-progress
+    season and resets at each season boundary, see sync_weekly_stats). This
+    is what season_points falls back to before the new season has any real
+    synced data of its own."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SLEEPER_API}/stats/nfl/regular/{season}", timeout=60
+        )
+        response.raise_for_status()
+        stats_data = response.json()
+
+    count = 0
+    for sleeper_id, stats in stats_data.items():
+        result = await db.execute(
+            select(Player).where(Player.sleeper_id == sleeper_id)
+        )
+        player = result.scalar_one_or_none()
+        if not player:
+            continue
+
+        player.last_season_stats = stats
+        player.last_season_year = season
         count += 1
 
         if count % 500 == 0:

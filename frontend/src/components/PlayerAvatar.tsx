@@ -141,13 +141,21 @@ function PlayerCardOverlay({
           {/* Season points — league-scoped, so only present when the page
               fetched this player with a league_id (see api-client). Shown
               as its own headline row since it's the number people actually
-              make add/drop/draft decisions on. */}
+              make add/drop/draft decisions on. season_points_year says
+              whether this is live current-season data or the last-season
+              reference (falls back automatically until the new season has
+              real synced data of its own) -- always labeled so it never
+              reads as more current than it is. */}
           {"season_points" in player && player.season_points != null && (
-            <div className="flex items-center justify-between bg-surface-900/60 rounded-lg px-2.5 py-1.5 mb-2">
-              <span className="text-[9px] text-surface-500 uppercase tracking-wider">Season Pts</span>
-              <span className="text-sm font-bold text-gold-400">
-                {Math.round(player.season_points * 10) / 10}
-              </span>
+            <div className="bg-surface-900/60 rounded-lg px-2.5 py-1.5 mb-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-surface-500 uppercase tracking-wider">
+                  {player.season_points_year ? `${player.season_points_year} Season` : "Season Pts"}
+                </span>
+                <span className="text-sm font-bold text-gold-400">
+                  {Math.round(player.season_points * 10) / 10}
+                </span>
+              </div>
             </div>
           )}
           {/* Detail grid: 2-col */}

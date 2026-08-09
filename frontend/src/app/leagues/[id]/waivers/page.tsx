@@ -57,6 +57,7 @@ interface FreeAgent {
   rank: number | null;
   pos_rank: number;
   season_points: number | null;
+  season_points_year: number | null;
 }
 
 const statusColor: Record<string, string> = {

@@ -11,7 +11,7 @@ from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
 from app.api.deps import get_current_user, require_commissioner
 from app.services.draft_manager import get_player_rank_from_list, FANTASY_POSITIONS
-from app.services.sleeper_sync import sleeper_avatar_url
+from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
@@ -84,6 +84,13 @@ async def list_free_agents(
         rank = get_player_rank_from_list(f"{p.first_name} {p.last_name}")
         ranked_by_position.setdefault(p.position, []).append((rank, p))
 
+    def _season_points_fields(p: Player) -> dict:
+        stats, year = effective_season_stats(p)
+        return {
+            "season_points": calculate_player_score(stats, scoring_config, p.position),
+            "season_points_year": year,
+        }
+
     result: dict[str, list[dict]] = {}
     for pos in POSITION_DISPLAY_ORDER:
         entries = sorted(ranked_by_position.get(pos, []), key=lambda e: e[0])
@@ -99,7 +106,7 @@ async def list_free_agents(
                 "injury_status": p.injury_status,
                 "rank": rank if rank < 1000 else None,
                 "pos_rank": i + 1,
-                "season_points": calculate_player_score(p.stats or {}, scoring_config, p.position),
+                **_season_points_fields(p),
             }
             for i, (rank, p) in enumerate(entries[:limit_per_position])
         ]
