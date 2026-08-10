@@ -26,6 +26,13 @@ class Team(Base):
     # reassignment is), so mutations silently fail to persist. See draft_manager
     # .make_pick, which used to lose every pick after a team's first.
     roster: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True, default=list)  # list of player IDs
+    # Bumped on every roster write made through a compare-and-swap (currently
+    # just trade approval). Lets a writer detect "this roster changed under
+    # me since I read it" with a plain integer WHERE-clause instead of
+    # comparing the whole JSON blob (which Postgres's plain `json` column
+    # type can't even do -- there's no `=` operator for it, only `jsonb`).
+    # See commissioner.review_trade.
+    roster_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     ties: Mapped[int] = mapped_column(Integer, default=0)

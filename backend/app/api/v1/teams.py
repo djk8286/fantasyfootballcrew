@@ -30,11 +30,6 @@ class BulkAddTeamsRequest(BaseModel):
     name_prefix: str = "CPU Team"
 
 
-class CommissionerActionRequest(BaseModel):
-    action: str  # "add_co_commish", "remove_co_commish", "transfer"
-    user_id: str
-
-
 def _require_team_or_league_access(team: Team, league: League, current_user: User) -> None:
     allowed_ids = {team.owner_id, team.co_owner_id, league.commissioner_id, *(league.co_commissioner_ids or [])}
     if current_user.id not in allowed_ids:

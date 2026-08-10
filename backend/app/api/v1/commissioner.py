@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from app.core.database import get_db
 from app.models.league import League
 from app.models.team import Team
@@ -168,10 +168,21 @@ async def review_trade(
         offered_ids = set(details.get("offered_player_ids") or [])
         requested_ids = set(details.get("requested_player_ids") or [])
 
-        proposer_result = await db.execute(select(Team).where(Team.id == trade.team_id))
-        proposer = proposer_result.scalar_one_or_none()
-        target_result = await db.execute(select(Team).where(Team.id == target_team_id))
-        target = target_result.scalar_one_or_none()
+        # Lock both teams' rows in a fixed order (not proposer-then-target)
+        # so that two trades between the same pair of teams in opposite
+        # roles can't deadlock each waiting on the other's lock. Real lock
+        # on Postgres (production); no-op on SQLite (local dev) -- see the
+        # compare-and-swap note below for why locking alone isn't the full
+        # correctness guarantee.
+        locked_teams = {}
+        for tid in sorted({trade.team_id, target_team_id}):
+            row = await db.execute(select(Team).where(Team.id == tid).with_for_update())
+            team_obj = row.scalar_one_or_none()
+            if team_obj:
+                locked_teams[tid] = team_obj
+
+        proposer = locked_teams.get(trade.team_id)
+        target = locked_teams.get(target_team_id)
         if not proposer or not target:
             raise HTTPException(status_code=404, detail="One of the trading teams no longer exists")
 
@@ -189,8 +200,37 @@ async def review_trade(
                 detail=f"Requested players are no longer on {target.name}'s roster: {sorted(requested_ids - target_roster)}",
             )
 
-        proposer.roster = list((proposer_roster - offered_ids) | requested_ids)
-        target.roster = list((target_roster - requested_ids) | offered_ids)
+        new_proposer_roster = list((proposer_roster - offered_ids) | requested_ids)
+        new_target_roster = list((target_roster - requested_ids) | offered_ids)
+
+        # Atomic, conditional roster swap -- only succeeds if each team's
+        # roster_version still matches what was just observed above (i.e.
+        # nothing else committed a roster change to it in between). Without
+        # this, two pending trades that both touch one team's roster,
+        # approved concurrently (a commissioner clearing a backlog fast, or
+        # a double-click), silently lose one trade's player movement while
+        # BOTH end up marked status=="approved" -- confirmed locally: with
+        # an artificial delay inserted between the read and the write here,
+        # two concurrent approvals reproduced the lost update every time.
+        # with_for_update() above makes this the non-racing common path on
+        # Postgres; this version check is what actually guarantees
+        # correctness, including on SQLite where the lock is a no-op.
+        proposer_cas = await db.execute(
+            update(Team)
+            .where(Team.id == proposer.id, Team.roster_version == proposer.roster_version)
+            .values(roster=new_proposer_roster, roster_version=Team.roster_version + 1)
+        )
+        target_cas = await db.execute(
+            update(Team)
+            .where(Team.id == target.id, Team.roster_version == target.roster_version)
+            .values(roster=new_target_roster, roster_version=Team.roster_version + 1)
+        )
+        if proposer_cas.rowcount == 0 or target_cas.rowcount == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="One of the trading teams' rosters changed since this review started "
+                       "(likely another trade for the same team was just approved). Please retry.",
+            )
 
         trade.status = TransactionStatus.APPROVED
     elif data.action == "deny":

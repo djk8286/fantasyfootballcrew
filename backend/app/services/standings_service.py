@@ -13,8 +13,25 @@ from app.models.league import League
 from app.models.player import Player
 from app.models.weekly_score import WeeklyScore
 from app.models.coach import Coach
+from app.models.score_adjustment import ScoreAdjustment
 from app.services.scoring_engine import calculate_player_score
 from app.services.sleeper_sync import fetch_weekly_stats
+
+
+async def _weekly_adjustment_total(team_id: str, week: int, year: int, db: AsyncSession) -> float:
+    """Sum of commissioner-added manual point adjustments for a team's
+    week. Commissioner.create_adjustment stores these, but nothing was
+    ever reading them back out -- they showed up in the commissioner
+    panel's list but had zero effect on the team's actual score or the
+    league standings."""
+    result = await db.execute(
+        select(ScoreAdjustment).where(
+            ScoreAdjustment.team_id == team_id,
+            ScoreAdjustment.week == week,
+            ScoreAdjustment.year == year,
+        )
+    )
+    return sum(a.amount for a in result.scalars().all())
 
 
 async def _flat_weekly_coach_bonus(team_id: str, db: AsyncSession) -> float:
@@ -200,6 +217,12 @@ async def calculate_week(
             total_score = round(total_score + coach_bonus, 2)
             lineup_data["total"] = total_score
             lineup_data["coach_bonus"] = coach_bonus
+
+        adjustment_total = await _weekly_adjustment_total(team.id, week, year, db)
+        if adjustment_total:
+            total_score = round(total_score + adjustment_total, 2)
+            lineup_data["total"] = total_score
+            lineup_data["commissioner_adjustment"] = adjustment_total
 
         # Upsert WeeklyScore record
         existing_result = await db.execute(

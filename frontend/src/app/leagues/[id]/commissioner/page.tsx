@@ -78,7 +78,11 @@ interface Coach {
 
 type Tab = "adjustments" | "trades" | "draft-order" | "coaches";
 
-const CURRENT_YEAR = 2026;
+// Every other page that needs "this season's year" computes it (standings,
+// schedule, teams) -- this was the one spot still hardcoded, which would've
+// silently tagged every point adjustment "2026" forever, starting with the
+// first commissioner to use this panel after the calendar rolls over.
+const CURRENT_YEAR = new Date().getFullYear();
 
 export default function CommissionerPage() {
   const params = useParams();
@@ -475,11 +479,16 @@ function TradesPanel({
 
   const handleReview = async (tradeId: string, action: "approve" | "deny") => {
     setProcessing(tradeId);
+    setError("");
     try {
       await commissionerApi.reviewTrade(leagueId, tradeId, action);
       await loadTrades();
-    } catch {
-      setError("Failed to review trade");
+    } catch (err) {
+      // A 409 here means another trade touching one of the same two teams
+      // was approved a moment earlier -- expected under concurrent review,
+      // not a real failure. Surface the backend's actual message (it says
+      // "please retry") instead of a generic string with no next step.
+      setError(err instanceof Error ? err.message : "Failed to review trade");
     }
     setProcessing(null);
   };
