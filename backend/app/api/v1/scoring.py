@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.models.scoring import ScoringConfig
 from app.models.player import Player
 from app.models.league import League
+from app.models.user import User
 from app.services.scoring_engine import (
     calculate_player_score,
     calculate_weekly_score,
@@ -24,6 +25,7 @@ from app.schemas.scoring import (
     OptimalLineupSlot,
     SleeperWeeklyScoringInput,
 )
+from app.api.deps import get_current_user, require_commissioner
 from pydantic import BaseModel
 from typing import Optional, Dict
 
@@ -39,10 +41,30 @@ class ScoringConfigCreate(BaseModel):
 
 
 # ─── CRUD endpoints ──────────────────────────────────────────────────
+#
+# NOTE: this ScoringConfig table (one row per category/stat_name) isn't
+# actually read anywhere in real scoring -- standings_service.calculate_week
+# and every other real scoring path reads League.scoring_config (a single
+# JSON blob column) instead. This looks like an earlier normalized-table
+# design that got superseded but never removed. Left in place (not this
+# session's call to delete a table), but still gated properly below --
+# "nothing currently reads it" isn't a reason to leave it wide open to
+# anyone, and a future feature could start reading it and inherit whatever
+# auth model already exists here.
 
 
 @router.post("", status_code=201)
-async def create_scoring_config(config: ScoringConfigCreate, db: AsyncSession = Depends(get_db)):
+async def create_scoring_config(
+    config: ScoringConfigCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(select(League).where(League.id == config.league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
     sc = ScoringConfig(
         league_id=config.league_id,
         category=config.category,
@@ -70,12 +92,22 @@ async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db))
 
 
 @router.delete("/{config_id}", status_code=204)
-async def delete_scoring_config(config_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_scoring_config(
+    config_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a single scoring config row."""
     result = await db.execute(select(ScoringConfig).where(ScoringConfig.id == config_id))
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Scoring config not found")
+
+    league_result = await db.execute(select(League).where(League.id == config.league_id))
+    league = league_result.scalar_one_or_none()
+    if league:
+        require_commissioner(league, current_user)
+
     await db.delete(config)
     await db.commit()
 

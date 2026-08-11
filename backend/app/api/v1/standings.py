@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.core.database import get_db
 from app.models.league import League
 from app.models.weekly_score import WeeklyScore
+from app.models.user import User
 from app.services.standings_service import (
     calculate_week,
     get_standings,
@@ -11,6 +12,7 @@ from app.services.standings_service import (
     get_season_schedule,
     DEFAULT_SEASON_WEEKS,
 )
+from app.api.deps import get_current_user, require_commissioner
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
 
@@ -125,6 +127,7 @@ async def calculate_week_standings(
     week: int = Query(..., ge=1, le=18, description="Week number (1-18)"),
     year: int = Query(..., ge=2020, le=2030, description="Season year"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Trigger weekly score calculation for all teams in a league.
@@ -133,13 +136,17 @@ async def calculate_week_standings(
     calculates fantasy points via the scoring engine, and stores
     WeeklyScore records.
 
-    Intended for commissioner or system use.
+    Commissioner only -- the docstring already said "intended for
+    commissioner or system use" but nothing enforced it. Not called by
+    the background scheduler (that only syncs player/stat data, never
+    this), so there's no internal caller to account for here.
     """
     # Verify league exists
     league_result = await db.execute(select(League).where(League.id == league_id))
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
 
     try:
         result = await calculate_week(league_id, week, year, db)
