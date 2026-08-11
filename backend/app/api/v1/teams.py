@@ -6,7 +6,7 @@ from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_team_or_league_access
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -28,12 +28,6 @@ async def _next_conference(league: League, league_id: str, db: AsyncSession) -> 
 class BulkAddTeamsRequest(BaseModel):
     count: int = 1
     name_prefix: str = "CPU Team"
-
-
-def _require_team_or_league_access(team: Team, league: League, current_user: User) -> None:
-    allowed_ids = {team.owner_id, team.co_owner_id, league.commissioner_id, *(league.co_commissioner_ids or [])}
-    if current_user.id not in allowed_ids:
-        raise HTTPException(status_code=403, detail="Not authorized for this team")
 
 
 @router.post("", response_model=TeamRead, status_code=status.HTTP_201_CREATED)
@@ -82,7 +76,7 @@ async def update_team(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
-    _require_team_or_league_access(team, league, current_user)
+    require_team_or_league_access(team, league, current_user)
 
     if update_data.name is not None:
         team.name = update_data.name
