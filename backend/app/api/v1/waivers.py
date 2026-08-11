@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.database import get_db
 from app.models.league import League
@@ -246,6 +246,7 @@ async def process_waivers(
     granted_players: set[str] = set()
     granted: list[dict] = []
     denied: list[dict] = []
+    skipped: list[dict] = []
     new_priority = list(order)
 
     for team_id in order:
@@ -272,7 +273,31 @@ async def process_waivers(
         if drop_id:
             roster.discard(drop_id)
         roster.add(add_id)
-        team.roster = list(roster)
+
+        # Atomic, conditional roster write -- same roster_version
+        # compare-and-swap commissioner.review_trade uses, and for the same
+        # reason: this endpoint's roster read (teams_by_id, above) and this
+        # write are two separate points in time with no lock between them.
+        # Confirmed locally: a trade approved for this team while waivers
+        # were processing landed cleanly (status=="approved"), but the
+        # trade's roster change was silently overwritten a moment later by
+        # this write, which was still computing off the pre-trade roster --
+        # the traded-away player stayed on the roster and the received
+        # player never arrived, with no error anywhere. On a CAS miss here,
+        # leave the claim PENDING (not denied) and report it skipped -- the
+        # next "Process Waivers" run picks it back up with a fresh read,
+        # rather than failing the whole batch over one contested team.
+        cas_result = await db.execute(
+            update(Team)
+            .where(Team.id == team.id, Team.roster_version == team.roster_version)
+            .values(roster=list(roster), roster_version=Team.roster_version + 1)
+        )
+        if cas_result.rowcount == 0:
+            skipped.append({
+                "team_id": team_id, "add_player_id": add_id,
+                "reason": "roster changed concurrently (e.g. a trade was just approved) -- will retry on next processing run",
+            })
+            continue
 
         claim.status = TransactionStatus.APPROVED
         claim.reviewed_by = current_user.id
@@ -288,6 +313,7 @@ async def process_waivers(
 
     return {
         "granted": granted,
+        "skipped": skipped,
         "denied": denied,
         "updated_priority": new_priority,
     }

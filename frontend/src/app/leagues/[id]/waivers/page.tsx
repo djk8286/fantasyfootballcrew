@@ -42,6 +42,7 @@ interface PlayerSearchResult {
 interface ProcessReport {
   granted: { team_id: string; add_player_id: string; drop_player_id?: string | null }[];
   denied: { team_id: string; add_player_id?: string; reason?: string }[];
+  skipped: { team_id: string; add_player_id?: string; reason?: string }[];
   updated_priority: string[];
 }
 
@@ -509,7 +510,12 @@ export default function WaiversPage() {
                     ✗ {teamMap[d.team_id] || d.team_id} claim denied{d.reason ? ` (${d.reason})` : ""}
                   </p>
                 ))}
-                {processReport.granted.length === 0 && processReport.denied.length === 0 && (
+                {(processReport.skipped || []).map((s, i) => (
+                  <p key={`s-${i}`} className="text-yellow-400">
+                    ⟳ {teamMap[s.team_id] || s.team_id} claim not processed{s.reason ? ` (${s.reason})` : ""} -- click Process Waivers again
+                  </p>
+                ))}
+                {processReport.granted.length === 0 && processReport.denied.length === 0 && (processReport.skipped || []).length === 0 && (
                   <p className="text-surface-500">No pending claims to process.</p>
                 )}
               </div>
