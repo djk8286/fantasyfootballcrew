@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
@@ -26,6 +26,18 @@ export const metadata: Metadata = {
     "conference leagues",
     "ai fantasy analysis",
   ],
+  // app/manifest.ts is auto-linked by Next.js; this covers iOS specifically,
+  // which doesn't use the web manifest for "Add to Home Screen" the way
+  // Android does.
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "FFC",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
 };
 
 export default function RootLayout({
