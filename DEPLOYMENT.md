@@ -38,6 +38,12 @@ railway up
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Railway auto-provides PostgreSQL URL |
 | `JWT_SECRET` | `<random-string>` | Generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `CORS_ORIGINS` | `["https://fantasyfootballcrew.com","https://www.fantasyfootballcrew.com"]` | JSON array of allowed origins |
+| `ENVIRONMENT` | `production` | Tags Sentry events; defaults to `development` if unset |
+| `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | `<key>` | Optional. Powers real AI Analysis; without either, the feature runs in a fallback/stub mode |
+| `RESEND_API_KEY` | `<key>` | Optional. Powers real password-reset emails; without it, reset links are logged server-side instead (`railway logs`) — still fully functional, just needs manual delivery |
+| `RESEND_FROM_EMAIL` | `FantasyFootballCrew <onboarding@resend.dev>` | Optional override; the default needs no domain verification |
+| `FRONTEND_URL` | `https://fantasyfootballcrew.com` | Used to build the link inside password-reset emails; defaults to this already |
+| `SENTRY_DSN` | `<dsn>` | Optional. Turns on backend error monitoring; without it, `sentry_sdk` is never initialized (true no-op) |
 
 ### Railway Auto-Configuration
 
@@ -83,6 +89,12 @@ vercel env add NEXT_PUBLIC_API_URL
 | Variable | Value | Notes |
 |----------|-------|-------|
 | `NEXT_PUBLIC_API_URL` | `https://<railway-app>.up.railway.app` | Your Railway backend URL |
+| `NEXT_PUBLIC_SENTRY_DSN` | `<dsn>` | Optional. Turns on frontend error monitoring (client + server + edge); without it, a documented no-op. Sentry DSNs are meant to be public (write-only), safe in a `NEXT_PUBLIC_` var |
+
+To upload real source maps to Sentry (readable stack traces instead of
+minified code) also add `SENTRY_ORG`, `SENTRY_PROJECT`, and
+`SENTRY_AUTH_TOKEN` — see `next.config.ts`. Without them the build just
+skips source map upload; error capture itself isn't affected.
 
 ### Vercel Configuration
 

@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     RESEND_API_KEY: Optional[str] = None
     RESEND_FROM_EMAIL: str = "FantasyFootballCrew <onboarding@resend.dev>"
     FRONTEND_URL: str = "https://fantasyfootballcrew.com"
+    # Error monitoring -- see app/core/sentry.py. Without a DSN, sentry_sdk
+    # is simply never initialized (no-op, no errors, no dependency on this
+    # being set) -- same deferred-but-ready shape as RESEND_API_KEY above.
+    SENTRY_DSN: Optional[str] = None
+    ENVIRONMENT: str = "development"  # set to "production" on Railway
 
     @field_validator("DATABASE_URL")
     @classmethod

@@ -10,6 +10,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.limiter import limiter
+from app.core.sentry import init_sentry
 from app.services.scheduler import run_scheduler
 from app.api.v1 import (
     auth_router, users_router, leagues_router,
@@ -18,6 +19,11 @@ from app.api.v1 import (
     commissioner_router, trades_router, waivers_router,
     coaches_router,
 )
+
+# Before the FastAPI app is constructed, so instrumentation covers
+# everything from the very first request. No-ops entirely without
+# SENTRY_DSN set -- see app/core/sentry.py.
+init_sentry()
 
 
 @asynccontextmanager
