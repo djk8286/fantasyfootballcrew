@@ -44,6 +44,12 @@ class League(Base):
     draft_order: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True)
     waiver_priority: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True)
     co_commissioner_ids: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True, default=list)
+    # Practice drafts (POST /drafts/mock/quickstart) auto-provision a real
+    # League + Teams behind the scenes so they can reuse the entire
+    # already-tested draft room/engine instead of a second implementation.
+    # This keeps those scratch leagues out of "my leagues" and public
+    # discovery -- see the is_mock filter in list_leagues.
+    is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

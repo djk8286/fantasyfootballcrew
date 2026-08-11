@@ -9,9 +9,12 @@ from app.services.draft_manager import (
     get_draft_state,
     run_mock_draft,
     get_ai_mock_pick,
+    quickstart_mock_draft,
 )
 from app.models.draft import Draft, DraftPick, DraftRunStatus
-from app.schemas.draft import DraftCreate, DraftRead, DraftPickCreate, DraftPickRead, DraftState
+from app.models.user import User
+from app.schemas.draft import DraftCreate, DraftRead, DraftPickCreate, DraftPickRead, DraftState, MockDraftQuickstart
+from app.api.deps import get_current_user
 from pydantic import BaseModel
 
 
@@ -33,6 +36,29 @@ async def api_create_draft(draft_data: DraftCreate, db: AsyncSession = Depends(g
     try:
         draft = await create_draft(db, draft_data.league_id, draft_data.total_rounds)
         return {"id": draft.id, "league_id": draft.league_id, "status": draft.status.value, "total_rounds": draft.total_rounds}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Static-prefix route -- must come before /{draft_id}/... below, or a
+# dynamic segment could shadow it depending on match order.
+@router.post("/mock/quickstart", status_code=status.HTTP_201_CREATED)
+async def api_quickstart_mock_draft(
+    data: MockDraftQuickstart,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """No real league needed -- provisions a scratch league + CPU teams and
+    starts a draft immediately. Powers the standalone /mock-draft page."""
+    try:
+        draft = await quickstart_mock_draft(
+            db,
+            current_user.id,
+            num_teams=data.num_teams,
+            total_rounds=data.total_rounds,
+            draft_position=data.draft_position,
+        )
+        return {"draft_id": draft.id, "league_id": draft.league_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

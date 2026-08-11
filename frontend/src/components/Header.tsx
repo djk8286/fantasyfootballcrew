@@ -8,6 +8,7 @@ import { isLoggedIn, logout } from "@/lib/api-client";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/mock-draft", label: "Mock Draft" },
   { href: "/features", label: "Features" },
   { href: "/leagues", label: "Leagues" },
   { href: "/ai-analysis", label: "AI Analysis" },

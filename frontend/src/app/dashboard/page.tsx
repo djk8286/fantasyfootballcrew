@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { leaguesApi, playersApi, isLoggedIn } from "@/lib/api-client";
-import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight } from "lucide-react";
+import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import PositionBadge from "@/components/PositionBadge";
 import RankBadge from "@/components/ui/RankBadge";
@@ -401,13 +401,22 @@ export default function DashboardPage() {
                 Manage your leagues, start drafts, and track standings.
               </p>
             </div>
-            <Link
-              href="/leagues/create"
-              className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0 shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              Create League
-            </Link>
+            <div className="flex items-center gap-3 shrink-0">
+              <Link
+                href="/mock-draft"
+                className="inline-flex items-center gap-2 bg-surface-800 hover:bg-surface-700 border border-surface-600 text-surface-200 hover:text-white px-5 py-3 rounded-xl font-bold text-sm transition-all"
+              >
+                <Sparkles className="w-4 h-4 text-gold-400" />
+                Mock Draft
+              </Link>
+              <Link
+                href="/leagues/create"
+                className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0"
+              >
+                <Plus className="w-4 h-4" />
+                Create League
+              </Link>
+            </div>
           </div>
         </div>
       </section>

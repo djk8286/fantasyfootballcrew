@@ -61,7 +61,7 @@ async def list_leagues(
     query = select(
         League,
         func.count(Team.id).label("team_count")
-    ).outerjoin(Team, Team.league_id == League.id)
+    ).outerjoin(Team, Team.league_id == League.id).where(League.is_mock == False)  # noqa: E712
 
     if mine:
         if not current_user:

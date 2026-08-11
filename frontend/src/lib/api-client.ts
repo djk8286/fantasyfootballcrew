@@ -182,6 +182,15 @@ export const draftsApi = {
       method: "PATCH",
       body: { timer_seconds: timerSeconds },
     }),
+  quickstartMock: (numTeams: number, totalRounds: number, draftPosition?: number) =>
+    apiRequest("/api/v1/drafts/mock/quickstart", {
+      method: "POST",
+      body: {
+        num_teams: numTeams,
+        total_rounds: totalRounds,
+        draft_position: draftPosition ?? null,
+      },
+    }),
 };
 
 // Standings

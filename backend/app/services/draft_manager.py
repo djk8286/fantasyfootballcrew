@@ -2,10 +2,12 @@
 Draft Manager — the core business logic for snake and mock drafts.
 Handles draft creation, pick making, snake order generation, and mock AI picks.
 """
+import copy
 import json
 import random
 import math
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +15,9 @@ from sqlalchemy import select, and_, or_, update
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
-from app.models.league import League, DraftStatus
+from app.models.league import League, DraftStatus, LeagueType, DraftType
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
-from app.services.scoring_engine import calculate_player_score
+from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
 
 
 # Positions the scoring engine (DEFAULT_SCORING) actually has point values
@@ -102,6 +104,71 @@ async def create_draft(db: AsyncSession, league_id: str, total_rounds: int = 15)
     await db.commit()
     await db.refresh(draft)
     return draft
+
+
+async def quickstart_mock_draft(
+    db: AsyncSession,
+    user_id: str,
+    num_teams: int = 10,
+    total_rounds: int = 15,
+    draft_position: Optional[int] = None,
+) -> Draft:
+    """No real league needed: auto-provisions a throwaway League
+    (is_mock=True, excluded from list_leagues) with one team owned by
+    user_id and (num_teams - 1) CPU teams, then creates and immediately
+    starts a draft against it. Reuses the entire real draft engine and
+    room -- create_draft, start_draft, and everything the draft page
+    already does (including the existing Auto-Fill button, which skips
+    whichever team you own) -- rather than a second, parallel
+    implementation. See the standalone /mock-draft page on the frontend.
+    """
+    if num_teams < 2 or num_teams > 20:
+        raise ValueError("num_teams must be between 2 and 20")
+    if total_rounds < 1 or total_rounds > 30:
+        raise ValueError("total_rounds must be between 1 and 30")
+    if draft_position is not None and not (1 <= draft_position <= num_teams):
+        raise ValueError(f"draft_position must be between 1 and {num_teams}")
+
+    # IDs generated up front (rather than relying on flush timing to
+    # populate them) so every row can be constructed and added in one shot.
+    league_id = str(uuid.uuid4())
+    league = League(
+        id=league_id,
+        # %-d/%-I (no leading zero) are a Linux/Mac-only strftime extension --
+        # not supported by Windows' C runtime, so this format needs to stick
+        # to the portable directives even though prod itself runs on Linux.
+        name=f"Mock Draft — {datetime.now(timezone.utc):%b %d, %I:%M %p}",
+        commissioner_id=user_id,
+        league_type=LeagueType.STANDARD,
+        scoring_config=copy.deepcopy(DEFAULT_SCORING),  # deep copy -- see create_league for why
+        max_teams=num_teams,
+        draft_type=DraftType.SNAKE,
+        co_commissioner_ids=[],
+        is_mock=True,
+    )
+    db.add(league)
+
+    my_team_id = str(uuid.uuid4())
+    db.add(Team(id=my_team_id, name="Your Team", owner_id=user_id, league_id=league_id, roster=[]))
+
+    cpu_team_ids = []
+    for i in range(num_teams - 1):
+        tid = str(uuid.uuid4())
+        cpu_team_ids.append(tid)
+        db.add(Team(id=tid, name=f"CPU Team {i + 1}", league_id=league_id, is_cpu=True, roster=[]))
+
+    await db.commit()
+
+    draft = await create_draft(db, league_id, total_rounds)
+
+    if draft_position is not None:
+        random.shuffle(cpu_team_ids)
+        slot_order = cpu_team_ids[: draft_position - 1] + [my_team_id] + cpu_team_ids[draft_position - 1 :]
+        draft.team_order = json.dumps(generate_snake_order(slot_order, total_rounds))
+        await db.commit()
+        await db.refresh(draft)
+
+    return await start_draft(db, draft.id)
 
 
 async def start_draft(db: AsyncSession, draft_id: str) -> Draft:
@@ -445,6 +512,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
             }
             for p in available_players
         ],
+        "is_mock": league.is_mock if league else False,
     }
 
 

@@ -9,6 +9,15 @@ class DraftCreate(BaseModel):
     total_rounds: int = 15
 
 
+class MockDraftQuickstart(BaseModel):
+    """No real league needed -- auto-provisions a scratch league + CPU
+    teams + a started draft, all in one call. See
+    POST /drafts/mock/quickstart."""
+    num_teams: int = 10
+    total_rounds: int = 15
+    draft_position: Optional[int] = None  # 1-indexed; None = random slot
+
+
 class DraftRead(BaseModel):
     id: str
     league_id: str
