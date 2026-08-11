@@ -94,6 +94,35 @@ def _build_round_robin_schedule(team_ids: List[str], week: int) -> List[Tuple[st
     return matchups
 
 
+def _build_league_schedule(teams: List[Team], week: int) -> List[Tuple[str, str]]:
+    """
+    Round-robin matchups for a week, scoped to conference.
+
+    Conference leagues ("6v6 conference battles... your squad vs. the
+    rival conference") were only ever conference-restricted in the
+    *standings display* -- the standings page groups by Team.conference,
+    but the schedule/matchup generator below fed every team in the league
+    into one flat round robin, so a team could just as easily be matched
+    against the other conference as its own. This groups teams by
+    conference first and runs an independent round robin per group, then
+    merges the results -- each team now only ever plays within its own
+    conference, all season.
+
+    Standard/two-man leagues have conference == None for every team,
+    which collapses to a single group (identical to a plain whole-league
+    round robin -- this function is a strict superset of the old
+    behavior, not a conference-only special case).
+    """
+    groups: Dict[Optional[str], List[str]] = {}
+    for t in teams:
+        groups.setdefault(t.conference, []).append(t.id)
+
+    matchups: List[Tuple[str, str]] = []
+    for group_team_ids in groups.values():
+        matchups.extend(_build_round_robin_schedule(group_team_ids, week))
+    return matchups
+
+
 async def calculate_week(
     league_id: str,
     week: int,
@@ -340,10 +369,8 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
         standings[ws.team_id]["points_for"] += ws.total_score
 
     # Compute wins/losses/ties from head-to-head matchups each week
-    team_ids = [t.id for t in teams]
-
     for (year, week), week_scores in weekly_scores.items():
-        matchups = _build_round_robin_schedule(team_ids, week)
+        matchups = _build_league_schedule(teams, week)
         for team_a, team_b in matchups:
             score_a = week_scores.get(team_a, 0.0)
             score_b = week_scores.get(team_b, 0.0)
@@ -434,7 +461,7 @@ async def get_season_schedule(
 
     schedule = []
     for week in range(1, num_weeks + 1):
-        matchups = _build_round_robin_schedule(team_ids, week)
+        matchups = _build_league_schedule(teams, week)
         schedule.append({
             "week": week,
             "matchups": [
@@ -468,8 +495,7 @@ async def get_weekly_matchups(
     teams = teams_result.scalars().all()
     team_map = {t.id: t.name for t in teams}
 
-    team_ids = [t.id for t in teams]
-    matchups = _build_round_robin_schedule(team_ids, week)
+    matchups = _build_league_schedule(teams, week)
 
     # Fetch scores for this week
     scores_result = await db.execute(
