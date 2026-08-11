@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.schemas.user import UserCreate, UserRead, UserLogin
 from app.services.auth_service import hash_password, verify_password, create_access_token
@@ -10,8 +11,13 @@ from app.api.deps import get_current_user
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# Registration is a rare, one-time action for a real user, so a tight limit
+# doesn't cost legitimate traffic anything -- it just blocks mass account
+# creation. slowapi needs the `request` param present (even though it's
+# only read by the decorator, not the function body) to key off the caller's IP.
 @router.post("/register", response_model=UserRead)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/hour")
+async def register(request: Request, user_data: UserCreate, db: AsyncSession = Depends(get_db)):
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
@@ -35,7 +41,8 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login")
-async def login(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == login_data.email))
     user = result.scalar_one_or_none()
     if not user or not user.hashed_password:
