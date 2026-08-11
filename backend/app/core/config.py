@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
+    # Password-reset emails -- see app/services/email_service.py. Without a
+    # key, reset links are logged server-side instead of emailed (still
+    # fully functional, just needs manual delivery until this is set).
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM_EMAIL: str = "FantasyFootballCrew <onboarding@resend.dev>"
+    FRONTEND_URL: str = "https://fantasyfootballcrew.com"
 
     @field_validator("DATABASE_URL")
     @classmethod

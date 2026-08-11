@@ -1,14 +1,30 @@
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.user import User
-from app.schemas.user import UserCreate, UserRead, UserLogin
+from app.models.password_reset_token import PasswordResetToken
+from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest
 from app.services.auth_service import hash_password, verify_password, create_access_token
+from app.services.email_service import send_password_reset_email
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+RESET_TOKEN_LIFETIME = timedelta(hours=1)
+
+
+def _hash_token(raw_token: str) -> str:
+    # Plain SHA-256, no salt -- unlike a user-chosen password, this token is
+    # 32 bytes of secrets.token_urlsafe() randomness, so it isn't guessable
+    # by brute force regardless; the hash is just so a leaked DB row can't
+    # be used directly as a working reset link.
+    return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
 # Registration is a rare, one-time action for a real user, so a tight limit
@@ -53,6 +69,64 @@ async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depe
 
     token = create_access_token({"sub": user.id, "email": user.email})
     return {"access_token": token, "token_type": "bearer", "user": UserRead.model_validate(user)}
+
+
+# Deliberately tight limit -- this is the endpoint that emails/logs a
+# working reset link, so it's the one that most needs protecting from
+# being hammered (spamming someone's inbox, or spamming server logs with
+# reset links while no email provider is configured).
+@router.post("/forgot-password")
+@limiter.limit("3/hour")
+async def forgot_password(request: Request, data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    # Same response whether the email exists, doesn't, or belongs to an
+    # OAuth-only account with no password to reset (hashed_password is
+    # None for those) -- anything else would let this endpoint be used to
+    # discover which emails are registered.
+    generic_response = {"message": "If that email is registered, a password reset link has been sent."}
+
+    if not user or not user.hashed_password:
+        return generic_response
+
+    raw_token = secrets.token_urlsafe(32)
+    db.add(PasswordResetToken(
+        user_id=user.id,
+        token_hash=_hash_token(raw_token),
+        expires_at=datetime.now(timezone.utc) + RESET_TOKEN_LIFETIME,
+    ))
+    await db.commit()
+
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
+    await send_password_reset_email(user.email, reset_link)
+
+    return generic_response
+
+
+@router.post("/reset-password")
+@limiter.limit("10/hour")
+async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PasswordResetToken).where(PasswordResetToken.token_hash == _hash_token(data.token))
+    )
+    reset_token = result.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    expired = reset_token and reset_token.expires_at.replace(tzinfo=timezone.utc) < now
+    if not reset_token or reset_token.used_at is not None or expired:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Please request a new one.")
+
+    user_result = await db.execute(select(User).where(User.id == reset_token.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Please request a new one.")
+
+    user.hashed_password = hash_password(data.new_password)
+    reset_token.used_at = now
+    await db.commit()
+
+    return {"message": "Password updated. You can now log in with your new password."}
 
 
 @router.get("/me", response_model=UserRead)

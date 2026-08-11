@@ -73,6 +73,16 @@ export const authApi = {
       method: "POST",
       body: { email, username, password, provider: "email" },
     }),
+  forgotPassword: (email: string) =>
+    apiRequest("/api/v1/auth/forgot-password", {
+      method: "POST",
+      body: { email },
+    }),
+  resetPassword: (token: string, newPassword: string) =>
+    apiRequest("/api/v1/auth/reset-password", {
+      method: "POST",
+      body: { token, new_password: newPassword },
+    }),
 };
 
 // Leagues
