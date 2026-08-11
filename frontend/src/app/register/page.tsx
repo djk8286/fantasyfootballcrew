@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { authApi } from "@/lib/api-client";
+import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -51,6 +52,7 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
+      <RedirectIfLoggedIn />
       <div className="w-full max-w-md">
         <div className="bg-surface-800 border border-surface-700 rounded-2xl p-8">
           {/* Header */}
