@@ -89,11 +89,25 @@ export default function Footer() {
         </div>
 
         <div className="border-t border-surface-700 mt-8 pt-8 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-surface-500 text-xs">
-            &copy; {new Date().getFullYear()} FantasyFootballCrew. All rights
-            reserved.
-          </p>
-          <p className="text-surface-600 text-xs">
+          <div className="flex items-center gap-4 order-2 sm:order-1">
+            <p className="text-surface-500 text-xs">
+              &copy; {new Date().getFullYear()} FantasyFootballCrew. All rights
+              reserved.
+            </p>
+            <Link
+              href="/privacy"
+              className="text-surface-500 hover:text-gold-400 text-xs transition-colors"
+            >
+              Privacy Policy
+            </Link>
+            <Link
+              href="/terms"
+              className="text-surface-500 hover:text-gold-400 text-xs transition-colors"
+            >
+              Terms of Service
+            </Link>
+          </div>
+          <p className="text-surface-600 text-xs order-1 sm:order-2">
             Built for the love of the game. 🏈
           </p>
         </div>
