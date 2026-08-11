@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -63,6 +64,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Railway (and every PaaS like it) puts the app behind a reverse proxy, so
+# the raw ASGI connection's client is Railway's internal edge/proxy address
+# -- not the visitor's. Confirmed in Railway's own logs: every request
+# logged from a different 100.64.0.x address (RFC 6598 shared address
+# space), never a real public IP. Without this, get_remote_address() (what
+# the rate limiter keys on) reads that rotating proxy address instead of
+# the actual caller, which would make login/register rate limiting nearly
+# useless -- attempts would spread across whichever internal address
+# happened to handle each one instead of accumulating against the abuser.
+# Added last / outermost so it rewrites request.client from X-Forwarded-For
+# before anything else (rate limiting included) reads it. trusted_hosts="*"
+# because Railway's proxy is the only path to this process -- there's no
+# direct public route where a client could spoof X-Forwarded-For itself.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Register routers
 app.include_router(auth_router, prefix="/api/v1")
