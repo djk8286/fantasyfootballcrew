@@ -109,3 +109,18 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "app": settings.APP_NAME}
+
+
+# TEMP DIAGNOSTIC -- remove after confirming how Railway's proxy handles
+# X-Forwarded-For (need to know whether it replaces, prepends, or appends
+# to a client-supplied value, to know the ProxyHeadersMiddleware fix is
+# actually picking the real caller rather than something else).
+from fastapi import Request as _Request  # noqa: E402
+
+
+@app.get("/_debug_ip")
+async def _debug_ip(request: _Request):
+    return {
+        "resolved_client": request.client.host if request.client else None,
+        "x_forwarded_for_header": request.headers.get("x-forwarded-for"),
+    }
