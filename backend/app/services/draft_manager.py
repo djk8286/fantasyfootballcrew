@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update
+from sqlalchemy.exc import IntegrityError
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
@@ -64,15 +65,17 @@ async def create_draft(db: AsyncSession, league_id: str, total_rounds: int = 15)
     if not league:
         raise ValueError("League not found")
 
-    # A league should only ever have one real draft. Without this guard,
-    # anyone hitting POST /drafts for a league that already has one (e.g. a
-    # stale "Start Draft" button that hadn't yet learned the draft was
-    # already underway/done) creates a second, independent Draft -- and
-    # since team.roster accumulates picks by player ID across *all* drafts
-    # for that team, the two drafts' rosters silently merge into one
-    # oversized roster. Confirmed in production: a league with 5 separate
-    # Draft rows for the same 14 teams, one team's roster showing 27
-    # players instead of 15.
+    # A league should only ever have one real draft. This check alone is a
+    # plain SELECT with no locking, so it doesn't close the window between
+    # two concurrent callers -- both can pass it before either commits.
+    # That's exactly how production ended up with 5 separate Draft rows for
+    # the same 14 teams, one team's roster showing 27 players instead of 15
+    # (team.roster accumulates picks by player ID across *every* Draft row
+    # for that team, so duplicate drafts silently merge into one oversized
+    # roster). This check stays as a fast, friendly pre-check for the
+    # common case; Draft.__table_args__'s partial unique index
+    # (uq_drafts_one_active_per_league) is what actually closes the race --
+    # see the except block below for the case this check misses.
     existing = await db.execute(
         select(Draft).where(Draft.league_id == league_id, Draft.status != DraftRunStatus.COMPLETED)
     )
@@ -101,7 +104,14 @@ async def create_draft(db: AsyncSession, league_id: str, total_rounds: int = 15)
         team_order=json.dumps(team_order),
     )
     db.add(draft)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # The pre-check above missed a concurrent creation for this same
+        # league that committed first -- the partial unique index caught
+        # it instead. Same user-facing error either way.
+        await db.rollback()
+        raise ValueError("This league already has an active draft")
     await db.refresh(draft)
     return draft
 
