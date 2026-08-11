@@ -8,6 +8,7 @@ import {
   Sparkles,
   Check,
 } from "lucide-react";
+import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 const features = [
   {
@@ -87,6 +88,7 @@ const features = [
 export default function FeaturesPage() {
   return (
     <div>
+      <RedirectIfLoggedIn />
       {/* Hero */}
       <section className="relative overflow-hidden border-b border-surface-700">
         <div className="absolute inset-0 bg-gradient-to-b from-surface-850 via-surface-900 to-surface-900" />

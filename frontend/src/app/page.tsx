@@ -9,6 +9,7 @@ import {
   Infinity as InfinityIcon,
 } from "lucide-react";
 import StatTile from "@/components/ui/StatTile";
+import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 const features = [
   {
@@ -58,6 +59,7 @@ const features = [
 export default function Home() {
   return (
     <div>
+      <RedirectIfLoggedIn />
       {/* Hero Section */}
       <section className="relative overflow-hidden">
         {/* Background gradient */}

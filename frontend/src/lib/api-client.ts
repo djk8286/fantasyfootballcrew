@@ -54,6 +54,22 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
     throw new Error(`Failed to fetch ${url} — ${e instanceof Error ? e.message : "network error"}`);
   }
   if (!response.ok) {
+    // A 401 on a request that DID carry a token means the token itself is
+    // the problem -- expired (tokens are valid 30 days, see
+    // create_access_token) or otherwise invalid, not just "this particular
+    // action needs auth." Without this, isLoggedIn() keeps saying true
+    // forever (it only checks whether a token exists in localStorage, not
+    // whether it still works) and every request just quietly 401s instead
+    // of the user ever actually being logged out. A 401 with NO token
+    // attached is a normal auth failure for an anonymous/login action
+    // (e.g. a wrong password on /login) -- leave that to the caller, which
+    // already handles it, rather than hijacking it into a redirect loop.
+    if (response.status === 401 && token) {
+      logout();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login?expired=1";
+      }
+    }
     const text = await response.text().catch(() => "");
     throw new Error(`API error: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`);
   }
