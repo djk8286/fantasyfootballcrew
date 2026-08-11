@@ -1,7 +1,7 @@
 "use client";
 
 import { Search, Plus, Loader2 } from "lucide-react";
-import PlayerAvatar from "./PlayerAvatar";
+import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 
 interface PlayerPoolPlayer {
@@ -20,6 +20,40 @@ interface PlayerPoolPlayer {
   sleeper_id: string | null;
   rank_score: number;
   pos_rank: number;
+  headline_stats?: Record<string, number> | null;
+  season_points?: number | null;
+  season_points_year?: number | null;
+}
+
+// Compact "<team> · <2-3 headline stats> · <season total>" line for the
+// space in a player row that used to just be blank -- headline_stats and
+// season_points are last season's real numbers until the new season has
+// its own synced data (see effective_season_stats on the backend), so
+// this is never empty just because the current season hasn't started.
+function PlayerStatsLine({ player }: { player: PlayerPoolPlayer }) {
+  const stats = Object.entries(player.headline_stats || {}).slice(0, 3);
+  if (stats.length === 0 && player.season_points == null) return null;
+  return (
+    <div className="hidden md:flex items-center gap-2.5 text-[11px] text-surface-400 shrink-0 px-3 whitespace-nowrap">
+      <span className="text-surface-500 uppercase tracking-wider font-semibold">
+        {player.team || "FA"}
+      </span>
+      {stats.map(([key, value]) => (
+        <span key={key}>
+          <span className="text-surface-300 font-semibold">
+            {Math.round(value * 10) / 10}
+          </span>{" "}
+          {STAT_LABELS[key] || key}
+        </span>
+      ))}
+      {player.season_points != null && (
+        <span className="text-gold-400/80 font-semibold">
+          {Math.round(player.season_points * 10) / 10} pts
+          {player.season_points_year ? ` (${player.season_points_year})` : ""}
+        </span>
+      )}
+    </div>
+  );
 }
 
 interface PlayerPoolPick {
@@ -311,6 +345,8 @@ export default function PlayerPool({
                         )}
                       </div>
                     </div>
+                    {/* Last season's stats + team -- was blank space here before */}
+                    <PlayerStatsLine player={player} />
                     {/* Action buttons */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       {/* Queue toggle */}

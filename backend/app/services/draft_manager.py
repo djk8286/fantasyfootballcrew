@@ -347,6 +347,23 @@ def _season_points_fields(player: Player | None, scoring_config: dict) -> dict:
     }
 
 
+def _headline_and_raw_stats_fields(player: Player | None) -> dict:
+    """headline_stats + stats for a (possibly None) player, via
+    effective_season_stats -- same reasoning as _season_points_fields
+    above: player.stats is this YEAR's live totals, empty until the season
+    actually starts and gets synced. Using it directly (as this used to)
+    meant every player in the draft pool showed a blank stats line for the
+    entire pre-season -- this falls back to last season's archived totals
+    instead, same source _season_points_fields already uses."""
+    if not player:
+        return {"headline_stats": {}, "stats": None}
+    stats, _ = effective_season_stats(player)
+    return {
+        "headline_stats": compute_headline_stats(player.position, stats),
+        "stats": stats,
+    }
+
+
 async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     """Get full draft state including all picks and current team."""
     result = await db.execute(select(Draft).where(Draft.id == draft_id))
@@ -454,10 +471,9 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "injury_status": player.injury_status if player else None,
                 "fantasy_positions": player.fantasy_positions if player else None,
                 "avatar_url": sleeper_avatar_url(player.sleeper_id) if player else None,
-                "headline_stats": compute_headline_stats(player.position, player.stats) if player else {},
-                "stats": player.stats if player else None,
                 "rank_score": get_player_rank_from_list(f"{player.first_name} {player.last_name}") if player else 0,
                 "pos_rank": pos_rank_map.get(player.id, 0) if player else 0,
+                **_headline_and_raw_stats_fields(player),
                 **_season_points_fields(player, scoring_config),
             },
             "team": {
@@ -504,10 +520,9 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "bye_week": p.bye_week,
                 "injury_status": p.injury_status,
                 "fantasy_positions": p.fantasy_positions,
-                "headline_stats": compute_headline_stats(p.position, p.stats),
-                "stats": p.stats,
                 "rank_score": get_player_rank_from_list(f"{p.first_name} {p.last_name}"),
                 "pos_rank": pos_rank_map.get(p.id, 0),
+                **_headline_and_raw_stats_fields(p),
                 **_season_points_fields(p, scoring_config),
             }
             for p in available_players

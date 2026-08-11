@@ -23,7 +23,7 @@ interface HoverPlayer {
   headline_stats?: Record<string, number> | null;
 }
 
-const STAT_LABELS: Record<string, string> = {
+export const STAT_LABELS: Record<string, string> = {
   pass_yd: "Pass Yd",
   pass_td: "Pass TD",
   pass_int: "INT",
