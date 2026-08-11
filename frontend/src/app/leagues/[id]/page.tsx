@@ -1115,7 +1115,7 @@ export default function LeagueDetailPage() {
         </div>
       </section>
 
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>
   );
 }

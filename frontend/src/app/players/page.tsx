@@ -237,7 +237,7 @@ export default function PlayersPage() {
         )}
       </section>
 
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handleHover(null, null)} />
     </div>
   );
 }

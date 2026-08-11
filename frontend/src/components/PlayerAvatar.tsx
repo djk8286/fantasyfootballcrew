@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import PositionBadge from "./PositionBadge";
 
 // Local type that matches the shape used in the draft page
@@ -54,6 +55,17 @@ function PlayerAvatar({
       className="relative"
       onMouseEnter={(e) => onHover?.(player, e.currentTarget)}
       onMouseLeave={() => onHover?.(null, null)}
+      onClick={(e) => {
+        // Touch devices never fire mouseenter, so tapping is the only way
+        // to see this card there -- make it behave like a hover-enter.
+        // stopPropagation so tapping the avatar inside a clickable row
+        // (e.g. the draft player pool) opens the card instead of also
+        // triggering the row's own click, and so PlayerCardOverlay's
+        // outside-tap dismiss listener never sees this click and instantly
+        // closes what this same tap just opened.
+        e.stopPropagation();
+        onHover?.(player, e.currentTarget);
+      }}
     >
       <div
         className={`${dims[size]} rounded-full bg-surface-700 flex-shrink-0 overflow-hidden border border-surface-600 cursor-pointer`}
@@ -86,10 +98,22 @@ function PlayerAvatar({
 function PlayerCardOverlay({
   player,
   position,
+  onDismiss,
 }: {
   player: any;
   position: { x: number; y: number } | null;
+  onDismiss?: () => void;
 }) {
+  // On touch, there's no mouseleave to close this on -- tapping the avatar
+  // that opened it is handled there (PlayerAvatar stopPropagation's that
+  // click so it can't reach this listener), so anything else that bubbles
+  // to document is a genuine "tapped away" and should close the card.
+  useEffect(() => {
+    if (!player || !onDismiss) return;
+    document.addEventListener("click", onDismiss);
+    return () => document.removeEventListener("click", onDismiss);
+  }, [player, onDismiss]);
+
   if (!player || !position) return null;
 
   // Flip below if too close to top

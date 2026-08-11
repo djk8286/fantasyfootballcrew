@@ -2,20 +2,38 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { Menu, X } from "lucide-react";
 import { isLoggedIn, logout } from "@/lib/api-client";
+
+const NAV_LINKS = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/features", label: "Features" },
+  { href: "/leagues", label: "Leagues" },
+  { href: "/ai-analysis", label: "AI Analysis" },
+];
 
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
   const [loggedIn, setLoggedIn] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     setLoggedIn(isLoggedIn());
   }, []);
 
+  // Header lives in the root layout, outside {children}, so it never
+  // remounts on navigation -- close the mobile menu on route change so it
+  // doesn't stay open over the new page.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
   const handleLogout = () => {
     logout();
     setLoggedIn(false);
+    setMenuOpen(false);
     router.push("/login");
   };
 
@@ -37,34 +55,20 @@ export default function Header() {
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-8">
-            <Link
-              href="/dashboard"
-              className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/features"
-              className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
-            >
-              Features
-            </Link>
-            <Link
-              href="/leagues"
-              className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
-            >
-              Leagues
-            </Link>
-            <Link
-              href="/ai-analysis"
-              className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
-            >
-              AI Analysis
-            </Link>
+            {NAV_LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
+              >
+                {link.label}
+              </Link>
+            ))}
           </nav>
 
-          {/* Auth Buttons */}
-          <div className="flex items-center gap-3">
+          {/* Auth Buttons -- desktop only; folded into the mobile menu below
+              instead of cramming a third cluster next to the logo + hamburger */}
+          <div className="hidden md:flex items-center gap-3">
             {loggedIn ? (
               <button
                 type="button"
@@ -90,8 +94,63 @@ export default function Header() {
               </>
             )}
           </div>
+
+          {/* Mobile menu toggle -- the nav/auth links above are display:none
+              below md, so this is the only way to reach Dashboard/Features/
+              Leagues/AI Analysis (or Log In/Out) on a phone. */}
+          <button
+            type="button"
+            className="md:hidden text-surface-300 hover:text-white transition-colors p-2 -mr-2"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={menuOpen}
+          >
+            {menuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
         </div>
       </div>
+
+      {/* Mobile menu panel */}
+      {menuOpen && (
+        <div className="md:hidden border-t border-surface-700 bg-surface-900/95 backdrop-blur-md">
+          <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-1">
+            {NAV_LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="text-surface-300 hover:text-gold-400 hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg"
+              >
+                {link.label}
+              </Link>
+            ))}
+            <div className="h-px bg-surface-700 my-2" />
+            {loggedIn ? (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-left text-surface-300 hover:text-white hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg"
+              >
+                Log Out
+              </button>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className="text-surface-300 hover:text-white hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg"
+                >
+                  Log In
+                </Link>
+                <Link
+                  href="/register"
+                  className="bg-gold-400 hover:bg-gold-300 text-surface-900 px-3 py-2.5 rounded-lg font-semibold text-sm text-center transition-all mt-1"
+                >
+                  Get Started
+                </Link>
+              </>
+            )}
+          </nav>
+        </div>
+      )}
     </header>
   );
 }

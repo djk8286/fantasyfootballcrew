@@ -348,7 +348,7 @@ export default function TeamPage() {
         </div>
       </div>
 
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>
   );
 }

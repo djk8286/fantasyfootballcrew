@@ -651,7 +651,7 @@ export default function DraftPage() {
       </div>
 
       {/* Fixed hover card overlay — escapes all containers */}
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>
   );
 }

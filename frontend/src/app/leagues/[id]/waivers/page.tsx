@@ -524,7 +524,7 @@ export default function WaiversPage() {
         )}
       </div>
 
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} />
+      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>
   );
 }
