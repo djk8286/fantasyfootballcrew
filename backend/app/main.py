@@ -8,7 +8,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
-from app.core.database import engine, Base
+from app.core.database import engine
 from app.core.limiter import limiter
 from app.core.sentry import init_sentry
 from app.services.scheduler import run_scheduler
@@ -28,9 +28,14 @@ init_sentry()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create database tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Schema is Alembic's job now, not this process's -- `alembic upgrade
+    # head` runs as part of the deploy itself (see railway.json's
+    # startCommand), before this app even starts. This used to be
+    # `Base.metadata.create_all` on every startup, which only ever created
+    # missing tables and could never apply an ALTER to an existing one --
+    # every real schema change still needed a separate hand-rolled
+    # migrate_add_*.py run manually before the deploy that depended on it.
+    # See DEPLOYMENT.md for the migration workflow this replaced.
 
     # Background player/stats sync -- see app/services/scheduler.py. Runs
     # for the lifetime of the process; replaces the manual "run this script

@@ -48,18 +48,69 @@ railway up
 ### Railway Auto-Configuration
 
 The project includes:
-- `Procfile` — `web: uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- `railway.json` — health check, restart policy
-- `requirements.txt` — all dependencies incl. `asyncpg` for PostgreSQL
+- `Procfile` — `web: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- `railway.json` — same startCommand (this is the one Railway actually uses; Procfile is kept in sync for anyone reading it, but railway.json wins when both exist), health check, restart policy
+- `requirements.txt` — all dependencies incl. `asyncpg` for PostgreSQL and `alembic` for migrations
 
-### Database Migration
+### Database Migrations (Alembic)
 
-The app auto-creates tables on startup (`Base.metadata.create_all`). For
-PostgreSQL, Railway auto-provisions a database. Just set `DATABASE_URL`
-to the Railway-provided connection string (replace `postgresql://` with
-`postgresql+asyncpg://`).
+Schema changes are Alembic migrations now, not hand-rolled scripts.
+`alembic upgrade head` runs automatically as part of every deploy's start
+command (see above), before the server starts accepting traffic — so a
+normal deploy with a schema change is just "commit the migration, push."
 
-For schema changes, create Alembic migrations later.
+**Making a schema change:**
+
+```bash
+cd backend
+source venv/Scripts/activate   # or venv/bin/activate on macOS/Linux
+
+# 1. Edit the model(s) in app/models/
+# 2. Autogenerate a migration from the diff against your local DB:
+alembic revision --autogenerate -m "add whatever_column to whatever_table"
+
+# 3. Read the generated file in alembic/versions/ before trusting it --
+#    autogenerate is a diffing tool, not a guarantee. It won't detect
+#    column renames (sees a drop + an add), doesn't know your intent for
+#    backfilling a new NOT NULL column on a table with existing rows, and
+#    can bake in a dialect-specific server_default if you generate it
+#    while pointed at the "wrong" database for what you're testing against
+#    -- see the baseline migration's own docstring for a real example of
+#    that last one (sa.func.now(), not a raw sa.text(...) literal, for
+#    anything that needs to work on both SQLite and Postgres).
+
+# 4. Apply it locally and confirm it does what you expect:
+alembic upgrade head
+
+# 5. Commit the migration file, push. Railway runs it automatically.
+```
+
+**Checking where a database stands:**
+
+```bash
+alembic current           # what revision is this DB stamped at
+alembic check              # "No new upgrade operations detected" == DB matches models exactly
+alembic history             # full migration lineage
+```
+
+**Local dev DB (SQLite) vs. production (Postgres):** `DATABASE_URL` is
+read the same way the app itself reads it (`alembic/env.py` imports
+`settings` directly), so just export `DATABASE_URL` before an Alembic
+command to target a specific database — same pattern as the old
+`migrate_add_*.py` scripts.
+
+**History:** this project ran without Alembic for a while — schema
+changes shipped as hand-rolled `migrate_add_*.py` scripts (idempotent,
+check-then-`ALTER TABLE`, run manually against production before the
+code that depended on them). Those scripts are left in `backend/` as a
+historical record of how the schema got to where it is; the first real
+Alembic migration (`alembic/versions/..._baseline_schema_as_of_alembic_adoption.py`)
+is a from-scratch snapshot of that already-evolved schema, and both the
+local dev DB and production were `alembic stamp head`-ed at it (marks a
+DB as already being at that revision without running any DDL) rather
+than having it actually re-run against data that already matched.
+Don't add new `migrate_add_*.py` scripts — write an Alembic migration
+instead.
 
 ---
 
