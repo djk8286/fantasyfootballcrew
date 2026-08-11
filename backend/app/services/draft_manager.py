@@ -710,31 +710,25 @@ async def run_mock_draft(db: AsyncSession, draft_id: str, skip_team_ids: list[st
         # Re-fetch draft to get current state
         result = await db.execute(select(Draft).where(Draft.id == draft_id))
         draft = result.scalar_one_or_none()
-        
+
         if draft.status != DraftRunStatus.IN_PROGRESS:
-            print(f"DEBUG: draft status is {draft.status} — breaking")
             break
-        
+
         # Get who's picking
         num_teams = len(teams_by_id)
         pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
         current_team_id = team_order_list[pick_index]
-        
+
         # If it's a user team's turn — STOP and let them pick manually
         if current_team_id in skip_set:
-            print(f"DEBUG: skipping team {current_team_id[:12]}... (in skip_set)")
             break
-        
-        print(f"DEBUG: Making AI pick for team {current_team_id[:12]}...")
+
         # Get AI pick
         player = await get_ai_mock_pick(db, draft_id, current_team_id)
         if not player:
-            print("DEBUG: No player found")
             break
-        
+
         # Make the pick
         pick = await make_pick(db, draft_id, current_team_id, player.id)
         all_picks.append(pick)
-    
-    print(f"DEBUG: Returning {len(all_picks)} picks")
     return all_picks
