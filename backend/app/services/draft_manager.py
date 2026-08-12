@@ -18,7 +18,7 @@ from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League, DraftStatus, LeagueType, DraftType
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
-from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
+from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 
 
 # Positions the scoring engine (DEFAULT_SCORING) actually has point values
@@ -178,6 +178,7 @@ async def quickstart_mock_draft(
         commissioner_id=user_id,
         league_type=LeagueType.STANDARD,
         scoring_config=copy.deepcopy(DEFAULT_SCORING),  # deep copy -- see create_league for why
+        roster_slots=copy.deepcopy(DEFAULT_ROSTER_SLOTS),
         max_teams=num_teams,
         draft_type=DraftType.SNAKE,
         co_commissioner_ids=[],

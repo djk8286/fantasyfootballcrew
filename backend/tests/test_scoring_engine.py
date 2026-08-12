@@ -646,6 +646,54 @@ class TestOptimalLineup:
         assert "K" not in slots
         assert "DEF" not in slots
 
+    def test_idp_slots_default_to_zero(self, default_scoring):
+        """No n_dl/n_lb/n_db/n_idp_flex passed -- IDP players on the roster
+        should never get auto-started, matching DEFAULT_ROSTER_SLOTS (0 for
+        all four) until a league opts in."""
+        roster = {
+            "lb1": {"stats": {"idp_tkl_solo": 10, "idp_sack": 2}, "position": "LB", "name": "Star LB"},
+            "qb1": {"stats": {"pass_yd": 300, "pass_td": 3}, "position": "QB", "name": "QB1"},
+        }
+        result = calculate_optimal_lineup(roster, default_scoring, n_rb=0, n_wr=0, n_te=0, n_flex=0, n_k=0, n_def=0)
+        slots = [s["player_id"] for s in result["lineup"]]
+        assert "lb1" not in slots
+        assert "qb1" in slots
+
+    def test_idp_dedicated_slots(self, default_scoring):
+        """Real 2025 stats (same players as TestIDPScoring) -- dedicated
+        DL/LB/DB slots should each grab their own position, not compete."""
+        roster = {
+            "lb1": {"stats": {"idp_tkl_solo": 29, "idp_tkl_ast": 22, "idp_tkl_loss": 2,
+                               "idp_ff": 2, "idp_fum_rec": 1, "idp_pass_def": 3}, "position": "LB", "name": "Warner"},
+            "dl1": {"stats": {"idp_tkl_solo": 9, "idp_tkl_ast": 8, "idp_tkl_loss": 4,
+                               "idp_sack": 2, "idp_ff": 2, "idp_fum_rec": 1}, "position": "DL", "name": "Bosa"},
+            "db1": {"stats": {"idp_tkl_solo": 56, "idp_tkl_ast": 18, "idp_tkl_loss": 4, "idp_sack": 1,
+                               "idp_int": 1, "idp_ff": 1, "idp_fum_rec": 2, "idp_pass_def": 6}, "position": "DB", "name": "Fitzpatrick"},
+        }
+        result = calculate_optimal_lineup(
+            roster, default_scoring, n_qb=0, n_rb=0, n_wr=0, n_te=0, n_flex=0, n_k=0, n_def=0,
+            n_dl=1, n_lb=1, n_db=1,
+        )
+        slots = {s["slot"]: s["player_id"] for s in result["lineup"]}
+        assert slots == {"DL": "dl1", "LB": "lb1", "DB": "db1"}
+        assert result["optimal_score"] == 62.0 + 41.0 + 107.0  # exact totals from TestIDPScoring
+        assert result["benched"] == []
+
+    def test_idp_flex_takes_best_leftover_defender(self, default_scoring):
+        """Two LBs, one dedicated LB slot + one IDP_FLEX slot -- the second
+        LB should fill IDP_FLEX rather than being benched."""
+        roster = {
+            "lb1": {"stats": {"idp_tkl_solo": 29, "idp_tkl_ast": 22}, "position": "LB", "name": "Best LB"},
+            "lb2": {"stats": {"idp_tkl_solo": 10, "idp_tkl_ast": 5}, "position": "LB", "name": "Worse LB"},
+        }
+        result = calculate_optimal_lineup(
+            roster, default_scoring, n_qb=0, n_rb=0, n_wr=0, n_te=0, n_flex=0, n_k=0, n_def=0,
+            n_lb=1, n_idp_flex=1,
+        )
+        slots = {s["slot"]: s["player_id"] for s in result["lineup"]}
+        assert slots == {"LB": "lb1", "IDP_FLEX": "lb2"}
+        assert result["benched"] == []
+
 
 # ─── Config validation ──────────────────────────────────────────────
 

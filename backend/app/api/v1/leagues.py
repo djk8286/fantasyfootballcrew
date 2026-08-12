@@ -7,7 +7,7 @@ from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
-from app.services.scoring_engine import DEFAULT_SCORING
+from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
 from pydantic import BaseModel
 
@@ -42,6 +42,7 @@ async def create_league(
         commissioner_id=current_user.id,
         league_type=league_data.league_type,
         scoring_config=league_data.scoring_config or copy.deepcopy(DEFAULT_SCORING),
+        roster_slots=copy.deepcopy(DEFAULT_ROSTER_SLOTS),
         max_teams=league_data.max_teams,
         draft_type=league_data.draft_type,
         co_commissioner_ids=[],
@@ -126,6 +127,47 @@ async def update_league_scoring(
     league.scoring_config = data.scoring_config
     await db.commit()
     return {"status": "ok", "scoring_config": league.scoring_config}
+
+
+@router.get("/{league_id}/roster-slots")
+async def get_league_roster_slots(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the starting-lineup slot counts for a league, or defaults.
+    Same defaults-merge shape as GET .../scoring above, same reasoning:
+    a league that never visited this settings page (or was created before
+    roster_slots existed) should still get a complete, usable config back,
+    not a partial one the caller has to guess how to fill in."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    merged = dict(DEFAULT_ROSTER_SLOTS)
+    merged.update(league.roster_slots or {})
+    return merged
+
+
+class RosterSlotsUpdate(BaseModel):
+    roster_slots: dict
+
+
+@router.put("/{league_id}/roster-slots")
+async def update_league_roster_slots(
+    league_id: str,
+    data: RosterSlotsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the starting-lineup slot counts for a league."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+    for key, value in data.roster_slots.items():
+        if not isinstance(value, int) or value < 0:
+            raise HTTPException(status_code=422, detail=f"roster_slots['{key}'] must be a non-negative integer")
+    league.roster_slots = data.roster_slots
+    await db.commit()
+    return {"status": "ok", "roster_slots": league.roster_slots}
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)

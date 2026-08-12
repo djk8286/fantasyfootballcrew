@@ -38,6 +38,13 @@ class League(Base):
     # to SQLAlchemy's change tracking -- only whole-attribute reassignment
     # is. That silently dropped co-commissioner adds/removes before this fix.
     scoring_config: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
+    # How many starters at each position -- drives both the lineup-setting
+    # UI (app/api/v1/lineups.py) and which of a team's roster actually
+    # counts toward their weekly score (standings_service.calculate_week).
+    # DL/LB/DB/IDP_FLEX default to 0 so no existing league is affected
+    # until a commissioner deliberately turns IDP roster slots on -- see
+    # DEFAULT_ROSTER_SLOTS.
+    roster_slots: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     max_teams: Mapped[int] = mapped_column(Integer, default=12)
     draft_status: Mapped[DraftStatus] = mapped_column(Enum(DraftStatus), default=DraftStatus.NOT_STARTED)
     draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType), default=DraftType.SNAKE)

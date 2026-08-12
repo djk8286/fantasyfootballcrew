@@ -112,6 +112,18 @@ DEFAULT_SCORING = {
 # Positions eligible per slot type (standard fantasy roster)
 FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 SUPERFLEX_ELIGIBLE = {"QB", "RB", "WR", "TE"}
+IDP_FLEX_ELIGIBLE = {"DL", "LB", "DB"}
+
+# Default starting-lineup slot counts for a new league (standard 9-starter
+# roster: 1 QB, 2 RB, 2 WR, 1 TE, 1 FLEX, 1 K, 1 DEF). IDP slots default to
+# 0 -- deliberately opt-in, not on by default, so an existing league's
+# lineup requirements don't change out from under it just because IDP
+# scoring now exists. A league that wants IDP turns these up in its own
+# roster-slot settings, same as any other league setting.
+DEFAULT_ROSTER_SLOTS = {
+    "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "SUPERFLEX": 0,
+    "K": 1, "DEF": 1, "DL": 0, "LB": 0, "DB": 0, "IDP_FLEX": 0,
+}
 
 # Minimum yardage to consider a TD "long" automatically
 LONG_TD_YARDAGE_THRESHOLD = 40
@@ -356,6 +368,10 @@ def calculate_optimal_lineup(
     n_superflex: int = 0,
     n_k: int = 1,
     n_def: int = 1,
+    n_dl: int = 0,
+    n_lb: int = 0,
+    n_db: int = 0,
+    n_idp_flex: int = 0,
 ) -> Dict[str, Any]:
     """
     Calculate the optimal starting lineup for a roster based on projected scores.
@@ -366,6 +382,11 @@ def calculate_optimal_lineup(
         roster: Dict of player_id -> {stats, position, name}
         scoring_config: League scoring config
         n_qb, n_rb, n_wr, n_te, n_flex, n_superflex, n_k, n_def: Starting lineup slots
+        n_dl, n_lb, n_db: dedicated IDP position slots (all default 0 --
+            see DEFAULT_ROSTER_SLOTS for why)
+        n_idp_flex: a slot any of DL/LB/DB can fill, assigned last among
+            the IDP slots so it never steals a player a dedicated DL/LB/DB
+            slot still needed
 
     Returns:
         Dict with optimal_score, lineup_assignments, points_benched
@@ -411,6 +432,10 @@ def calculate_optimal_lineup(
     assignments += assign_slot(SUPERFLEX_ELIGIBLE, n_superflex, "SUPERFLEX")
     assignments += assign_slot({"K"}, n_k, "K")
     assignments += assign_slot({"DEF"}, n_def, "DEF")
+    assignments += assign_slot({"DL"}, n_dl, "DL")
+    assignments += assign_slot({"LB"}, n_lb, "LB")
+    assignments += assign_slot({"DB"}, n_db, "DB")
+    assignments += assign_slot(IDP_FLEX_ELIGIBLE, n_idp_flex, "IDP_FLEX")
 
     total_score = sum(a["score"] for a in assignments)
     benched = [p for p in scored if p["player_id"] not in used_ids]

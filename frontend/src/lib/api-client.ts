@@ -137,6 +137,13 @@ export const leaguesApi = {
       method: "POST",
       body: { action, user_id: userId },
     }),
+  getRosterSlots: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/roster-slots`),
+  updateRosterSlots: (id: string, rosterSlots: Record<string, number>) =>
+    apiRequest(`/api/v1/leagues/${id}/roster-slots`, {
+      method: "PUT",
+      body: { roster_slots: rosterSlots },
+    }),
 };
 
 // Teams
@@ -163,6 +170,21 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/bulk-add/${leagueId}`, {
       method: "POST",
       body: { count, name_prefix: namePrefix },
+    }),
+};
+
+// Lineups (starter/bench)
+export const lineupsApi = {
+  get: (teamId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/teams/${teamId}/lineup?week=${week}&year=${year}`),
+  set: (teamId: string, week: number, year: number, starters: string[]) =>
+    apiRequest(`/api/v1/teams/${teamId}/lineup?week=${week}&year=${year}`, {
+      method: "PUT",
+      body: { starters },
+    }),
+  optimize: (teamId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/teams/${teamId}/lineup/optimize?week=${week}&year=${year}`, {
+      method: "POST",
     }),
 };
 

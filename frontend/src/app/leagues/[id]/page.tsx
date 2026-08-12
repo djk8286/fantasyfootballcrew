@@ -30,6 +30,7 @@ import {
   RefreshCw,
   ArrowLeftRight,
   ListOrdered,
+  ListChecks,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -641,6 +642,13 @@ export default function LeagueDetailPage() {
               >
                 <Settings className="w-4 h-4" />
                 Scoring
+              </Link>
+              <Link
+                href={`/leagues/${id}/roster-slots`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <ListChecks className="w-4 h-4" />
+                Roster Slots
               </Link>
               <Link
                 href={`/leagues/${id}/standings`}

@@ -11,10 +11,11 @@ from app.models.weekly_score import WeeklyScore
 
 from app.models.score_adjustment import ScoreAdjustment
 from app.models.password_reset_token import PasswordResetToken
+from app.models.lineup import Lineup
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
     "Team", "Player", "DraftPick", "Draft", "DraftRunStatus", "ScoringConfig",
     "Coach", "CoachPosition", "Transaction", "TransactionType", "TransactionStatus",
-    "WeeklyScore", "ScoreAdjustment", "PasswordResetToken",
+    "WeeklyScore", "ScoreAdjustment", "PasswordResetToken", "Lineup",
 ]

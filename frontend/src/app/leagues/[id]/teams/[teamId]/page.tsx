@@ -14,6 +14,7 @@ import {
   Trophy,
   Swords,
   Calendar,
+  ListChecks,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -266,6 +267,15 @@ export default function TeamPage() {
               <div className="text-[10px] text-surface-500 uppercase tracking-wider">Points Against</div>
             </div>
           </div>
+          {(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && (
+            <Link
+              href={`/leagues/${leagueId}/teams/${teamId}/lineup`}
+              className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all shrink-0"
+            >
+              <ListChecks className="w-4 h-4" />
+              Set Lineup
+            </Link>
+          )}
         </div>
 
         {/* Roster */}

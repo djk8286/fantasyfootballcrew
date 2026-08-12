@@ -14,6 +14,7 @@ from app.models.player import Player
 from app.models.weekly_score import WeeklyScore
 from app.models.coach import Coach
 from app.models.score_adjustment import ScoreAdjustment
+from app.models.lineup import Lineup
 from app.services.scoring_engine import calculate_player_score
 from app.services.sleeper_sync import fetch_weekly_stats
 
@@ -142,7 +143,8 @@ async def calculate_week(
     exactly.
 
     For each team:
-    1. Reads the roster (list of player IDs) from the Team model
+    1. Reads its starters for this week (Lineup, if the team ever set one --
+       otherwise its whole Team.roster, unchanged from before Lineup existed)
     2. Looks up player positions from the Player model
     3. Gets weekly stats (Sleeper API or Player.week_stats)
     4. Uses scoring_engine.calculate_player_score() for each player
@@ -179,6 +181,18 @@ async def calculate_week(
         if team.roster:
             all_player_ids.update(team.roster)
 
+    # A team with a saved Lineup for this exact (week, year) only scores
+    # its chosen starters; a team that's never touched the lineup feature
+    # scores its whole roster, same as before this existed -- see Lineup's
+    # own docstring for why "no row" must mean "score everything", not
+    # "score nothing". team.roster still filters which starters are even
+    # valid (a stale Lineup naming a since-dropped player shouldn't score).
+    team_ids = [t.id for t in teams]
+    lineups_result = await db.execute(
+        select(Lineup).where(Lineup.team_id.in_(team_ids), Lineup.week == week, Lineup.year == year)
+    )
+    starters_by_team: Dict[str, list] = {lu.team_id: (lu.starters or []) for lu in lineups_result.scalars().all()}
+
     # Batch load player data (sleeper_id -> position mapping)
     player_positions: Dict[str, str] = {}
     if all_player_ids:
@@ -206,7 +220,14 @@ async def calculate_week(
     results = []
 
     for team in teams:
-        roster_ids = team.roster or []
+        full_roster = set(team.roster or [])
+        if team.id in starters_by_team:
+            # Lineup exists -- only score starters, and only ones still
+            # actually on the roster (protects against a stale Lineup
+            # naming a player who's since been dropped/traded away).
+            roster_ids = [pid for pid in starters_by_team[team.id] if pid in full_roster]
+        else:
+            roster_ids = team.roster or []
 
         if not roster_ids:
             # Empty roster — score is 0
