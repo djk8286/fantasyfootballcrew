@@ -38,7 +38,7 @@ import httpx
 from sqlalchemy import select
 from app.core.database import async_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, SLEEPER_API
-from app.services.standings_service import calculate_week
+from app.services.standings_service import calculate_week, notify_matchup_results
 from app.services.playoff_service import process_league_playoffs
 from app.models.league import League, DraftStatus
 
@@ -140,6 +140,35 @@ async def _process_all_league_playoffs_once(season: int, week: int) -> None:
         print(f"[scheduler] Processed playoffs for {processed} league(s)" + (f", {failed} failed" if failed else ""))
 
 
+# In-memory only -- see run_scheduler's call site for why that's an
+# acceptable, deliberate tradeoff (a redeploy landing at the exact moment
+# the live week changes just misses that one notification pass, not a
+# correctness issue for anything else in this file).
+_last_seen_week: tuple[int, int] | None = None
+
+
+async def _notify_matchup_results_for_all_leagues_once(season: int, week: int) -> None:
+    """Fires "you won/lost/tied your matchup" notifications for every
+    real league's just-finished week. Only ever called once per week
+    (see run_scheduler: triggered by the live week changing, not by
+    every 2-minute tick), so this can't spam a team the way naively
+    calling it on every tick would."""
+    async with async_session() as db:
+        result = await db.execute(select(League))
+        leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
+
+        notified, failed = 0, 0
+        for league in leagues:
+            try:
+                await notify_matchup_results(league.id, week, season, db)
+                notified += 1
+            except Exception as e:
+                failed += 1
+                print(f"[scheduler] Matchup-result notify failed for league {league.id}: {e}")
+
+    print(f"[scheduler] Notified matchup results for {notified} league(s), week {week} {season}" + (f", {failed} failed" if failed else ""))
+
+
 async def _sync_players_once() -> None:
     async with async_session() as db:
         count = await sync_players_to_db(db)
@@ -153,6 +182,7 @@ async def run_scheduler() -> None:
         f"[scheduler] Starting -- stats every {STATS_SYNC_INTERVAL}s "
         f"(regular season only), players every {PLAYER_SYNC_INTERVAL}s"
     )
+    global _last_seen_week
     loop = asyncio.get_event_loop()
     last_player_sync = 0.0
 
@@ -184,6 +214,21 @@ async def run_scheduler() -> None:
                 await _process_all_league_playoffs_once(season, week)
             except Exception as e:
                 print(f"[scheduler] Playoff pass failed: {e}")
+
+            # The live week only advances once Sleeper considers the
+            # previous week's games over, so the moment it changes is our
+            # only real signal that a week is "final" outside of playoffs
+            # (which have their own fixed-round-vs-live-week check). Notify
+            # for the week that JUST ended, using its already-scored,
+            # now-final WeeklyScore rows -- not the new week, which has no
+            # scores yet.
+            if _last_seen_week is not None and _last_seen_week != (season, week):
+                prev_season, prev_week = _last_seen_week
+                try:
+                    await _notify_matchup_results_for_all_leagues_once(prev_season, prev_week)
+                except Exception as e:
+                    print(f"[scheduler] Matchup-result notify pass failed: {e}")
+            _last_seen_week = (season, week)
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:

@@ -17,6 +17,8 @@ from app.models.score_adjustment import ScoreAdjustment
 from app.models.lineup import Lineup
 from app.services.scoring_engine import calculate_player_score
 from app.services.sleeper_sync import fetch_weekly_stats
+from app.services.notification_service import notify_team_owners
+from app.models.notification import NotificationType
 
 
 async def _weekly_adjustment_total(team_id: str, week: int, year: int, db: AsyncSession) -> float:
@@ -576,3 +578,74 @@ async def get_weekly_matchups(
         result.append(matchup)
 
     return result
+
+
+async def notify_matchup_results(league_id: str, week: int, year: int, db: AsyncSession) -> None:
+    """Notify both teams in every one of this week's matchups whether
+    they won, lost, or tied. Closes the last gap the notification
+    feature deliberately left open: at the time, there was no reliable
+    "this week is truly over" signal to gate a one-time result
+    notification on outside of playoff weeks specifically (which have a
+    fixed, known week number to compare against the live NFL week).
+    Regular-season weeks don't have that fixed-week-number property, but
+    they DO have an equivalent signal: the scheduler already knows the
+    live week every 2 minutes, so the moment that live week increments
+    past this one, this week is exactly as "final" as a playoff round is
+    -- see scheduler.py's _last_seen_week tracking, which is what
+    actually decides when to call this, once per week, not every tick."""
+    matchups = await get_weekly_matchups(league_id, week, year, db)
+    if not matchups:
+        return
+
+    team_ids = {m["home_team_id"] for m in matchups} | {m["away_team_id"] for m in matchups}
+    teams_result = await db.execute(select(Team).where(Team.id.in_(team_ids)))
+    teams_by_id = {t.id: t for t in teams_result.scalars().all()}
+
+    # get_weekly_matchups defaults a team with no WeeklyScore row to a
+    # score of 0.0 -- fine for display, but here it would read as a real
+    # 0-0 tie and notify both teams of a result that never actually
+    # happened (e.g. this week's scoring pass failed or hasn't run for
+    # this league yet). Only trust a matchup where at least one side has
+    # an actual scored row.
+    scored_result = await db.execute(
+        select(WeeklyScore.team_id).where(
+            WeeklyScore.league_id == league_id,
+            WeeklyScore.week == week,
+            WeeklyScore.year == year,
+        )
+    )
+    scored_team_ids = {row[0] for row in scored_result.all()}
+
+    link = f"/leagues/{league_id}/standings"
+
+    for m in matchups:
+        home_team = teams_by_id.get(m["home_team_id"])
+        away_team = teams_by_id.get(m["away_team_id"])
+        if not home_team or not away_team:
+            continue
+        if m["home_team_id"] not in scored_team_ids and m["away_team_id"] not in scored_team_ids:
+            continue
+        home_score, away_score = m["home_score"], m["away_score"]
+
+        if home_score > away_score:
+            winner, loser, w_score, l_score = home_team, away_team, home_score, away_score
+        elif away_score > home_score:
+            winner, loser, w_score, l_score = away_team, home_team, away_score, home_score
+        else:
+            for team, opp, score in ((home_team, away_team, home_score), (away_team, home_team, away_score)):
+                await notify_team_owners(
+                    db, team, NotificationType.MATCHUP_TIED,
+                    f"You tied {opp.name} {score:g}-{score:g} in week {week}.", league_id, link,
+                )
+            continue
+
+        await notify_team_owners(
+            db, winner, NotificationType.MATCHUP_WON,
+            f"You beat {loser.name} {w_score:g}-{l_score:g} in week {week}.", league_id, link,
+        )
+        await notify_team_owners(
+            db, loser, NotificationType.MATCHUP_LOST,
+            f"You lost to {winner.name} {l_score:g}-{w_score:g} in week {week}.", league_id, link,
+        )
+
+    await db.commit()
