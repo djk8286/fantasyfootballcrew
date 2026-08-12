@@ -3,8 +3,8 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Sparkles } from "lucide-react";
-import { draftsApi, isLoggedIn } from "@/lib/api-client";
+import { Sparkles, Star, Shuffle } from "lucide-react";
+import { draftsApi, isLoggedIn, setClaimedTeam } from "@/lib/api-client";
 
 export default function MockDraftPage() {
   const router = useRouter();
@@ -34,7 +34,15 @@ export default function MockDraftPage() {
       const position = draftPosition === "random" ? undefined : parseInt(draftPosition);
       const result = (await draftsApi.quickstartMock(numTeams, totalRounds, position)) as {
         draft_id: string;
+        league_id: string;
+        team_id: string;
       };
+      // A quickstarted draft starts already in_progress, not pending, so
+      // the draft room's own "Select Your Team" screen (which only shows
+      // for a pending draft) never gets a chance to run. Claim the seat
+      // that was assigned above right now, or the draft room has no way
+      // to know which of the num_teams rows is the user's.
+      setClaimedTeam(result.league_id, result.team_id);
       router.push(`/draft/${result.draft_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start mock draft");
@@ -130,24 +138,47 @@ export default function MockDraftPage() {
                   </p>
                 </div>
 
-                {/* Draft Position */}
+                {/* Draft Position + team assignment */}
                 <div>
-                  <label htmlFor="position" className="block text-sm font-medium text-surface-300 mb-1.5">
-                    Your Draft Slot
-                  </label>
-                  <select
-                    id="position"
-                    value={draftPosition}
-                    onChange={(e) => setDraftPosition(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-                  >
-                    <option value="random">Random</option>
-                    {Array.from({ length: numTeams }, (_, i) => i + 1).map((slot) => (
-                      <option key={slot} value={slot}>
-                        Pick {slot}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-sm font-medium text-surface-300">
+                      Assign Teams
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setDraftPosition("random")}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                        draftPosition === "random"
+                          ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
+                          : "bg-surface-900 text-surface-400 border border-surface-700 hover:border-surface-500"
+                      }`}
+                    >
+                      <Shuffle className="w-3 h-3" /> Random slot
+                    </button>
+                  </div>
+                  <p className="text-xs text-surface-500 mb-3">
+                    Tap a slot to draft from it yourself — every other slot drafts as CPU.
+                  </p>
+                  <div className="grid grid-cols-4 sm:grid-cols-5 gap-2">
+                    {Array.from({ length: numTeams }, (_, i) => i + 1).map((slot) => {
+                      const isMe = draftPosition === String(slot);
+                      return (
+                        <button
+                          key={slot}
+                          type="button"
+                          onClick={() => setDraftPosition(String(slot))}
+                          className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-semibold transition-all ${
+                            isMe
+                              ? "bg-gold-400/20 border-gold-400/50 text-gold-400 ring-1 ring-gold-400/30"
+                              : "bg-surface-900 border-surface-700 text-surface-400 hover:border-surface-500 hover:text-surface-200"
+                          }`}
+                        >
+                          {isMe ? <Star className="w-3.5 h-3.5 fill-gold-400" /> : <span className="text-[10px] text-surface-600">CPU</span>}
+                          Slot {slot}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 <button

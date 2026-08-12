@@ -27,6 +27,28 @@ export function logout(): void {
   localStorage.removeItem("ffc_user_id");
 }
 
+// "Which team is mine" is per-league, keyed by league_id, in the same
+// ffc_user_teams blob the draft room's own claimTeam/unclaimTeam read and
+// write (see frontend/src/app/draft/[id]/page.tsx) -- there's no
+// server-side session for this, so it's the same localStorage shape
+// everywhere rather than each caller inventing its own. Exported here so
+// the mock-draft quickstart flow can claim its auto-created team the
+// instant it knows the team_id, without waiting for the draft room's own
+// "Select Your Team" screen -- which a quickstarted draft never shows in
+// the first place, since it starts already in_progress, not pending.
+export function setClaimedTeam(leagueId: string, teamId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const userTeams = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
+    userTeams[leagueId] = teamId;
+    localStorage.setItem("ffc_user_teams", JSON.stringify(userTeams));
+  } catch {
+    // Malformed existing blob -- start fresh rather than crash the
+    // quickstart flow over a corrupted localStorage value.
+    localStorage.setItem("ffc_user_teams", JSON.stringify({ [leagueId]: teamId }));
+  }
+}
+
 async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
   const { method = "GET", body, headers = {} } = options;
 

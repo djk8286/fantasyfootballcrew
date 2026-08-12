@@ -116,14 +116,17 @@ async def api_quickstart_mock_draft(
     """No real league needed -- provisions a scratch league + CPU teams and
     starts a draft immediately. Powers the standalone /mock-draft page."""
     try:
-        draft = await quickstart_mock_draft(
+        draft, my_team_id = await quickstart_mock_draft(
             db,
             current_user.id,
             num_teams=data.num_teams,
             total_rounds=data.total_rounds,
             draft_position=data.draft_position,
         )
-        return {"draft_id": draft.id, "league_id": draft.league_id}
+        # This draft starts immediately (never sits PENDING), so the
+        # frontend's own claim-a-team screen never gets a chance to run --
+        # team_id is how it finds out which row is the user's without it.
+        return {"draft_id": draft.id, "league_id": draft.league_id, "team_id": my_team_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

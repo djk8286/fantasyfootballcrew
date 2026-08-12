@@ -28,6 +28,15 @@ from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
 # excluded from the draft pool, not from general player browsing/search.
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
 
+# Standard starting-lineup slots and realistic bench caps, used by
+# get_ai_mock_pick's need scoring below. A human drafter reliably fills
+# starters before taking depth, and rarely stockpiles many bench K/DEF/QB
+# even in a long draft -- these give the CPU the same discipline instead
+# of letting pure tier ranking stack three QBs by round 6 because a
+# top-tier one happened to still be on the board.
+CPU_STARTER_SLOTS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
+CPU_POSITION_CAPS = {"QB": 3, "RB": 6, "WR": 7, "TE": 3, "K": 2, "DEF": 2}
+
 
 def generate_snake_order(team_ids: list[str], total_rounds: int) -> list[str]:
     """
@@ -122,7 +131,7 @@ async def quickstart_mock_draft(
     num_teams: int = 10,
     total_rounds: int = 15,
     draft_position: Optional[int] = None,
-) -> Draft:
+) -> tuple[Draft, str]:
     """No real league needed: auto-provisions a throwaway League
     (is_mock=True, excluded from list_leagues) with one team owned by
     user_id and (num_teams - 1) CPU teams, then creates and immediately
@@ -131,6 +140,14 @@ async def quickstart_mock_draft(
     already does (including the existing Auto-Fill button, which skips
     whichever team you own) -- rather than a second, parallel
     implementation. See the standalone /mock-draft page on the frontend.
+
+    Returns (draft, my_team_id) -- the caller (the API route) needs
+    my_team_id to hand back to the frontend. This draft starts
+    immediately (never sits PENDING), so the frontend's own "claim a
+    team" screen -- which only ever shows for a PENDING draft -- never
+    gets a chance to run here; without the caller getting my_team_id
+    back explicitly, the frontend had no way to know which of the
+    num_teams rows it should treat as the user's own.
     """
     if num_teams < 2 or num_teams > 20:
         raise ValueError("num_teams must be between 2 and 20")
@@ -178,7 +195,8 @@ async def quickstart_mock_draft(
         await db.commit()
         await db.refresh(draft)
 
-    return await start_draft(db, draft.id)
+    draft = await start_draft(db, draft.id)
+    return draft, my_team_id
 
 
 async def start_draft(db: AsyncSession, draft_id: str) -> Draft:
@@ -726,6 +744,21 @@ async def get_ai_mock_pick(
     else:
         pos_rank = {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 0, "K": 0}
 
+    # Endgame rule: once there are exactly as many (or fewer) picks left as
+    # there are still-unfilled starter positions, a human stops weighing
+    # tier/talent for those slots entirely and just fills them -- there's
+    # no more time not to. Without this, K in particular never gets
+    # drafted at all: get_player_tier has no real tier data for kickers
+    # (every one defaults to tier 5, the worst possible tier_score), and
+    # pos_rank alone only ever brings K to *parity* with the rest of the
+    # board in the final rounds, which isn't enough to outweigh a tier
+    # gap against a deep bench of ranked skill players -- confirmed
+    # empirically: 0 kickers drafted across 36 sampled CPU teams in full
+    # 12-team/15-round mock drafts before this rule was added.
+    rounds_left = draft.total_rounds - draft.current_round + 1
+    unfilled_starters = {p for p, need in CPU_STARTER_SLOTS.items() if team_positions.get(p, 0) < need}
+    must_fill_now = len(unfilled_starters) >= rounds_left
+
     # Score each available player
     scored_players = []
     for player in available:
@@ -741,10 +774,34 @@ async def get_ai_mock_pick(
         
         # Position priority bonus (lower = better)
         pos_bonus = pos_rank.get(pos, 99) * 10
-        
-        # Need score — prefer positions not yet filled
-        need_penalty = team_positions.get(pos, 0) * 5
-        
+
+        # Need score — roster-construction-aware, not just "prefer positions
+        # not yet filled". Still short a starter at this position (e.g. 0
+        # RBs drafted, needs 2): no penalty at all, same urgency as an
+        # empty-roster pick, so it can outrank a stacked-position luxury
+        # pick even from a much better tier. Starters filled: each pick
+        # past that gets progressively pricier (bench depth shouldn't crowd
+        # out a team's actual remaining needs). At/past the realistic cap
+        # (CPU_POSITION_CAPS): steep additional penalty -- discouraged, not
+        # hard-blocked, in case capped-out positions are genuinely all
+        # that's left on the board.
+        have = team_positions.get(pos, 0)
+        starter_need = CPU_STARTER_SLOTS.get(pos, 0)
+        if have < starter_need:
+            need_penalty = 0
+        else:
+            over_starter = have - starter_need
+            need_penalty = 20 * (over_starter + 1)
+            if have >= CPU_POSITION_CAPS.get(pos, 99):
+                need_penalty += 300
+
+        # Endgame override -- see must_fill_now above. -1000 swamps
+        # tier_score's entire 0-400 range, so a mandatory-but-unranked
+        # position (a kicker) reliably wins over ranked depth once there's
+        # no time left not to take it.
+        if must_fill_now and pos in unfilled_starters:
+            need_penalty -= 1000
+
         # Free agent penalty
         fa_penalty = 30 if (not player.team or player.team in ("FA", "---")) else 0
         
