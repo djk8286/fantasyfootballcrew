@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, Plus, Loader2, Clock, Zap, ListChecks, X, TrendingUp, Grid3X3 } from "lucide-react";
+import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3 } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
-import { TEAM_COLORS, hashTeam } from "./TeamBadge";
+import TeamCircle from "./DraftTeamCircle";
+import { formatPickLabel, picksUntilMyTurn, projectNextPick } from "@/lib/draftPickMath";
 
 // Matches draft/[id]/page.tsx's Player interface exactly (structurally --
 // no index signature, since that would make this type incompatible with
@@ -39,116 +40,6 @@ interface MobileDraftPick {
   pick_number: number;
   player: { id: string; full_name: string; position: string } | null;
   team: { id: string; name: string };
-}
-
-// Global pick index (0-based, matches team_order's indexing) -> "round.pick"
-// display, e.g. index 39 in a 12-team draft is round 4 (indices 36-47),
-// pick 4 within that round -> "4.04".
-function formatPickLabel(globalIndex: number, numTeams: number): string {
-  if (numTeams <= 0) return "";
-  const round = Math.floor(globalIndex / numTeams) + 1;
-  const pickInRound = (globalIndex % numTeams) + 1;
-  return `${round}.${String(pickInRound).padStart(2, "0")}`;
-}
-
-// How many picks (including CPU/other-human picks) happen before it's
-// myTeamId's turn again, counting from currentIndex. 0 means it's already
-// my turn. null means I don't have a claimed team, or I'm not in this
-// draft's team_order at all.
-function picksUntilMyTurn(teamOrder: string[], currentIndex: number, myTeamId: string | null): number | null {
-  if (!myTeamId) return null;
-  for (let i = currentIndex; i < teamOrder.length; i++) {
-    if (teamOrder[i] === myTeamId) return i - currentIndex;
-  }
-  return null;
-}
-
-// Best-available-at-a-position-of-need, falling back to pure best-player-
-// available. Not a real projections model (this app doesn't have one) --
-// a simple, honest heuristic: standard starter counts per position, most-
-// short-handed need first, tie-broken by rank; once every modeled slot is
-// filled, just the single best-ranked player left. availablePlayers is
-// assumed already sorted best-to-worst by rank_score.
-const STARTER_SLOTS: Record<string, number> = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1 };
-
-function projectNextPick(
-  availablePlayers: MobileDraftPlayer[],
-  myRosterByPos: Record<string, MobileDraftPick[]>
-): { player: MobileDraftPlayer; reason: string } | null {
-  if (availablePlayers.length === 0) return null;
-
-  const needs = Object.entries(STARTER_SLOTS)
-    .map(([pos, need]) => ({ pos, short: need - (myRosterByPos[pos]?.length || 0) }))
-    .filter((n) => n.short > 0)
-    .sort((a, b) => b.short - a.short);
-
-  for (const need of needs) {
-    const best = availablePlayers.find((p) => p.position === need.pos);
-    if (best) {
-      return { player: best, reason: `Fills your ${need.pos} need` };
-    }
-  }
-  return { player: availablePlayers[0], reason: "Best player available" };
-}
-
-// "CPU Team 3" / "CPU Team 9" / ... all reduce to the same "CP" under a
-// plain first-two-letters rule -- every CPU circle in the train would
-// look identical. Prefer a leading letter + trailing number when the name
-// ends in digits (matches how CPU teams are actually named, see
-// teams.py's bulk_add_cpu_teams), falling back to first-two-letters for
-// anything else (real team names, "Your Team").
-function initialsFor(name: string): string {
-  const m = name.match(/^(\D*?)(\d+)$/);
-  if (m) {
-    const letter = m[1].trim().charAt(0) || name.charAt(0);
-    return `${letter}${m[2]}`.toUpperCase().slice(0, 3);
-  }
-  return name.slice(0, 2).toUpperCase();
-}
-
-function TeamCircle({
-  teamId,
-  name,
-  isCurrent,
-  isMine,
-  size = "md",
-}: {
-  teamId: string;
-  name: string;
-  isCurrent: boolean;
-  isMine: boolean;
-  size?: "sm" | "md";
-}) {
-  const colors = TEAM_COLORS[hashTeam(teamId) % TEAM_COLORS.length];
-  const dims = size === "md" ? "w-12 h-12 text-sm" : "w-9 h-9 text-xs";
-  return (
-    <div className="flex flex-col items-center gap-1 shrink-0" style={{ scrollSnapAlign: "center" }}>
-      <div className="relative">
-        {isCurrent && (
-          <span className="absolute -inset-1 rounded-full bg-gradient-to-tr from-red-500 to-orange-400 animate-pulse blur-[2px]" />
-        )}
-        <div
-          className={`relative ${dims} rounded-full flex items-center justify-center font-bold border-2 ${
-            isCurrent
-              ? "border-orange-400 ring-2 ring-red-500/60 shadow-[0_0_16px_rgba(251,146,60,0.5)]"
-              : isMine
-                ? "border-gold-400/60"
-                : "border-surface-700"
-          } ${isMine ? "bg-gold-400/20 text-gold-400" : `${colors.bg} ${colors.text}`}`}
-        >
-          {isMine ? "★" : initialsFor(name)}
-          {isCurrent && (
-            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-red-500 border border-surface-900 flex items-center justify-center">
-              <Clock className="w-2.5 h-2.5 text-white" />
-            </span>
-          )}
-        </div>
-      </div>
-      <span className={`text-[9px] font-medium truncate max-w-[52px] ${isCurrent ? "text-orange-300" : "text-surface-500"}`}>
-        {isMine ? "You" : name}
-      </span>
-    </div>
-  );
 }
 
 interface MobileDraftRoomProps {

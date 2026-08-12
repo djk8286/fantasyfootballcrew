@@ -32,6 +32,9 @@ import PlayerPool from "@/components/PlayerPool";
 import TeamRosters from "@/components/TeamRosters";
 import BoardView from "@/components/BoardView";
 import MobileDraftRoom from "@/components/MobileDraftRoom";
+import DraftQueuePanel from "@/components/DraftQueuePanel";
+import RecentPicksPanel from "@/components/RecentPicksPanel";
+import PickHistoryList from "@/components/PickHistoryList";
 
 interface Player {
   id: string;
@@ -113,7 +116,7 @@ export default function DraftPage() {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [cpuingPick, setCpuingPick] = useState(false);
   const [showTimerSettings, setShowTimerSettings] = useState(false);
-  const [viewMode, setViewMode] = useState<"draft" | "board">("draft");
+  const [viewMode, setViewMode] = useState<"draft" | "board" | "history">("draft");
   const [expandedTeams, setExpandedTeams] = useState<Record<string, boolean>>({});
   const cpuingRef = useRef(false);
 
@@ -484,8 +487,31 @@ export default function DraftPage() {
   const isCompleted = draftInfo.status === "completed";
   const team_order = draft!.team_order || [];
 
-  const currentPickIndex = allPicks.findIndex((p) => !p.player);
-  const currentPick = currentPickIndex >= 0 ? allPicks[currentPickIndex] : null;
+  // The backend only creates a Pick row once a pick is actually made --
+  // there's no placeholder row for the upcoming pick, so it can never be
+  // found via allPicks.findIndex((p) => !p.player) (that used to be the
+  // logic here; it always returned -1, which silently broke the "on the
+  // clock" banner, the board's active-cell glow, and the "on deck" teams
+  // below). Instead, derive the 0-based global pick index the same way
+  // draft_manager.py does it server-side (current_round/current_pick are
+  // the DB-authoritative, CAS-protected source of truth -- see
+  // draft_manager.py's advance_pick, which uses this identical formula),
+  // rather than re-inferring it from allPicks.length.
+  const currentPickIndex =
+    (draftInfo.current_round - 1) * draftInfo.num_teams + (draftInfo.current_pick - 1);
+  const currentPick =
+    !isCompleted && currentPickIndex < draftInfo.total_picks
+      ? {
+          id: `pending-${currentPickIndex}`,
+          round: draftInfo.current_round,
+          pick_number: currentPickIndex + 1,
+          player: null,
+          team: {
+            id: draft?.current_team_id || "",
+            name: draft?.current_team_name || "Unknown",
+          },
+        }
+      : null;
 
   // Last pick made
   const completedPicks = allPicks.filter(p => p.player);
@@ -592,6 +618,12 @@ export default function DraftPage() {
         onSetTimer={handleSetTimer}
         onToggleTimerSettings={() => setShowTimerSettings(!showTimerSettings)}
         onRunMock={handleRunMock}
+        teamOrder={team_order}
+        teams={draft?.teams || {}}
+        currentTeamId={draft?.current_team_id || null}
+        currentPickGlobalIndex={currentPickIndex}
+        numTeams={draftInfo.num_teams}
+        myTeamId={myTeamId}
       />
 
       {/* BODY — Two modes */}
@@ -603,7 +635,7 @@ export default function DraftPage() {
             teamOrder={team_order}
             teams={draft?.teams || {}}
             currentTeamId={draft?.current_team_id || null}
-            currentPickGlobalIndex={currentPickIndex >= 0 ? currentPickIndex : allPicks.length}
+            currentPickGlobalIndex={currentPickIndex}
             numTeams={draftInfo.num_teams}
             totalPicks={draftInfo.total_picks}
             currentRound={currentRound}
@@ -634,7 +666,38 @@ export default function DraftPage() {
             onShowBoard={() => setViewMode("board")}
           />
           <div className="hidden xl:flex xl:flex-row gap-4">
-            {/* MAIN: Player pool + Queue */}
+            {/* LEFT: Pick Queue/Autopick + My Team + League Rosters */}
+            <div className="w-[300px] shrink-0 space-y-4">
+              <DraftQueuePanel
+                queue={availableQueue}
+                isUserOnClock={isUserOnClock()}
+                actionLoading={actionLoading}
+                onMakePick={handleMakePick}
+                onToggleQueue={toggleQueue}
+                autoPickForMe={autoPickForMe}
+                onToggleAutoPickForMe={() => setAutoPickForMe((prev) => !prev)}
+                onPlayerHover={handlePlayerHover}
+              />
+              <TeamRosters
+                myTeamId={myTeamId}
+                myPicks={myPicks}
+                myRosterByPos={myRosterByPos}
+                team_order={team_order}
+                teams={draft?.teams || {}}
+                teamRosters={teamRosters}
+                isCompleted={isCompleted}
+                currentTeamId={draft?.current_team_id || null}
+                expandedTeams={expandedTeams}
+                onToggleExpand={(teamId) =>
+                  setExpandedTeams((prev) => ({ ...prev, [teamId]: !prev[teamId] }))
+                }
+                onClaimTeam={claimTeam}
+                onUnclaimTeam={unclaimTeam}
+                onPlayerHover={handlePlayerHover}
+              />
+            </div>
+
+            {/* CENTER: Player pool */}
             <PlayerPool
               filteredPlayers={filteredPlayers}
               searchQuery={searchQuery}
@@ -664,24 +727,16 @@ export default function DraftPage() {
               onPlayerHover={handlePlayerHover}
             />
 
-            {/* RIGHT PANEL: My Team + Team Rosters */}
-            <TeamRosters
-              myTeamId={myTeamId}
-              myPicks={myPicks}
-              myRosterByPos={myRosterByPos}
-              team_order={team_order}
-              teams={draft?.teams || {}}
-              teamRosters={teamRosters}
-              isCompleted={isCompleted}
-              currentTeamId={draft?.current_team_id || null}
-              expandedTeams={expandedTeams}
-              onToggleExpand={(teamId) =>
-                setExpandedTeams((prev) => ({ ...prev, [teamId]: !prev[teamId] }))
-              }
-              onClaimTeam={claimTeam}
-              onUnclaimTeam={unclaimTeam}
-              onPlayerHover={handlePlayerHover}
-            />
+            {/* RIGHT: Recent Picks feed */}
+            <div className="w-[300px] shrink-0">
+              <div className="xl:sticky xl:top-20">
+                <RecentPicksPanel
+                  picks={[...completedPicks].reverse().slice(0, 25)}
+                  myTeamId={myTeamId}
+                  onPlayerHover={handlePlayerHover}
+                />
+              </div>
+            </div>
           </div>
           </>
         )}
@@ -697,6 +752,18 @@ export default function DraftPage() {
             currentPick={currentPick}
             myTeamId={myTeamId}
             firstRoundTeams={firstRoundTeams}
+            onPlayerHover={handlePlayerHover}
+          />
+        )}
+
+        {/* PICK HISTORY MODE: full chronological list -- desktop-only entry
+            point (DraftHeader's History tab is hidden below lg), but the
+            viewMode itself works from any screen size. */}
+        {viewMode === "history" && (
+          <PickHistoryList
+            picks={completedPicks}
+            numTeams={draftInfo.num_teams}
+            myTeamId={myTeamId}
             onPlayerHover={handlePlayerHover}
           />
         )}

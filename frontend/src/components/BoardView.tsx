@@ -115,9 +115,14 @@ export default function BoardView({
                   roundStart + draftInfo.num_teams
                 );
                 const roundPicks = allPicks.filter((p) => p.round === round);
+                // Every row in roundPicks necessarily has a player (the
+                // backend only creates a row once a pick is made -- see
+                // the same fact documented in draft/[id]/page.tsx), so
+                // roundPicks.every(p => p.player) is vacuously true the
+                // moment a round's *first* pick lands. Compare against
+                // how many picks the round should have instead.
                 const roundComplete =
-                  roundPicks.length > 0 &&
-                  roundPicks.every((p) => p.player);
+                  roundTeamOrder.length > 0 && roundPicks.length >= roundTeamOrder.length;
                 return (
                   <tr
                     key={round}
@@ -140,13 +145,17 @@ export default function BoardView({
                         (p) => p.team.id === teamId
                       );
                       const isDrafted = pick && pick.player;
+                      const globalPickNum = roundStart + colIdx + 1;
+                      // Compare against globalPickNum, not pick.pick_number --
+                      // the current (not-yet-made) pick has no real `pick`
+                      // row to find (same reason currentPick itself has to
+                      // be synthesized in draft/[id]/page.tsx), so requiring
+                      // `pick` to be truthy here meant this was never true
+                      // for the pick that actually matters.
                       const isCurrentPick =
-                        currentPick &&
-                        pick &&
-                        pick.pick_number === currentPick.pick_number;
+                        !!currentPick && globalPickNum === currentPick.pick_number;
                       const isMine = myTeamId === teamId;
                       const team = teams[teamId];
-                      const globalPickNum = roundStart + colIdx + 1;
                       return (
                         <td
                           key={colIdx}

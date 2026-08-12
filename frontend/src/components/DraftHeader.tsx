@@ -9,7 +9,10 @@ import {
   Sparkles,
   List,
   Grid3X3,
+  History,
 } from "lucide-react";
+import TeamCircle from "./DraftTeamCircle";
+import { formatPickLabel, picksUntilMyTurn } from "@/lib/draftPickMath";
 
 interface DraftHeaderProps {
   leagueId: string;
@@ -21,12 +24,20 @@ interface DraftHeaderProps {
   timerSeconds: number;
   timeLeft: number | null;
   showTimerSettings: boolean;
-  viewMode: "draft" | "board";
+  viewMode: "draft" | "board" | "history";
   actionLoading: string;
-  onViewModeChange: (mode: "draft" | "board") => void;
+  onViewModeChange: (mode: "draft" | "board" | "history") => void;
   onSetTimer: (seconds: number) => void;
   onToggleTimerSettings: () => void;
   onRunMock: () => void;
+  // Desktop-only draft train (xl:block below) -- mobile already has its
+  // own, in MobileDraftRoom, so these are unused/harmless on small screens.
+  teamOrder: string[];
+  teams: Record<string, { name: string }>;
+  currentTeamId: string | null;
+  currentPickGlobalIndex: number;
+  numTeams: number;
+  myTeamId: string | null;
 }
 
 export default function DraftHeader({
@@ -45,7 +56,19 @@ export default function DraftHeader({
   onSetTimer,
   onToggleTimerSettings,
   onRunMock,
+  teamOrder,
+  teams,
+  currentTeamId,
+  currentPickGlobalIndex,
+  numTeams,
+  myTeamId,
 }: DraftHeaderProps) {
+  const uniqueTeams = teamOrder.filter((tid, i, arr) => arr.indexOf(tid) === i);
+  const picksAway = !isCompleted ? picksUntilMyTurn(teamOrder, currentPickGlobalIndex, myTeamId) : null;
+  const nextPickLabel =
+    !isCompleted && myTeamId && picksAway !== null
+      ? formatPickLabel(currentPickGlobalIndex + picksAway, numTeams)
+      : null;
   return (
     <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5">
@@ -100,6 +123,16 @@ export default function DraftHeader({
                 }`}
               >
                 <Grid3X3 className="w-3 h-3" /> Board
+              </button>
+              <button
+                onClick={() => onViewModeChange("history")}
+                className={`px-3 py-1.5 rounded text-xs font-semibold transition-all items-center gap-1 hidden lg:flex ${
+                  viewMode === "history"
+                    ? "bg-surface-700 text-white"
+                    : "text-surface-400 hover:text-white"
+                }`}
+              >
+                <History className="w-3 h-3" /> History
               </button>
             </div>
             <span className="text-surface-400 text-xs hidden sm:inline">
@@ -165,6 +198,38 @@ export default function DraftHeader({
             }}
           />
         </div>
+
+        {/* Desktop draft train -- xl:block only. Mobile has its own,
+            purpose-built version in MobileDraftRoom; showing both would be
+            redundant on a screen where they'd both fit. */}
+        {uniqueTeams.length > 0 && (
+          <div className="hidden xl:flex items-center gap-4 mt-3 pt-3 border-t border-surface-800">
+            <div className="flex-1 flex gap-3 overflow-x-auto no-scrollbar">
+              {uniqueTeams.map((tid) => (
+                <TeamCircle
+                  key={tid}
+                  teamId={tid}
+                  name={teams[tid]?.name || "Team"}
+                  isCurrent={tid === currentTeamId && !isCompleted}
+                  isMine={tid === myTeamId}
+                  size="sm"
+                />
+              ))}
+            </div>
+            <div className="text-right shrink-0 pl-4 border-l border-surface-800">
+              {isCompleted ? (
+                <span className="text-xs text-green-400 font-semibold">Draft complete</span>
+              ) : nextPickLabel ? (
+                <span className="text-xs text-surface-300 whitespace-nowrap">
+                  Your next pick: <span className="font-bold text-white">{nextPickLabel}</span>
+                  {picksAway ? <span className="text-surface-500"> ({picksAway} away)</span> : <span className="text-gold-400 font-semibold"> — now</span>}
+                </span>
+              ) : (
+                <span className="text-xs text-surface-500 whitespace-nowrap">Claim a team to track your picks</span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
