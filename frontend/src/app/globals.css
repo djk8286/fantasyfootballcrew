@@ -51,6 +51,17 @@ body {
     radial-gradient(ellipse 100% 60% at 50% 110%, rgba(0, 0, 0, 0.4), transparent 60%);
 }
 
+/* Hide scrollbar on horizontally-scrolling strips (draft train, position
+   pills) that scroll via touch/drag -- the scrollbar itself adds visual
+   noise without adding function on a touch device. */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

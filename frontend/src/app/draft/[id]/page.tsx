@@ -20,7 +20,6 @@ import {
   User,
   GripVertical,
   List,
-  Grid3X3,
   Timer,
   Info,
 } from "lucide-react";
@@ -32,6 +31,7 @@ import DraftHeader from "@/components/DraftHeader";
 import PlayerPool from "@/components/PlayerPool";
 import TeamRosters from "@/components/TeamRosters";
 import BoardView from "@/components/BoardView";
+import MobileDraftRoom from "@/components/MobileDraftRoom";
 
 interface Player {
   id: string;
@@ -135,6 +135,13 @@ export default function DraftPage() {
   const [queue, setQueue] = useState<Player[]>([]);
   const [showQueue, setShowQueue] = useState(false);
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
+
+  // Mobile draft room's "auto-pick for me" toggle -- session-only (not
+  // persisted), off by default. When on, treats the user's own team like
+  // a CPU team the instant it's their turn: picks the top of their queue
+  // if they have one queued, otherwise defers to the same backend
+  // auto-pick the CPU teams already use.
+  const [autoPickForMe, setAutoPickForMe] = useState(false);
 
   // Load claimed team from localStorage on mount (backend claimed_teams is read on each fetchState)
   useEffect(() => {
@@ -306,6 +313,35 @@ export default function DraftPage() {
     }, 1500);
     return () => { clearTimeout(timeout); cpuingRef.current = false; setCpuingPick(false); };
   }, [draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, myTeamId, queue.length]);
+
+  // "Auto-pick for me" toggle (mobile draft room): when on, treat the
+  // user's own turn like a CPU team's -- pick immediately rather than
+  // waiting for the timer to run out. The queue-auto-pick effect above
+  // isn't gated behind this toggle (having something queued already
+  // means "draft this for me" on its own), so this only covers the
+  // empty-queue case -- deferring to the same backend auto-pick the CPU
+  // teams use.
+  useEffect(() => {
+    if (!autoPickForMe || !draft || !isUserOnClock() || cpuingRef.current) return;
+    const draftedIds = new Set(draft.picks.filter(p => p.player).map(p => p.player!.id));
+    const hasQueuedAvailable = queue.some(p => !draftedIds.has(p.id));
+    if (hasQueuedAvailable) return; // the queue effect above will handle it
+
+    cpuingRef.current = true;
+    setCpuingPick(true);
+    const timeout = setTimeout(async () => {
+      try {
+        await draftsApi.autoPick(id);
+        await fetchState();
+      } catch {
+        // draft may be complete
+      } finally {
+        cpuingRef.current = false;
+        setCpuingPick(false);
+      }
+    }, 800);
+    return () => { clearTimeout(timeout); cpuingRef.current = false; setCpuingPick(false); };
+  }, [autoPickForMe, draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, myTeamId, queue.length]);
 
   const handleSetTimer = async (seconds: number) => {
     try {
@@ -562,7 +598,42 @@ export default function DraftPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         {/* Panel layout for draft mode */}
         {viewMode === "draft" && (
-          <div className="flex flex-col xl:flex-row gap-4">
+          <>
+          <MobileDraftRoom
+            teamOrder={team_order}
+            teams={draft?.teams || {}}
+            currentTeamId={draft?.current_team_id || null}
+            currentPickGlobalIndex={currentPickIndex >= 0 ? currentPickIndex : allPicks.length}
+            numTeams={draftInfo.num_teams}
+            totalPicks={draftInfo.total_picks}
+            currentRound={currentRound}
+            totalRounds={draftInfo.total_rounds}
+            isCompleted={isCompleted}
+            myTeamId={myTeamId}
+            lastPick={lastPick}
+            availablePlayers={available}
+            myRosterByPos={myRosterByPos}
+            filteredPlayers={filteredPlayers}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            positionFilter={positionFilter}
+            onPositionFilterChange={setPositionFilter}
+            positionCounts={positionCounts}
+            availableCount={available.length}
+            isUserOnClock={isUserOnClock()}
+            actionLoading={actionLoading}
+            onMakePick={handleMakePick}
+            onToggleQueue={toggleQueue}
+            isQueued={isQueued}
+            queue={availableQueue}
+            timeLeft={timeLeft}
+            timerSeconds={draftInfo.timer_seconds}
+            autoPickForMe={autoPickForMe}
+            onToggleAutoPickForMe={() => setAutoPickForMe((prev) => !prev)}
+            onPlayerHover={handlePlayerHover}
+            onShowBoard={() => setViewMode("board")}
+          />
+          <div className="hidden xl:flex xl:flex-row gap-4">
             {/* MAIN: Player pool + Queue */}
             <PlayerPool
               filteredPlayers={filteredPlayers}
@@ -612,6 +683,7 @@ export default function DraftPage() {
               onPlayerHover={handlePlayerHover}
             />
           </div>
+          </>
         )}
 
         {/* BOARD MODE: Team Column × Round Row Grid */}
@@ -629,16 +701,9 @@ export default function DraftPage() {
           />
         )}
 
-        {/* Mobile: Draft Board toggle at bottom */}
-        {viewMode === "draft" && (
-          <div className="mt-4 xl:hidden">
-            <button onClick={() => setViewMode("board")}
-              className="w-full py-3 bg-surface-800 border border-surface-700 rounded-xl text-sm font-semibold text-surface-300 hover:text-white transition-all flex items-center justify-center gap-2"
-            >
-              <Grid3X3 className="w-4 h-4" /> View Draft Board
-            </button>
-          </div>
-        )}
+        {/* Mobile: Draft Board access lives in MobileDraftRoom's own header
+            (onShowBoard) now -- a standalone button here would render behind
+            MobileDraftRoom's fixed bottom action bar. */}
         {viewMode === "board" && (
           <div className="mt-4 xl:hidden">
             <button onClick={() => setViewMode("draft")}
