@@ -1,0 +1,65 @@
+name: CI
+
+# Railway/Vercel both auto-deploy straight off pushes to master with no
+# build gate in between -- this is the first thing that actually runs the
+# test suite and a real production build before that happens. Runs on
+# every push and PR so a broken PR is visible before it's mergeable, not
+# just before it's deployable.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # matches Railway's build (see backend/railway.json)
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      # No DATABASE_URL/JWT_SECRET/etc needed -- Settings() defaults to a
+      # local sqlite path and an auto-generated JWT secret (app/core/config.py),
+      # and the real test suite (tests/) uses its own isolated in-memory
+      # SQLite DB per test (see tests/conftest.py), never the app's configured
+      # DATABASE_URL. pytest.ini scopes collection to tests/ specifically so
+      # this doesn't also try (and fail) to import the ad-hoc manual-
+      # verification scripts that live at the backend/ root.
+      - run: python -m pytest -q
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Real production build (`next build`) -- typechecks the whole app
+      # and prerenders every static route, which is a stronger check than
+      # `tsc --noEmit` alone. No env vars needed: every NEXT_PUBLIC_* read
+      # in the codebase has a fallback default (verified against
+      # src/lib/api-client.ts, src/lib/supabase.ts, etc.), so a build
+      # without secrets configured still genuinely exercises the same
+      # code Vercel would build.
+      - run: npm run build
+      # Non-blocking for now -- there's real pre-existing lint debt here
+      # (unrelated to whatever a given PR touches) that hasn't been
+      # cleaned up yet. Still surfaced in the log so it doesn't silently
+      # regress further, just doesn't fail the build over it.
+      - run: npm run lint
+        continue-on-error: true

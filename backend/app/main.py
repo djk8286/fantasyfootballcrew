@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.limiter import limiter
 from app.core.sentry import init_sentry
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.services.scheduler import run_scheduler
 from app.api.v1 import (
     auth_router, users_router, leagues_router,
@@ -76,6 +77,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# HSTS/nosniff/frame-options/etc on every response -- see
+# app/core/security_headers.py for why CSP specifically isn't set here.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Railway (and every PaaS like it) puts the app behind a reverse proxy, so
 # the raw ASGI connection's client is Railway's internal edge/proxy address
