@@ -39,6 +39,7 @@ from sqlalchemy import select
 from app.core.database import async_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, SLEEPER_API
 from app.services.standings_service import calculate_week
+from app.services.playoff_service import process_league_playoffs
 from app.models.league import League, DraftStatus
 
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
@@ -113,6 +114,32 @@ async def _calculate_all_league_scores_once(season: int, week: int) -> None:
     print(f"[scheduler] Auto-scored week {week}, {season} for {scored} league(s)" + (f", {failed} failed" if failed else ""))
 
 
+async def _process_all_league_playoffs_once(season: int, week: int) -> None:
+    """Generates/advances playoff brackets for every real, draft-completed,
+    playoff-ENABLED league (most leagues have it off by default, and
+    process_league_playoffs itself no-ops for those -- this only exists
+    as a separate pass from the scoring one above so a playoff-generation
+    bug can't affect regular scoring, and vice versa). Called with the
+    same (season, week) _calculate_all_league_scores_once just used, so
+    playoff advancement always sees this tick's freshly-committed
+    WeeklyScore rows, not a stale read from before scoring ran."""
+    async with async_session() as db:
+        result = await db.execute(select(League))
+        leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
+
+        processed, failed = 0, 0
+        for league in leagues:
+            try:
+                await process_league_playoffs(league, season, week, db)
+                processed += 1
+            except Exception as e:
+                failed += 1
+                print(f"[scheduler] Playoff processing failed for league {league.id}: {e}")
+
+    if processed:
+        print(f"[scheduler] Processed playoffs for {processed} league(s)" + (f", {failed} failed" if failed else ""))
+
+
 async def _sync_players_once() -> None:
     async with async_session() as db:
         count = await sync_players_to_db(db)
@@ -153,6 +180,10 @@ async def run_scheduler() -> None:
                 # Never let an auto-score failure interrupt the sync loop
                 # itself -- stats are already synced for this tick either way.
                 print(f"[scheduler] Auto-score pass failed: {e}")
+            try:
+                await _process_all_league_playoffs_once(season, week)
+            except Exception as e:
+                print(f"[scheduler] Playoff pass failed: {e}")
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:

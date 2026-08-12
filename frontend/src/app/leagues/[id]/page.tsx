@@ -651,6 +651,13 @@ export default function LeagueDetailPage() {
                 Roster Slots
               </Link>
               <Link
+                href={`/leagues/${id}/playoff-settings`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <Settings className="w-4 h-4" />
+                Playoff Settings
+              </Link>
+              <Link
                 href={`/leagues/${id}/standings`}
                 className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
               >
@@ -663,6 +670,13 @@ export default function LeagueDetailPage() {
               >
                 <Calendar className="w-4 h-4" />
                 Schedule
+              </Link>
+              <Link
+                href={`/leagues/${id}/playoffs`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <Trophy className="w-4 h-4" />
+                Playoffs
               </Link>
               <Link
                 href={`/leagues/${id}/trades`}

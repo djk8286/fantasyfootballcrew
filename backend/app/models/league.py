@@ -45,6 +45,13 @@ class League(Base):
     # until a commissioner deliberately turns IDP roster slots on -- see
     # DEFAULT_ROSTER_SLOTS.
     roster_slots: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
+    # Playoff configuration -- entirely opt-in (enabled defaults False, see
+    # DEFAULT_PLAYOFF_SETTINGS in playoff_service.py), so no existing
+    # league gets a bracket generated under it without a commissioner
+    # deliberately turning this on. Shape: {enabled, regular_season_weeks,
+    # num_teams, seeding_method: "wins"|"points",
+    # conference_bracket_mode: "combined"|"separate"|None}.
+    playoff_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     max_teams: Mapped[int] = mapped_column(Integer, default=12)
     draft_status: Mapped[DraftStatus] = mapped_column(Enum(DraftStatus), default=DraftStatus.NOT_STARTED)
     draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType), default=DraftType.SNAKE)

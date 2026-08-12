@@ -144,6 +144,15 @@ export const leaguesApi = {
       method: "PUT",
       body: { roster_slots: rosterSlots },
     }),
+  getPlayoffSettings: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/playoff-settings`),
+  updatePlayoffSettings: (id: string, playoffSettings: Record<string, unknown>) =>
+    apiRequest(`/api/v1/leagues/${id}/playoff-settings`, {
+      method: "PUT",
+      body: { playoff_settings: playoffSettings },
+    }),
+  getPlayoffs: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/playoffs`),
 };
 
 // Teams

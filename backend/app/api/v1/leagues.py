@@ -8,6 +8,7 @@ from app.models.team import Team
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
+from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_settings
 from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
 from pydantic import BaseModel
 
@@ -168,6 +169,57 @@ async def update_league_roster_slots(
     league.roster_slots = data.roster_slots
     await db.commit()
     return {"status": "ok", "roster_slots": league.roster_slots}
+
+
+@router.get("/{league_id}/playoff-settings")
+async def get_league_playoff_settings(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the playoff config for a league, or defaults (disabled)."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return get_playoff_settings(league)
+
+
+class PlayoffSettingsUpdate(BaseModel):
+    playoff_settings: dict
+
+
+_VALID_SEEDING_METHODS = {"wins", "points"}
+_VALID_CONFERENCE_MODES = {"combined", "separate"}
+
+
+@router.put("/{league_id}/playoff-settings")
+async def update_league_playoff_settings(
+    league_id: str,
+    data: PlayoffSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the playoff config for a league."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
+    merged = dict(DEFAULT_PLAYOFF_SETTINGS)
+    merged.update(data.playoff_settings)
+
+    if not isinstance(merged.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="playoff_settings.enabled must be a boolean")
+    if not isinstance(merged.get("regular_season_weeks"), int) or not (1 <= merged["regular_season_weeks"] <= 17):
+        raise HTTPException(status_code=422, detail="playoff_settings.regular_season_weeks must be an integer between 1 and 17")
+    if not isinstance(merged.get("num_teams"), int) or merged["num_teams"] < 2:
+        raise HTTPException(status_code=422, detail="playoff_settings.num_teams must be an integer of at least 2")
+    if merged.get("seeding_method") not in _VALID_SEEDING_METHODS:
+        raise HTTPException(status_code=422, detail=f"playoff_settings.seeding_method must be one of {sorted(_VALID_SEEDING_METHODS)}")
+    if merged.get("conference_bracket_mode") not in _VALID_CONFERENCE_MODES:
+        raise HTTPException(status_code=422, detail=f"playoff_settings.conference_bracket_mode must be one of {sorted(_VALID_CONFERENCE_MODES)}")
+
+    league.playoff_settings = merged
+    await db.commit()
+    return {"status": "ok", "playoff_settings": league.playoff_settings}
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)

@@ -331,7 +331,7 @@ async def calculate_week(
     }
 
 
-async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]]:
+async def get_standings(league_id: str, db: AsyncSession, through_week: int | None = None) -> List[Dict[str, Any]]:
     """
     Get current standings for a league by analyzing weekly scores
     and head-to-head matchups.
@@ -339,6 +339,12 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
     Queries all WeeklyScores for the league, groups by team,
     computes wins/losses/ties from head-to-head comparisons,
     and returns ordered standings.
+
+    through_week: when given, only weeks 1..through_week count -- for
+    seeding a playoff bracket off REGULAR SEASON performance only, not
+    contaminated by playoff weeks' own scores once they start counting
+    too (playoff_service uses this; every other caller leaves it None
+    for the existing full-season-to-date behavior, unchanged).
 
     Returns:
         List of dicts with: team_id, team_name, wins, losses, ties,
@@ -357,9 +363,10 @@ async def get_standings(league_id: str, db: AsyncSession) -> List[Dict[str, Any]
         return []
 
     # Get all weekly scores for this league
-    scores_result = await db.execute(
-        select(WeeklyScore).where(WeeklyScore.league_id == league_id)
-    )
+    scores_query = select(WeeklyScore).where(WeeklyScore.league_id == league_id)
+    if through_week is not None:
+        scores_query = scores_query.where(WeeklyScore.week <= through_week)
+    scores_result = await db.execute(scores_query)
     all_scores = scores_result.scalars().all()
 
     if not all_scores:
