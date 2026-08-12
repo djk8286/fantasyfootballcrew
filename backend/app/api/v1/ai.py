@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.models.team import Team
 from app.models.league import League
 from app.models.player import Player
@@ -49,13 +50,19 @@ class BetAnalysisRequest(BaseModel):
 
 
 @router.post("/lineup")
+@limiter.limit("10/hour")
 async def analyze_lineup(
-    request: LineupAnalysisRequest,
+    request: Request,
+    body: LineupAnalysisRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get AI lineup/start-sit analysis for a team's current roster."""
-    result = await db.execute(select(Team).where(Team.id == request.team_id))
+    """Get AI lineup/start-sit analysis for a team's current roster.
+    Rate-limited (unlike everything else in this router before this) --
+    each call is a real LLM API request once a key is configured, so an
+    unlimited endpoint is a real cost/abuse surface, not just a
+    theoretical one."""
+    result = await db.execute(select(Team).where(Team.id == body.team_id))
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
@@ -76,15 +83,17 @@ async def analyze_lineup(
 
 
 @router.post("/trade")
+@limiter.limit("10/hour")
 async def analyze_trade(
-    request: TradeAnalysisRequest,
+    request: Request,
+    body: TradeAnalysisRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get AI evaluation of a proposed trade."""
     result = await db.execute(
         select(Transaction).where(
-            Transaction.id == request.trade_id,
+            Transaction.id == body.trade_id,
             Transaction.type == TransactionType.TRADE,
         )
     )
@@ -128,12 +137,14 @@ async def analyze_trade(
 
 
 @router.post("/bet")
+@limiter.limit("10/hour")
 async def analyze_bet(
-    request: BetAnalysisRequest,
+    request: Request,
+    body: BetAnalysisRequest,
     current_user: User = Depends(get_current_user),
 ):
     """Freeform betting-angle analysis. No live odds/weather data source exists yet,
     so this passes the user's own description straight to the LLM."""
     service = _get_ai_service()
-    analysis = await service.analyze_bet(matchup={"description": request.prompt}, lines={})
+    analysis = await service.analyze_bet(matchup={"description": body.prompt}, lines={})
     return {"analysis": analysis}
