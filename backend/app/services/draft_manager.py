@@ -26,7 +26,17 @@ from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
 # positions (CB, DE, DT, OL, G, OT, T, OLB, C, SS, P, FS, LS, ILB, FB, NT,
 # OG, S, ...) that this app cannot currently score at all -- those are
 # excluded from the draft pool, not from general player browsing/search.
-FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
+# DB/DL/LB (individual defensive players) added here -- they were synced
+# from Sleeper and sitting in the database the whole time, but excluded
+# from this set meant they never appeared as draftable at all (the
+# available-players query below filters on membership in this set). The
+# CPU draft AI's own position-priority dicts (get_ai_mock_pick) don't
+# have entries for these three, so CPU teams still won't draft them --
+# that's intentional for now, not an oversight: CPU_STARTER_SLOTS has no
+# IDP slots to want yet (no league has any IDP roster-slot concept
+# either), so there's nothing to safely give a CPU a reason to draft one.
+# Humans can draft them manually.
+FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF", "DB", "DL", "LB"}
 
 # Standard starting-lineup slots and realistic bench caps, used by
 # get_ai_mock_pick's need scoring below. A human drafter reliably fills
@@ -375,6 +385,32 @@ def _season_points_fields(player: Player | None, scoring_config: dict) -> dict:
     }
 
 
+def _projected_points_field(player: Player | None, scoring_config: dict) -> dict:
+    """projected_points: a simple, honestly-labeled 2026 estimate, not a
+    real projections model -- this app has no external projections data
+    source (same limitation the AI service's own bet-analysis docstring
+    already admits for odds/weather, and the same "simple estimate from
+    the best real number available" approach get_season_schedule already
+    uses for future weeks). Assume repeat production absent any other
+    information: last season's actual total, a legitimate baseline
+    projection method on its own, not a placeholder pretending to be more
+    than it is.
+
+    Deliberately reads player.last_season_stats directly rather than
+    going through effective_season_stats (season_points' source) -- once
+    the real 2026 season starts and gets synced, effective_season_stats
+    switches to live current-season data, which would make season_points
+    and projected_points collapse into showing the exact same number all
+    year. Keeping this pinned to last season's archived total instead
+    means it stays a stable preseason baseline a user can compare their
+    actual in-season pace against, which is the more useful thing "2025
+    actual vs. 2026 projected" side by side is actually for."""
+    if not player:
+        return {"projected_points": None}
+    stats = player.last_season_stats or {}
+    return {"projected_points": calculate_player_score(stats, scoring_config, player.position)}
+
+
 def _headline_and_raw_stats_fields(player: Player | None) -> dict:
     """headline_stats + stats for a (possibly None) player, via
     effective_season_stats -- same reasoning as _season_points_fields
@@ -444,14 +480,27 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     result = await db.execute(available_query)
     available_players = result.scalars().all()
 
+    # DB/DL/LB all fall outside the static tier/rank name list (it only
+    # covers QB/RB/WR/TE + some K/team-DEF names -- see get_tier_names),
+    # so get_player_rank_from_list ties every one of them at the same
+    # fallback rank=1000. That's fine for the earlier "excluded from the
+    # draft pool entirely" state, but now that they're real draftable
+    # players it means zero distinction between a Pro Bowl linebacker and
+    # a practice-squad one -- purely alphabetical. Give them a real rank
+    # instead, computed from actual 2025 production (same
+    # effective_season_stats + calculate_player_score pipeline
+    # season_points already uses below) rather than another hand-guessed
+    # name list -- ranks placed right after 1000 so they can't collide
+    # with or reorder anything in the tuned static list.
+    idp_rank_by_id = build_idp_rank_by_id(available_players, scoring_config)
+
     # Sort by rank (now truly sequential), then position priority.
     # get_player_rank_from_list is an O(1) precomputed lookup (see module
     # level) -- it used to rebuild the tier list and linearly substring-scan
     # it for every one of these players on every call.
     pos_order = ["RB", "WR", "QB", "TE", "K", "DEF", "DB", "DL", "LB"]
     def sort_key(p: Player) -> tuple:
-        full_name = f"{p.first_name} {p.last_name}"
-        rank = get_player_rank_from_list(full_name)
+        rank = get_rank_score(p, idp_rank_by_id)
         pos_idx = pos_order.index(p.position) if p.position in pos_order else 99
         return (rank, pos_idx, p.last_name or "")
 
@@ -548,10 +597,11 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "bye_week": p.bye_week,
                 "injury_status": p.injury_status,
                 "fantasy_positions": p.fantasy_positions,
-                "rank_score": get_player_rank_from_list(f"{p.first_name} {p.last_name}"),
+                "rank_score": get_rank_score(p, idp_rank_by_id),
                 "pos_rank": pos_rank_map.get(p.id, 0),
                 **_headline_and_raw_stats_fields(p),
                 **_season_points_fields(p, scoring_config),
+                **_projected_points_field(p, scoring_config),
             }
             for p in available_players
         ],
@@ -680,6 +730,49 @@ def get_player_rank_from_list(full_name: str) -> int:
 def get_player_tier(full_name: str) -> int:
     """Tier 1-4 for a known star player, else 5 (unranked)."""
     return _TIER_BY_NORMALIZED_NAME.get(_normalize_name(full_name), 5)
+
+
+IDP_POSITIONS = {"DB", "DL", "LB"}
+
+
+def build_idp_rank_by_id(players, scoring_config: dict) -> dict[str, int]:
+    """Real, data-driven ranks for DB/DL/LB players -- get_player_rank_from_list
+    has no static-list coverage for any of them (see get_tier_names), so
+    without this every one of them ties at the same fallback rank=1000.
+    Ranked by last season's actual production (effective_season_stats +
+    calculate_player_score -- the same pipeline season_points already uses),
+    best first, starting at 1001 so this can never collide with or reorder
+    a rank inside the tuned static list (which tops out at len(_SEQUENTIAL_
+    RANKINGS), well under 1000). players only needs .id/.position/.stats/
+    .stats_year/.last_season_stats/.last_season_year -- real Player rows or
+    anything duck-typed the same way."""
+    scored = [
+        (p.id, calculate_player_score(effective_season_stats(p)[0], scoring_config, p.position))
+        for p in players
+        if p.position in IDP_POSITIONS
+    ]
+    scored.sort(key=lambda ps: -ps[1])
+    return {pid: 1001 + i for i, (pid, _) in enumerate(scored)}
+
+
+def get_rank_score(player, idp_rank_by_id: dict[str, int]) -> int:
+    """rank_score for a player: their computed IDP rank if they're DB/DL/LB
+    (build_idp_rank_by_id), else the static tier-list rank if they're on it,
+    else the same 1000 fallback everyone else (unranked K, deep-bench skill
+    players, ...) has always gotten.
+
+    IDP positions are checked BEFORE the static list, not just as its
+    fallback -- get_tier_names' static list is name-only, no position, and
+    is documented to only ever contain QB/RB/WR/TE/K/team-DEF names. A
+    real, confirmed example of why that matters: there's a real backup LB
+    named "Justin Jefferson" -- an exact name collision with the actual
+    star WR who IS on tier 1. Falling through to the static list first
+    would silently hand a bench linebacker a WR1's rank. Checking IDP
+    positions first makes any such collision structurally impossible
+    instead of relying on it not coming up."""
+    if player.position in IDP_POSITIONS:
+        return idp_rank_by_id.get(player.id, 1000)
+    return get_player_rank_from_list(f"{player.first_name} {player.last_name}")
 
 
 async def get_ai_mock_pick(

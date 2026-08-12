@@ -219,6 +219,69 @@ class TestDefenseScoring:
         assert score == 10.0
 
 
+# ─── IDP (individual defensive player) scoring ───────────────────────
+#
+# Stat dicts below are real 2025 season totals pulled directly from
+# Sleeper (/v1/stats/nfl/regular/2025) for Fred Warner (LB), Nick Bosa
+# (DL), and Minkah Fitzpatrick (DB) -- not synthetic fixtures. Each
+# includes real extra keys (idp_qb_hit, idp_sack_yd, gp, gs, def_snp,
+# ...) that DEFAULT_SCORING deliberately has no rule for, specifically to
+# confirm those are silently ignored rather than needing to be stripped
+# out first.
+
+
+class TestIDPScoring:
+    def test_lb_fred_warner_2025(self, default_scoring):
+        stats = {
+            "bonus_tkl_10p": 3.0, "def_snp": 330.0, "gms_active": 17.0,
+            "gp": 6.0, "gs": 6.0, "idp_ff": 2.0, "idp_fum_rec": 1.0,
+            "idp_pass_def": 3.0, "idp_tkl": 51.0, "idp_tkl_ast": 22.0,
+            "idp_tkl_loss": 2.0, "idp_tkl_solo": 29.0,
+        }
+        score = calculate_player_score(stats, default_scoring, "LB")
+        # solo 29*1 (29) + ast 22*0.5 (11) + tkl_loss 2*2 (4) + ff 2*4 (8)
+        # + fum_rec 1*4 (4) + pass_def 3*2 (6) = 62
+        assert score == 62.0
+
+    def test_dl_nick_bosa_2025(self, default_scoring):
+        stats = {
+            "def_snp": 119.0, "gp": 3.0, "gs": 3.0, "idp_ff": 2.0,
+            "idp_fum_rec": 1.0, "idp_qb_hit": 3.0, "idp_sack": 2.0,
+            "idp_sack_yd": 9.0, "idp_tkl": 17.0, "idp_tkl_ast": 8.0,
+            "idp_tkl_loss": 4.0, "idp_tkl_solo": 9.0,
+        }
+        score = calculate_player_score(stats, default_scoring, "DL")
+        # solo 9*1 (9) + ast 8*0.5 (4) + tkl_loss 4*2 (8) + sack 2*4 (8)
+        # + ff 2*4 (8) + fum_rec 1*4 (4) = 41 (idp_qb_hit/idp_sack_yd unscored)
+        assert score == 41.0
+
+    def test_db_minkah_fitzpatrick_2025(self, default_scoring):
+        stats = {
+            "def_snp": 845.0, "gp": 14.0, "gs": 14.0, "idp_ff": 1.0,
+            "idp_fum_rec": 2.0, "idp_int": 1.0, "idp_int_ret_yd": 7.0,
+            "idp_pass_def": 6.0, "idp_qb_hit": 2.0, "idp_sack": 1.0,
+            "idp_sack_yd": 9.0, "idp_tkl": 74.0, "idp_tkl_ast": 18.0,
+            "idp_tkl_loss": 4.0, "idp_tkl_solo": 56.0, "penalty": 4.0,
+            "penalty_yd": 73.0,
+        }
+        score = calculate_player_score(stats, default_scoring, "DB")
+        # solo 56*1 (56) + ast 18*0.5 (9) + tkl_loss 4*2 (8) + sack 1*4 (4)
+        # + int 1*6 (6) + ff 1*4 (4) + fum_rec 2*4 (8) + pass_def 6*2 (12) = 107
+        assert score == 107.0
+
+    def test_idp_stats_dont_leak_into_offense_scoring(self, default_scoring, qb_stats):
+        """A skill player's stats never contain idp_* keys in practice, but
+        confirm the engine doesn't need position gating to stay correct if
+        they somehow did -- adding "idp" as a category earlier must not
+        change any existing QB/RB/WR/TE/K/DEF score."""
+        score = calculate_player_score(qb_stats, default_scoring, "QB")
+        from app.services.scoring_engine import calculate_player_score as _calc
+        assert score == _calc(qb_stats, {k: v for k, v in default_scoring.items() if k != "idp"}, "QB")
+
+    def test_empty_idp_stats(self, default_scoring):
+        assert calculate_player_score({}, default_scoring, "LB") == 0.0
+
+
 # ─── Edge cases ──────────────────────────────────────────────────────
 
 

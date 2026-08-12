@@ -37,6 +37,18 @@ from typing import Dict, Any, Optional, List, Union
 #     fgm_20_29/fgm_30_39/fgm_40_49/fgm_50_59/fgm_50p (no bucket below 20
 #     was observed; omitted rather than guessing a key that may not exist)
 #   - "xp" -> Sleeper's made-extra-point key is "xpm"
+#   - "idp_*" keys -- an individual defender's OWN stats, distinct from the
+#     "defense" category above (which is the TEAM's aggregate takeaways/
+#     sacks, credited whole regardless of which of the 11 players on the
+#     field made the play). Confirmed against real 2025 season data for
+#     Fred Warner (LB), Nick Bosa (DL), and Minkah Fitzpatrick (DB) via
+#     /v1/stats/nfl/regular/2025 -- e.g. Bosa's real record includes
+#     idp_sack: 2.0, idp_tkl_solo: 9.0, idp_ff: 2.0, none of which had any
+#     scoring rule to match against before this. idp_qb_hit and
+#     idp_sack_yd exist in the real data too but are deliberately left out
+#     of the *default* template (uncommon to score separately from sacks
+#     in most standard IDP formats) -- a league can still add either via
+#     its own custom scoring rules.
 DEFAULT_SCORING = {
     "passing": {
         "pass_yd": 0.04,
@@ -73,6 +85,21 @@ DEFAULT_SCORING = {
         "fgm_50_59": 5,
         "fgm_50p": 5,
         "xpm": 1,
+    },
+    # Individual defensive player (IDP) stats -- DL/LB/DB. Standard,
+    # commonly-used point values (same "reasonable default a league can
+    # customize" spirit as every other category here, not a single
+    # canonical standard -- IDP scoring conventions vary more across
+    # platforms than offense does).
+    "idp": {
+        "idp_tkl_solo": 1,
+        "idp_tkl_ast": 0.5,
+        "idp_tkl_loss": 2,
+        "idp_sack": 4,
+        "idp_int": 6,
+        "idp_ff": 4,
+        "idp_fum_rec": 4,
+        "idp_pass_def": 2,
     },
     "bonus": {
         "pass_300_yds": 3,
@@ -405,7 +432,7 @@ def validate_scoring_config(scoring_config: dict) -> List[str]:
     if not scoring_config:
         return ["Scoring config is empty"]
 
-    valid_categories = {"passing", "rushing", "receiving", "defense", "kicking", "bonus", "custom"}
+    valid_categories = {"passing", "rushing", "receiving", "defense", "idp", "kicking", "bonus", "custom"}
     for category in scoring_config:
         if category not in valid_categories:
             warnings.append(f"Unknown category: '{category}'")

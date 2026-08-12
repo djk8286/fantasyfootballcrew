@@ -23,6 +23,11 @@ interface PlayerPoolPlayer {
   headline_stats?: Record<string, number> | null;
   season_points?: number | null;
   season_points_year?: number | null;
+  // Simple, honestly-labeled 2026 estimate (not a real projections model --
+  // this app has no external projections data source, see the backend's
+  // _projected_points_field docstring). Currently just last season's actual
+  // total, same source as season_points.
+  projected_points?: number | null;
 }
 
 // Compact "<team> · <2-3 headline stats> · <season total>" line for the
@@ -50,6 +55,11 @@ function PlayerStatsLine({ player }: { player: PlayerPoolPlayer }) {
         <span className="text-gold-400/80 font-semibold">
           {Math.round(player.season_points * 10) / 10} pts
           {player.season_points_year ? ` (${player.season_points_year})` : ""}
+        </span>
+      )}
+      {player.projected_points != null && (
+        <span className="text-blue-400/70 font-semibold" title="Simple estimate based on last season's production -- not a real projections model">
+          {Math.round(player.projected_points * 10) / 10} proj
         </span>
       )}
     </div>

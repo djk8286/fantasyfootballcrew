@@ -17,21 +17,33 @@ interface ScoringConfig {
   rushing: Record<string, number>;
   receiving: Record<string, number>;
   defense: Record<string, number>;
+  idp?: Record<string, number>;
   kicking: Record<string, number>;
   bonus: Record<string, number>;
   [key: string]: unknown;
 }
+
+// Stat keys throughout this file (presets, labels) must match the REAL keys
+// Sleeper's stats API returns and the backend's scoring engine reads
+// (app/services/scoring_engine.py's DEFAULT_SCORING) -- they used to be a
+// plausible-looking but wrong hand-guess (pass_yds/int/def_sack/fg_0_39/xp,
+// none of which exist in a real Sleeper stats payload), so every preset
+// button silently produced a scoring_config that scored those categories as
+// 0 for every player, every week. "Reset to Defaults" was never affected --
+// it fetches the real defaults from the backend instead of using these.
+const IDP_DEFAULTS = { idp_tkl_solo: 1, idp_tkl_ast: 0.5, idp_tkl_loss: 2, idp_sack: 4, idp_int: 6, idp_ff: 4, idp_fum_rec: 4, idp_pass_def: 2 };
 
 const PRESETS = [
   {
     label: "Standard (non-PPR)",
     desc: "Classic scoring, 4pt passing TDs",
     build: (): ScoringConfig => ({
-      passing: { pass_yds: 0.04, pass_td: 4, int: -2, pass_2pt: 2 },
-      rushing: { rush_yds: 0.1, rush_td: 6, rush_2pt: 2 },
-      receiving: { rec: 0, rec_yds: 0.1, rec_td: 6, rec_2pt: 2 },
-      defense: { def_sack: 1, def_int: 2, def_fum_rec: 2, def_safety: 2, def_td: 6, st_fum_rec: 2, st_td: 6, def_ret_yds: 0.02 },
-      kicking: { fg_0_39: 3, fg_40_49: 4, fg_50_plus: 5, xp: 1 },
+      passing: { pass_yd: 0.04, pass_td: 4, pass_int: -2, pass_2pt: 2 },
+      rushing: { rush_yd: 0.1, rush_td: 6, rush_2pt: 2 },
+      receiving: { rec: 0, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
+      defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
+      idp: { ...IDP_DEFAULTS },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
       bonus: { pass_300_yds: 0, rush_100_yds: 0, rec_100_yds: 0 },
     }),
   },
@@ -39,11 +51,12 @@ const PRESETS = [
     label: "Half-PPR",
     desc: "0.5 PPR, 4pt passing TDs",
     build: (): ScoringConfig => ({
-      passing: { pass_yds: 0.04, pass_td: 4, int: -2, pass_2pt: 2 },
-      rushing: { rush_yds: 0.1, rush_td: 6, rush_2pt: 2 },
-      receiving: { rec: 0.5, rec_yds: 0.1, rec_td: 6, rec_2pt: 2 },
-      defense: { def_sack: 1, def_int: 2, def_fum_rec: 2, def_safety: 2, def_td: 6, st_fum_rec: 2, st_td: 6, def_ret_yds: 0.02 },
-      kicking: { fg_0_39: 3, fg_40_49: 4, fg_50_plus: 5, xp: 1 },
+      passing: { pass_yd: 0.04, pass_td: 4, pass_int: -2, pass_2pt: 2 },
+      rushing: { rush_yd: 0.1, rush_td: 6, rush_2pt: 2 },
+      receiving: { rec: 0.5, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
+      defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
+      idp: { ...IDP_DEFAULTS },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
       bonus: { pass_300_yds: 0, rush_100_yds: 0, rec_100_yds: 0 },
     }),
   },
@@ -51,11 +64,12 @@ const PRESETS = [
     label: "Full PPR",
     desc: "1.0 PPR, 6pt passing TDs (popular)",
     build: (): ScoringConfig => ({
-      passing: { pass_yds: 0.04, pass_td: 6, int: -2, pass_2pt: 2 },
-      rushing: { rush_yds: 0.1, rush_td: 6, rush_2pt: 2 },
-      receiving: { rec: 1.0, rec_yds: 0.1, rec_td: 6, rec_2pt: 2 },
-      defense: { def_sack: 1, def_int: 2, def_fum_rec: 2, def_safety: 2, def_td: 6, st_fum_rec: 2, st_td: 6, def_ret_yds: 0.02 },
-      kicking: { fg_0_39: 3, fg_40_49: 4, fg_50_plus: 5, xp: 1 },
+      passing: { pass_yd: 0.04, pass_td: 6, pass_int: -2, pass_2pt: 2 },
+      rushing: { rush_yd: 0.1, rush_td: 6, rush_2pt: 2 },
+      receiving: { rec: 1.0, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
+      defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
+      idp: { ...IDP_DEFAULTS },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
       bonus: { pass_300_yds: 3, rush_100_yds: 3, rec_100_yds: 3 },
     }),
   },
@@ -63,37 +77,53 @@ const PRESETS = [
 
 const LABELS: Record<string, Record<string, string>> = {
   passing: {
-    pass_yds: "Passing Yards (per yard)",
+    pass_yd: "Passing Yards (per yard)",
     pass_td: "Passing TD",
-    int: "Interception",
+    pass_int: "Interception",
     pass_2pt: "2-Pt Conversion (Pass)",
   },
   rushing: {
-    rush_yds: "Rushing Yards (per yard)",
+    rush_yd: "Rushing Yards (per yard)",
     rush_td: "Rushing TD",
     rush_2pt: "2-Pt Conversion (Rush)",
   },
   receiving: {
     rec: "Per Reception (PPR)",
-    rec_yds: "Receiving Yards (per yard)",
+    rec_yd: "Receiving Yards (per yard)",
     rec_td: "Receiving TD",
     rec_2pt: "2-Pt Conversion (Rec)",
   },
   defense: {
-    def_sack: "Sack",
-    def_int: "Interception",
-    def_fum_rec: "Fumble Recovery",
-    def_safety: "Safety",
+    sack: "Sack",
+    int: "Interception",
+    fum_rec: "Fumble Recovery",
+    safe: "Safety",
     def_td: "Defensive TD",
     st_fum_rec: "ST Fumble Recovery",
     st_td: "Special Teams TD",
-    def_ret_yds: "Return Yards (per yard)",
+    kr_yd: "Kick Return Yards (per yard)",
+    pr_yd: "Punt Return Yards (per yard)",
+  },
+  // Individual defensive player (DL/LB/DB) stats -- distinct from "defense"
+  // above, which is the team's own aggregate takeaways/sacks regardless of
+  // which player made the play.
+  idp: {
+    idp_tkl_solo: "Solo Tackle",
+    idp_tkl_ast: "Assisted Tackle",
+    idp_tkl_loss: "Tackle For Loss",
+    idp_sack: "Sack",
+    idp_int: "Interception",
+    idp_ff: "Forced Fumble",
+    idp_fum_rec: "Fumble Recovery",
+    idp_pass_def: "Pass Defended",
   },
   kicking: {
-    fg_0_39: "FG 0-39 yards",
-    fg_40_49: "FG 40-49 yards",
-    fg_50_plus: "FG 50+ yards",
-    xp: "Extra Point",
+    fgm_20_29: "FG 20-29 yards",
+    fgm_30_39: "FG 30-39 yards",
+    fgm_40_49: "FG 40-49 yards",
+    fgm_50_59: "FG 50-59 yards",
+    fgm_50p: "FG 50+ yards",
+    xpm: "Extra Point",
   },
   bonus: {
     pass_300_yds: "300-Yard Passing Bonus",
@@ -107,11 +137,12 @@ const CATEGORY_ICONS: Record<string, string> = {
   rushing: "💨",
   receiving: "✋",
   defense: "🛡️",
+  idp: "🎯",
   kicking: "🦵",
-  bonus: "🎯",
+  bonus: "⭐",
 };
 
-const CATEGORY_ORDER = ["passing", "rushing", "receiving", "defense", "kicking", "bonus"];
+const CATEGORY_ORDER = ["passing", "rushing", "receiving", "defense", "idp", "kicking", "bonus"];
 
 export default function ScoringPage() {
   const params = useParams();
