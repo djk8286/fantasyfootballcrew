@@ -128,9 +128,18 @@ async def calculate_week(
     week: int,
     year: int,
     db: AsyncSession,
+    sleeper_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Calculate scores for all teams in a league for a given week.
+
+    sleeper_stats: pre-fetched fetch_weekly_stats(year, week) result, so a
+    caller scoring many leagues for the same week (the scheduler's
+    auto-calculate pass) can fetch it once instead of every league
+    re-fetching the identical payload. None (the default, and what the
+    commissioner-triggered manual endpoint still passes) means "fetch it
+    yourself," preserving this function's original standalone behavior
+    exactly.
 
     For each team:
     1. Reads the roster (list of player IDs) from the Team model
@@ -180,13 +189,19 @@ async def calculate_week(
         for p in players:
             player_positions[p.id] = p.position
 
-    # Try to fetch stats from Sleeper API; fall back to Player.week_stats
-    try:
-        sleeper_stats = await fetch_weekly_stats(year, week)
+    # Use the caller's pre-fetched stats if given; otherwise fetch our own
+    # (falls back to Player.week_stats per-player below on failure either
+    # way -- this only changes where the Sleeper call happens, not what
+    # happens when there isn't one to use).
+    if sleeper_stats is not None:
         use_sleeper = True
-    except Exception:
-        use_sleeper = False
-        sleeper_stats = {}
+    else:
+        try:
+            sleeper_stats = await fetch_weekly_stats(year, week)
+            use_sleeper = True
+        except Exception:
+            use_sleeper = False
+            sleeper_stats = {}
 
     results = []
 
