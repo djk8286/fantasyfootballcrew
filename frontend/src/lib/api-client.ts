@@ -173,6 +173,16 @@ export const teamsApi = {
     }),
 };
 
+// Notifications
+export const notificationsApi = {
+  list: (unreadOnly = false) =>
+    apiRequest(`/api/v1/notifications${unreadOnly ? "?unread_only=true" : ""}`),
+  markRead: (id: string) =>
+    apiRequest(`/api/v1/notifications/${id}/read`, { method: "POST" }),
+  markAllRead: () =>
+    apiRequest("/api/v1/notifications/read-all", { method: "POST" }),
+};
+
 // Lineups (starter/bench)
 export const lineupsApi = {
   get: (teamId: string, week: number, year: number) =>

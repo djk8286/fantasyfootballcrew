@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { isLoggedIn, logout } from "@/lib/api-client";
+import NotificationBell from "./NotificationBell";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
@@ -69,15 +70,18 @@ export default function Header() {
 
           {/* Auth Buttons -- desktop only; folded into the mobile menu below
               instead of cramming a third cluster next to the logo + hamburger */}
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-1">
             {loggedIn ? (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="text-surface-300 hover:text-white transition-colors text-sm font-medium px-4 py-2"
-              >
-                Log Out
-              </button>
+              <>
+                <NotificationBell />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="text-surface-300 hover:text-white transition-colors text-sm font-medium px-4 py-2"
+                >
+                  Log Out
+                </button>
+              </>
             ) : (
               <>
                 <Link
@@ -95,6 +99,15 @@ export default function Header() {
               </>
             )}
           </div>
+
+          {/* Mobile: bell stays visible outside the collapsed hamburger menu
+              (unlike Dashboard/Features/etc below) since it's time-sensitive
+              -- burying it one tap deeper would defeat the point of a badge. */}
+          {loggedIn && (
+            <div className="md:hidden">
+              <NotificationBell />
+            </div>
+          )}
 
           {/* Mobile menu toggle -- the nav/auth links above are display:none
               below md, so this is the only way to reach Dashboard/Features/

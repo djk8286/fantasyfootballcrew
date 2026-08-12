@@ -13,11 +13,12 @@ from app.api.v1.trades import router as trades_router
 from app.api.v1.waivers import router as waivers_router
 from app.api.v1.coaches import router as coaches_router
 from app.api.v1.lineups import router as lineups_router
+from app.api.v1.notifications import router as notifications_router
 
 __all__ = [
     "auth_router", "users_router", "leagues_router",
     "teams_router", "players_router", "scoring_router",
     "ai_router", "drafts_router", "standings_router",
     "commissioner_router", "trades_router", "waivers_router",
-    "coaches_router", "lineups_router",
+    "coaches_router", "lineups_router", "notifications_router",
 ]

@@ -12,6 +12,8 @@ from app.schemas.commissioner import (
     TradeReview, TradeRead, DraftOrderUpdate,
 )
 from app.api.deps import get_current_user, require_commissioner
+from app.services.notification_service import notify_team_owners
+from app.models.notification import NotificationType
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -162,9 +164,10 @@ async def review_trade(
     if trade.status != TransactionStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Trade already {trade.status.value}")
 
+    details = trade.details or {}
+    target_team_id = details.get("target_team_id")
+
     if data.action == "approve":
-        details = trade.details or {}
-        target_team_id = details.get("target_team_id")
         offered_ids = set(details.get("offered_player_ids") or [])
         requested_ids = set(details.get("requested_player_ids") or [])
 
@@ -233,8 +236,26 @@ async def review_trade(
             )
 
         trade.status = TransactionStatus.APPROVED
+        trade_link = f"/leagues/{league_id}/trades"
+        await notify_team_owners(db, proposer, NotificationType.TRADE_APPROVED,
+                                  f"Your trade with {target.name} was approved.", league_id, trade_link)
+        await notify_team_owners(db, target, NotificationType.TRADE_APPROVED,
+                                  f"Your trade with {proposer.name} was approved.", league_id, trade_link)
     elif data.action == "deny":
         trade.status = TransactionStatus.DENIED
+        result = await db.execute(select(Team).where(Team.id.in_({trade.team_id, target_team_id})))
+        teams_by_id = {t.id: t for t in result.scalars().all()}
+        proposer = teams_by_id.get(trade.team_id)
+        target = teams_by_id.get(target_team_id)
+        trade_link = f"/leagues/{league_id}/trades"
+        if proposer:
+            other_name = target.name if target else "the other team"
+            await notify_team_owners(db, proposer, NotificationType.TRADE_DENIED,
+                                      f"Your trade with {other_name} was denied.", league_id, trade_link)
+        if target:
+            other_name = proposer.name if proposer else "the other team"
+            await notify_team_owners(db, target, NotificationType.TRADE_DENIED,
+                                      f"Your trade with {other_name} was denied.", league_id, trade_link)
     else:
         raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'")
 

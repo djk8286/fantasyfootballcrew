@@ -13,6 +13,8 @@ from app.api.deps import get_current_user, require_commissioner
 from app.services.draft_manager import get_player_rank_from_list, FANTASY_POSITIONS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
+from app.services.notification_service import notify_team_owners
+from app.models.notification import NotificationType
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
 
@@ -309,6 +311,31 @@ async def process_waivers(
         new_priority.append(team_id)
 
     league.waiver_priority = new_priority
+
+    # Notify affected teams -- granted/denied are final outcomes worth
+    # telling someone about; skipped isn't (it just means "will retry
+    # next run", not resolved yet). One batched player-name lookup rather
+    # than a query per notification.
+    waiver_link = f"/leagues/{league_id}/waivers"
+    notify_player_ids = {e["add_player_id"] for e in granted + denied if e.get("add_player_id")}
+    player_names: dict[str, str] = {}
+    if notify_player_ids:
+        presult = await db.execute(select(Player).where(Player.id.in_(notify_player_ids)))
+        player_names = {p.id: f"{p.first_name} {p.last_name}" for p in presult.scalars().all()}
+
+    for entry in granted:
+        team = teams_by_id.get(entry["team_id"])
+        if team:
+            pname = player_names.get(entry["add_player_id"], "a player")
+            await notify_team_owners(db, team, NotificationType.WAIVER_APPROVED,
+                                      f"Your waiver claim for {pname} was approved.", league_id, waiver_link)
+    for entry in denied:
+        team = teams_by_id.get(entry["team_id"])
+        if team and entry.get("add_player_id"):
+            pname = player_names.get(entry["add_player_id"], "a player")
+            await notify_team_owners(db, team, NotificationType.WAIVER_DENIED,
+                                      f"Your waiver claim for {pname} was denied.", league_id, waiver_link)
+
     await db.commit()
 
     return {
