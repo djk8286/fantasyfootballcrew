@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.models.team import Team
-from app.models.coach import Coach
+from app.models.coach import Coach, CoachPosition
 from app.models.user import User
 from app.schemas.coach import CoachCreate, CoachRead, CoachUpdate
 from app.api.deps import get_current_user
@@ -25,6 +25,30 @@ def _require_team_owner(team: Team, current_user: User) -> None:
         raise HTTPException(status_code=403, detail="You do not own this team")
 
 
+async def _reject_if_position_filled(
+    team_id: str, position: CoachPosition, db: AsyncSession, exclude_coach_id: str | None = None
+) -> None:
+    """Front-Office finish-out (Phase 2 Step 1): one active coach per
+    position per team, four total -- fulfills the marketing copy's
+    existing "four coaching slots" promise, which was never actually
+    enforced. Counts only is_active coaches, same semantic is_active
+    already had for scoring (standings_service.py's _coach_bonus_sum only
+    sums active coaches), so benching one frees its slot immediately."""
+    query = select(Coach).where(
+        Coach.team_id == team_id,
+        Coach.position == position,
+        Coach.is_active == True,  # noqa: E712
+    )
+    if exclude_coach_id is not None:
+        query = query.where(Coach.id != exclude_coach_id)
+    result = await db.execute(query)
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This team already has an active {position.value} coach",
+        )
+
+
 @router.post("/teams/{team_id}/coaches", response_model=CoachRead, status_code=201)
 async def create_coach(
     team_id: str,
@@ -34,6 +58,7 @@ async def create_coach(
 ):
     team = await _get_team(team_id, db)
     _require_team_owner(team, current_user)
+    await _reject_if_position_filled(team_id, data.position, db)
 
     coach = Coach(
         name=data.name,
@@ -50,6 +75,9 @@ async def create_coach(
 
 @router.get("/teams/{team_id}/coaches", response_model=list[CoachRead])
 async def list_coaches(team_id: str, db: AsyncSession = Depends(get_db)):
+    # Deliberately no auth here -- matches this app's house style for
+    # team-level read endpoints (get_league_teams/get_team in teams.py are
+    # also unauthenticated public reads). Not a gap to close.
     result = await db.execute(select(Coach).where(Coach.team_id == team_id))
     return result.scalars().all()
 
@@ -68,6 +96,17 @@ async def update_coach(
 
     team = await _get_team(coach.team_id, db)
     _require_team_owner(team, current_user)
+
+    # The cap is enforced on create, but two paths through PATCH could
+    # still bypass it if not re-checked here: changing an existing
+    # coach's position onto one the team already has active, or
+    # reactivating a benched coach at a position that's since been filled
+    # by someone else.
+    is_position_change = data.position is not None and data.position != coach.position
+    is_reactivation = data.is_active is True and coach.is_active is False
+    if is_position_change or is_reactivation:
+        target_position = data.position if data.position is not None else coach.position
+        await _reject_if_position_filled(coach.team_id, target_position, db, exclude_coach_id=coach.id)
 
     if data.name is not None:
         coach.name = data.name
