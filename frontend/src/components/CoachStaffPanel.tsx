@@ -57,6 +57,22 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
     loadCoaches();
   }, [loadCoaches]);
 
+  // Cap-aware UI (backend's 400 is still the real source of truth --
+  // this is purely a nicer experience than showing a form that will just
+  // fail). Recompute from the live coaches list, not local form state.
+  const filledPositions = new Set(coaches.filter((c) => c.is_active).map((c) => c.position));
+  const availablePositions = COACH_POSITIONS.filter((p) => !filledPositions.has(p));
+  const staffFull = availablePositions.length === 0;
+
+  useEffect(() => {
+    // Keep the position select pointed at something still open, e.g.
+    // right after a successful add fills the previously-selected slot.
+    if (availablePositions.length > 0 && !availablePositions.includes(position)) {
+      setPosition(availablePositions[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coaches]);
+
   const handleAdd = async () => {
     if (!teamId || !name) return;
     setError("");
@@ -96,18 +112,22 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
 
       {canManage && (
         <div className="flex items-center gap-3 mb-4 flex-wrap">
-          <button
-            onClick={() => setShowForm(!showForm)}
-            disabled={!teamId}
-            className="ml-auto inline-flex items-center gap-1 bg-gold-400 hover:bg-gold-300 text-surface-900 px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
-          >
-            <Plus className="w-3 h-3" />
-            {showForm ? "Cancel" : "Add Coach"}
-          </button>
+          {staffFull ? (
+            <span className="ml-auto text-xs text-surface-500 font-medium">Coaching staff full (4/4)</span>
+          ) : (
+            <button
+              onClick={() => setShowForm(!showForm)}
+              disabled={!teamId}
+              className="ml-auto inline-flex items-center gap-1 bg-gold-400 hover:bg-gold-300 text-surface-900 px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+            >
+              <Plus className="w-3 h-3" />
+              {showForm ? "Cancel" : "Add Coach"}
+            </button>
+          )}
         </div>
       )}
 
-      {canManage && showForm && (
+      {canManage && showForm && !staffFull && (
         <div className="bg-surface-800 border border-surface-700 rounded-xl p-4 mb-4">
           <h3 className="text-sm font-semibold text-white mb-3">New Coach / Coordinator</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
@@ -128,7 +148,7 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
                 onChange={(e) => setPosition(e.target.value)}
                 className="w-full mt-1 px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-sm text-white"
               >
-                {COACH_POSITIONS.map((p) => (
+                {availablePositions.map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}
               </select>
@@ -141,6 +161,7 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
                 className="w-full mt-1 px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-sm text-white"
               >
                 <option value="flat_weekly">Flat weekly bonus</option>
+                <option value="win_bonus">Bonus for winning your matchup</option>
               </select>
             </div>
             <div>
@@ -153,7 +174,11 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
                 placeholder="e.g. 2.5"
                 className="w-full mt-1 px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500"
               />
-              <p className="text-[9px] text-surface-600 mt-0.5">Added to the team&apos;s score every week</p>
+              <p className="text-[9px] text-surface-600 mt-0.5">
+                {bonusType === "win_bonus"
+                  ? "Added only in weeks this team wins its matchup"
+                  : "Added to the team's score every week"}
+              </p>
             </div>
           </div>
           <button

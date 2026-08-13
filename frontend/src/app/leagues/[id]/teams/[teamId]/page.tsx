@@ -7,6 +7,7 @@ import { teamsApi, leaguesApi, playersApi, standingsApi, getCurrentUserId, isLog
 import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
+import CoachStaffPanel from "@/components/CoachStaffPanel";
 import {
   ChevronLeft,
   Bot,
@@ -15,6 +16,7 @@ import {
   Swords,
   Calendar,
   ListChecks,
+  Shield,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -309,6 +311,23 @@ export default function TeamPage() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Coaching Staff -- was previously invisible anywhere a team
+            owner could see it themselves; only the commissioner's admin
+            tab could show/manage coaches at all. The list itself renders
+            for any visitor (matches list_coaches being a public read,
+            same as Roster/Schedule above); management controls are
+            gated the same way "Set Lineup" already is. */}
+        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
+          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <Shield className="w-4 h-4 text-gold-400" />
+            Coaching Staff
+          </h3>
+          <CoachStaffPanel
+            teamId={teamId}
+            canManage={team.owner_id === currentUserId || team.co_owner_id === currentUserId}
+          />
         </div>
 
         {/* Schedule / results */}
