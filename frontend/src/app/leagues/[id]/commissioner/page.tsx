@@ -19,8 +19,11 @@ import {
   Shield,
   Ban,
   Users,
+  Mail,
+  Send,
+  Clock,
 } from "lucide-react";
-import { commissionerApi, leaguesApi, teamsApi, coachesApi } from "@/lib/api-client";
+import { commissionerApi, leaguesApi, teamsApi, coachesApi, invitesApi } from "@/lib/api-client";
 
 // ─── Types ───
 interface League {
@@ -76,7 +79,16 @@ interface Coach {
   is_active: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites";
+
+interface Invite {
+  id: string;
+  invited_email: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+}
 
 // Every other page that needs "this season's year" computes it (standings,
 // schedule, teams) -- this was the one spot still hardcoded, which would've
@@ -157,6 +169,7 @@ export default function CommissionerPage() {
             { id: "trades" as Tab, label: "Trades", icon: Ban },
             { id: "draft-order" as Tab, label: "Draft Order", icon: ArrowUpDown },
             { id: "coaches" as Tab, label: "Coaches", icon: Users },
+            { id: "invites" as Tab, label: "Invites", icon: Mail },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -189,6 +202,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "coaches" && (
           <CoachesPanel teams={teams} />
+        )}
+        {activeTab === "invites" && (
+          <InvitesPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -974,6 +990,180 @@ function CoachesPanel({ teams }: { teams: Team[] }) {
               >
                 <Trash2 className="w-4 h-4" />
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 5: INVITES
+// ═══════════════════════════════════════════
+
+const INVITE_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+  accepted: "bg-green-500/10 text-green-400 border-green-500/20",
+  revoked: "bg-surface-700 text-surface-400 border-surface-600",
+  expired: "bg-red-500/10 text-red-400 border-red-500/20",
+};
+
+function InvitesPanel({ leagueId }: { leagueId: string }) {
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [emailsInput, setEmailsInput] = useState("");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const loadInvites = useCallback(async () => {
+    try {
+      const data = await invitesApi.list(leagueId);
+      setInvites(data as Invite[]);
+    } catch {
+      // silent
+    } finally {
+      setLoading(false);
+    }
+  }, [leagueId]);
+
+  useEffect(() => {
+    loadInvites();
+  }, [loadInvites]);
+
+  const handleSend = async () => {
+    const emails = emailsInput
+      .split(/[\n,]/)
+      .map((e) => e.trim())
+      .filter(Boolean);
+    if (emails.length === 0) return;
+    setSending(true);
+    setError("");
+    setSuccess("");
+    try {
+      await invitesApi.send(leagueId, emails, message || undefined);
+      setSuccess(`Sent ${emails.length} invite${emails.length === 1 ? "" : "s"}!`);
+      setEmailsInput("");
+      setMessage("");
+      await loadInvites();
+      setTimeout(() => setSuccess(""), 4000);
+    } catch (err) {
+      // Rate-limited (10/hour) or a bad address in the batch -- surface the
+      // backend's actual message rather than a generic string.
+      setError(err instanceof Error ? err.message : "Failed to send invites");
+    }
+    setSending(false);
+  };
+
+  const handleRevoke = async (inviteId: string) => {
+    setError("");
+    try {
+      await invitesApi.revoke(leagueId, inviteId);
+      await loadInvites();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke invite");
+    }
+  };
+
+  return (
+    <div>
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
+          <p className="text-red-400 text-sm">{error}</p>
+        </div>
+      )}
+      {success && (
+        <div className="bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-2 mb-4">
+          <p className="text-green-400 text-sm">{success}</p>
+        </div>
+      )}
+
+      <div className="bg-surface-800 border border-surface-700 rounded-xl p-4 mb-4">
+        <h3 className="text-sm font-semibold text-white mb-3">Invite Managers by Email</h3>
+        <div className="grid gap-3">
+          <div>
+            <label className="text-[10px] text-surface-500 uppercase tracking-wider">
+              Email addresses
+            </label>
+            <textarea
+              value={emailsInput}
+              onChange={(e) => setEmailsInput(e.target.value)}
+              placeholder="One per line, or comma-separated&#10;e.g. alex@example.com, jamie@example.com"
+              rows={3}
+              className="w-full mt-1 px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500 resize-none"
+            />
+            <p className="text-[9px] text-surface-600 mt-0.5">Up to 20 at a time. Each gets a 14-day invite link.</p>
+          </div>
+          <div>
+            <label className="text-[10px] text-surface-500 uppercase tracking-wider">
+              Personal message (optional)
+            </label>
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="We've got a spot for you this season..."
+              className="w-full mt-1 px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500"
+            />
+          </div>
+        </div>
+        <button
+          onClick={handleSend}
+          disabled={sending || !emailsInput.trim()}
+          className="mt-3 inline-flex items-center gap-1.5 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-50"
+        >
+          {sending ? (
+            <div className="w-4 h-4 border-2 border-surface-900 border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Send className="w-4 h-4" />
+          )}
+          Send Invites
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-surface-500 py-8 text-sm">Loading invites...</div>
+      ) : invites.length === 0 ? (
+        <div className="text-center text-surface-500 py-12">
+          <Mail className="w-10 h-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">No invites sent yet</p>
+          <p className="text-xs text-surface-600 mt-1">Invite friends to fill open spots in this league</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {invites.map((inv) => (
+            <div
+              key={inv.id}
+              className="flex items-center justify-between bg-surface-800/50 border border-surface-700 rounded-xl px-4 py-3"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-surface-700 flex items-center justify-center shrink-0">
+                  <Mail className="w-4 h-4 text-surface-400" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-sm font-semibold text-white truncate block">{inv.invited_email}</span>
+                  <span className="text-[10px] text-surface-500 flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {inv.status === "pending" ? `Expires ${new Date(inv.expires_at).toLocaleDateString()}` : new Date(inv.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${INVITE_STATUS_COLORS[inv.status] || ""}`}>
+                  {inv.status}
+                </span>
+                {inv.status === "pending" && (
+                  <button
+                    onClick={() => handleRevoke(inv.id)}
+                    className="text-surface-500 hover:text-red-400 transition-colors"
+                    title="Revoke invite"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

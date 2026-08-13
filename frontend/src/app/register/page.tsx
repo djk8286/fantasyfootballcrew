@@ -1,13 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authApi } from "@/lib/api-client";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // See login/page.tsx's identical `next` handling -- set by the
+  // invite-accept landing page when a logged-out visitor needs to land
+  // back there after creating an account, instead of always /dashboard.
+  const next = searchParams.get("next") || "/dashboard";
+
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -28,7 +34,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const result = await authApi.register(
+      await authApi.register(
         form.email,
         form.username,
         form.password
@@ -40,7 +46,7 @@ export default function RegisterPage() {
         localStorage.setItem("ffc_token", loginData.access_token);
         localStorage.setItem("ffc_user_id", loginData.user?.id || "");
       }
-      router.push("/dashboard");
+      router.push(next);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Something went wrong";
@@ -50,6 +56,127 @@ export default function RegisterPage() {
     }
   };
 
+  return (
+    <>
+      {/* Error Message */}
+      {error && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm" role="alert">
+          {error}
+        </div>
+      )}
+
+      {/* Form */}
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="firstName"
+              className="block text-sm font-medium text-surface-300 mb-1.5"
+            >
+              First Name
+            </label>
+            <input
+              id="firstName"
+              type="text"
+              placeholder="John"
+              value={form.firstName}
+              onChange={handleChange}
+              className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="lastName"
+              className="block text-sm font-medium text-surface-300 mb-1.5"
+            >
+              Last Name
+            </label>
+            <input
+              id="lastName"
+              type="text"
+              placeholder="Doe"
+              value={form.lastName}
+              onChange={handleChange}
+              className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
+            />
+          </div>
+        </div>
+        <div>
+          <label
+            htmlFor="email"
+            className="block text-sm font-medium text-surface-300 mb-1.5"
+          >
+            Email
+          </label>
+          <input
+            id="email"
+            type="email"
+            required
+            placeholder="you@example.com"
+            value={form.email}
+            onChange={handleChange}
+            className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="username"
+            className="block text-sm font-medium text-surface-300 mb-1.5"
+          >
+            Username
+          </label>
+          <input
+            id="username"
+            type="text"
+            required
+            placeholder="footballfan23"
+            value={form.username}
+            onChange={handleChange}
+            className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="password"
+            className="block text-sm font-medium text-surface-300 mb-1.5"
+          >
+            Password
+          </label>
+          <input
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            required
+            placeholder="Create a strong password"
+            value={form.password}
+            onChange={handleChange}
+            className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-gold-400 hover:bg-gold-300 text-surface-900 font-bold py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-gold-400/25 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? "Creating Account..." : "Create Account"}
+        </button>
+      </form>
+
+      {/* Login Link */}
+      <p className="text-center text-surface-400 text-sm mt-6">
+        Already have an account?{" "}
+        <Link
+          href={next !== "/dashboard" ? `/login?next=${encodeURIComponent(next)}` : "/login"}
+          className="text-gold-400 hover:text-gold-300 font-medium"
+        >
+          Sign in
+        </Link>
+      </p>
+    </>
+  );
+}
+
+export default function RegisterPage() {
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
       <RedirectIfLoggedIn />
@@ -68,120 +195,9 @@ export default function RegisterPage() {
             </p>
           </div>
 
-          {/* Error Message */}
-          {error && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm" role="alert">
-              {error}
-            </div>
-          )}
-
-          {/* Form */}
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="firstName"
-                  className="block text-sm font-medium text-surface-300 mb-1.5"
-                >
-                  First Name
-                </label>
-                <input
-                  id="firstName"
-                  type="text"
-                  placeholder="John"
-                  value={form.firstName}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="lastName"
-                  className="block text-sm font-medium text-surface-300 mb-1.5"
-                >
-                  Last Name
-                </label>
-                <input
-                  id="lastName"
-                  type="text"
-                  placeholder="Doe"
-                  value={form.lastName}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-                />
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium text-surface-300 mb-1.5"
-              >
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                placeholder="you@example.com"
-                value={form.email}
-                onChange={handleChange}
-                className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="username"
-                className="block text-sm font-medium text-surface-300 mb-1.5"
-              >
-                Username
-              </label>
-              <input
-                id="username"
-                type="text"
-                required
-                placeholder="footballfan23"
-                value={form.username}
-                onChange={handleChange}
-                className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-surface-300 mb-1.5"
-              >
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                placeholder="Create a strong password"
-                value={form.password}
-                onChange={handleChange}
-                className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-gold-400 hover:bg-gold-300 text-surface-900 font-bold py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-gold-400/25 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? "Creating Account..." : "Create Account"}
-            </button>
-          </form>
-
-          {/* Login Link */}
-          <p className="text-center text-surface-400 text-sm mt-6">
-            Already have an account?{" "}
-            <Link
-              href="/login"
-              className="text-gold-400 hover:text-gold-300 font-medium"
-            >
-              Sign in
-            </Link>
-          </p>
+          <Suspense fallback={<div className="text-center text-surface-500 text-sm">Loading...</div>}>
+            <RegisterForm />
+          </Suspense>
         </div>
       </div>
     </div>

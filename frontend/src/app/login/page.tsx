@@ -13,6 +13,11 @@ function LoginForm() {
   // attached -- i.e. the token itself was rejected (expired/invalid), not
   // just "this action needs auth." See apiRequest()'s 401 handling.
   const expired = searchParams.get("expired") === "1";
+  // Set by the invite-accept landing page (and reusable by any future
+  // deep-link flow) when a logged-out visitor needs to land somewhere
+  // other than /dashboard after signing in. Falls back to /dashboard,
+  // same as before this existed.
+  const next = searchParams.get("next") || "/dashboard";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,7 +36,7 @@ function LoginForm() {
         localStorage.setItem("ffc_token", data.access_token);
         localStorage.setItem("ffc_user_id", data.user?.id || "");
       }
-      router.push("/dashboard");
+      router.push(next);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Invalid email or password";
@@ -114,7 +119,7 @@ function LoginForm() {
       <p className="text-center text-surface-400 text-sm mt-6">
         Don&apos;t have an account?{" "}
         <Link
-          href="/register"
+          href={next !== "/dashboard" ? `/register?next=${encodeURIComponent(next)}` : "/register"}
           className="text-gold-400 hover:text-gold-300 font-medium"
         >
           Sign up

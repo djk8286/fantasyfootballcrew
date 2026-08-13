@@ -54,3 +54,48 @@ async def send_password_reset_email(to_email: str, reset_link: str) -> None:
             # token is created either way) -- log it and move on. Falling
             # back to the stub log means the link is still recoverable.
             print(f"[email send FAILED, falling back to log] {to_email}: {reset_link} -- {e}", flush=True)
+
+
+async def send_league_invite_email(
+    to_email: str,
+    league_name: str,
+    inviter_name: str,
+    personal_message: str | None,
+    invite_link: str,
+) -> None:
+    """Second single-purpose email function, same shape as
+    send_password_reset_email above (graceful no-key stub, swallow-and-
+    log send failures) -- not worth extracting a shared low-level sender
+    for just two email types; revisit if a third one shows up."""
+    subject = f"{inviter_name} invited you to join {league_name} on FantasyFootballCrew"
+    message_block = f"\n\n\"{personal_message}\"\n" if personal_message else ""
+    text_body = (
+        f"{inviter_name} invited you to join their fantasy football league, {league_name}.\n"
+        f"{message_block}\n"
+        f"Join here: {invite_link}\n\n"
+        f"This link expires in 14 days."
+    )
+
+    if not settings.RESEND_API_KEY:
+        print(
+            f"[email stub -- no RESEND_API_KEY configured] "
+            f"League invite for {to_email} to '{league_name}': {invite_link}",
+            flush=True,
+        )
+        return
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                json={
+                    "from": settings.RESEND_FROM_EMAIL,
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": text_body,
+                },
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[email send FAILED, falling back to log] {to_email}: {invite_link} -- {e}", flush=True)

@@ -423,6 +423,26 @@ export const waiversApi = {
     apiRequest(`/api/v1/leagues/${leagueId}/waivers/free-agents?limit_per_position=${limitPerPosition}`),
 };
 
+// League Invites
+export const invitesApi = {
+  send: (leagueId: string, emails: string[], message?: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/invites`, {
+      method: "POST",
+      body: { emails, message: message || undefined },
+    }),
+  list: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/invites`),
+  revoke: (leagueId: string, inviteId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/invites/${inviteId}`, {
+      method: "DELETE",
+    }),
+  // Public -- no auth required, unlike the two above.
+  getByToken: (token: string) =>
+    apiRequest(`/api/v1/invites/${token}`),
+  accept: (token: string) =>
+    apiRequest(`/api/v1/invites/${token}/accept`, { method: "POST" }),
+};
+
 // Coaches
 export const coachesApi = {
   listByTeam: (teamId: string) => apiRequest(`/api/v1/teams/${teamId}/coaches`),

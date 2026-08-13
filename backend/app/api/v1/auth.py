@@ -1,4 +1,3 @@
-import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -10,21 +9,13 @@ from app.core.limiter import limiter
 from app.models.user import User
 from app.models.password_reset_token import PasswordResetToken
 from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest
-from app.services.auth_service import hash_password, verify_password, create_access_token
+from app.services.auth_service import hash_password, verify_password, create_access_token, hash_token
 from app.services.email_service import send_password_reset_email
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 RESET_TOKEN_LIFETIME = timedelta(hours=1)
-
-
-def _hash_token(raw_token: str) -> str:
-    # Plain SHA-256, no salt -- unlike a user-chosen password, this token is
-    # 32 bytes of secrets.token_urlsafe() randomness, so it isn't guessable
-    # by brute force regardless; the hash is just so a leaked DB row can't
-    # be used directly as a working reset link.
-    return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
 # Registration is a rare, one-time action for a real user, so a tight limit
@@ -93,7 +84,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
     raw_token = secrets.token_urlsafe(32)
     db.add(PasswordResetToken(
         user_id=user.id,
-        token_hash=_hash_token(raw_token),
+        token_hash=hash_token(raw_token),
         expires_at=datetime.now(timezone.utc) + RESET_TOKEN_LIFETIME,
     ))
     await db.commit()
@@ -108,7 +99,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
 @limiter.limit("10/hour")
 async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(PasswordResetToken).where(PasswordResetToken.token_hash == _hash_token(data.token))
+        select(PasswordResetToken).where(PasswordResetToken.token_hash == hash_token(data.token))
     )
     reset_token = result.scalar_one_or_none()
 

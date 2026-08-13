@@ -28,6 +28,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+def hash_token(raw_token: str) -> str:
+    """Plain SHA-256, no salt -- for tokens that are already high-entropy
+    random values (secrets.token_urlsafe(32)+), not user-chosen secrets
+    like passwords. The hash exists so a leaked DB row can't be used
+    directly as a working link; unlike a password, brute-forcing a raw
+    32-byte random token back out of its hash isn't practically feasible
+    regardless of salting. Shared by every single-use-link flow in the
+    app (password reset, league invites) so they don't each reimplement
+    the same three lines."""
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a JWT access token."""
     to_encode = data.copy()

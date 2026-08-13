@@ -14,6 +14,7 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.lineup import Lineup
 from app.models.notification import Notification, NotificationType
 from app.models.playoff import Playoff, PlayoffMatchup, PlayoffStatus
+from app.models.league_invite import LeagueInvite, InviteStatus
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -22,4 +23,5 @@ __all__ = [
     "WeeklyScore", "ScoreAdjustment", "PasswordResetToken", "Lineup",
     "Notification", "NotificationType",
     "Playoff", "PlayoffMatchup", "PlayoffStatus",
+    "LeagueInvite", "InviteStatus",
 ]
