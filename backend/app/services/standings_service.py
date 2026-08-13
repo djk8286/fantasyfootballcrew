@@ -350,11 +350,25 @@ async def calculate_week(
         elif score_b > score_a:
             winners.add(team_b)
 
-    # PASS 2 -- apply win_bonus to this week's actual winners (determined
-    # above from base scores, so a team's own win_bonus can never affect
-    # who won), then upsert. A team with no win_bonus coach, or a bye team
-    # this week (not in `matchups` at all -- odd team count), just carries
-    # its base total through unchanged.
+    # Rivalry Week (Phase 3): a flat bonus for winning this exact week,
+    # league-wide (not per-coach, no Coach/_coach_bonus_sum involvement --
+    # see DEFAULT_RIVALRY_WEEK_SETTINGS/get_rivalry_week_settings above).
+    # Computed once per call, not per team, since it depends only on the
+    # league and the week being calculated, not on which team we're
+    # looking at.
+    rivalry_settings = get_rivalry_week_settings(league)
+    rivalry_active_this_week = (
+        league.league_type == LeagueType.CONFERENCE
+        and rivalry_settings["enabled"]
+        and rivalry_settings["week"] == week
+    )
+
+    # PASS 2 -- apply win_bonus and (if this is the designated Rivalry
+    # Week) the rivalry bonus to this week's actual winners (determined
+    # above from base scores, so neither bonus can ever affect who won),
+    # then upsert. A team with no win_bonus coach and no active rivalry
+    # bonus, or a bye team this week (not in `matchups` at all -- odd
+    # team count), just carries its base total through unchanged.
     results = []
     for team in teams:
         total_score = base_totals[team.id]
@@ -366,6 +380,13 @@ async def calculate_week(
                 total_score = round(total_score + win_bonus, 2)
                 lineup_data["total"] = total_score
                 lineup_data["win_bonus"] = win_bonus
+
+            if rivalry_active_this_week:
+                rivalry_bonus = rivalry_settings["bonus_value"]
+                if rivalry_bonus:
+                    total_score = round(total_score + rivalry_bonus, 2)
+                    lineup_data["total"] = total_score
+                    lineup_data["rivalry_bonus"] = rivalry_bonus
 
         # Upsert WeeklyScore record
         existing_result = await db.execute(
