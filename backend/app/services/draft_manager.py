@@ -19,6 +19,8 @@ from app.models.player import Player
 from app.models.league import League, DraftStatus, LeagueType, DraftType
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
+from app.models.contract import Contract
+from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_salary_cap_settings, compute_pick_slot_salary
 
 
 # Positions the scoring engine (DEFAULT_SCORING) actually has point values
@@ -303,6 +305,15 @@ async def make_pick(
     round_num = observed_round
     global_pick_number = pick_index + 1
 
+    # Salary-Cap (Phase 5): fetched unconditionally (previously the only
+    # League fetch in this function was inside the `if is_complete:`
+    # branch below) since a cap-enabled league needs its settings for
+    # EVERY pick, not just the draft's last one.
+    league_result = await db.execute(select(League).where(League.id == draft.league_id))
+    league = league_result.scalar_one_or_none()
+    cap_settings = get_salary_cap_settings(league) if league else DEFAULT_SALARY_CAP_SETTINGS
+    cap_enabled = bool(league and cap_settings["enabled"])
+
     # Advance draft state
     if observed_pick >= num_teams:
         new_round, new_pick = observed_round + 1, 1
@@ -353,20 +364,49 @@ async def make_pick(
     db.add(draft_pick)
 
     # Keep League.draft_status in sync -- see start_draft for why.
-    if is_complete:
-        league_result = await db.execute(select(League).where(League.id == draft.league_id))
-        league = league_result.scalar_one_or_none()
-        if league:
-            league.draft_status = DraftStatus.COMPLETED
+    if is_complete and league:
+        league.draft_status = DraftStatus.COMPLETED
 
-    # Add player to team's roster
+    # Add player to team's roster. Salary-Cap (Phase 5): this write now
+    # goes through the same roster_version CAS pattern trade approval/
+    # waiver processing already use, added here for real (not just left
+    # as an accepted gap) -- waivers/trades stay always-open even during
+    # an active draft, so a concurrent waiver claim for a currently-
+    # drafting team is a real race this Contract-row-plus-roster-append
+    # write needs to be atomic against. A lost race raises ValueError,
+    # which rolls back this whole transaction (including the turn-advance
+    # CAS above, since db.commit() hasn't happened yet) -- so the picking
+    # team's turn is left intact for a clean retry, nothing half-commits.
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
     if team:
-        if not team.roster:
-            team.roster = []
-        if player_id not in team.roster:
-            team.roster.append(player_id)
+        current_roster = list(team.roster or [])
+        if player_id not in current_roster:
+            if cap_enabled and len(current_roster) >= cap_settings["max_roster_size"]:
+                raise ValueError(f"{team.name}'s roster is already at the {cap_settings['max_roster_size']}-player limit")
+            new_roster = current_roster + [player_id]
+            roster_cas = await db.execute(
+                update(Team)
+                .where(Team.id == team.id, Team.roster_version == team.roster_version)
+                .values(roster=new_roster, roster_version=Team.roster_version + 1)
+            )
+            if roster_cas.rowcount == 0:
+                raise ValueError("Your roster changed concurrently (e.g. a waiver claim was just processed) -- please retry the pick")
+            if cap_enabled:
+                # No cap_total check here, deliberately: a pick's salary
+                # is 100% deterministic from (round, pick_number), not
+                # from which player is chosen -- a team can't make its
+                # draft cheaper by picking a different player for an
+                # already-fixed-price slot. A team's total draft-day
+                # salary obligation is fixed the moment the snake order
+                # is generated, independent of any pick decision, so
+                # there's nothing for a per-pick cap check to gate.
+                salary = compute_pick_slot_salary(global_pick_number, num_teams * draft.total_rounds, cap_settings)
+                db.add(Contract(
+                    league_id=draft.league_id, team_id=team.id, player_id=player_id,
+                    salary=salary, contract_years=cap_settings["default_contract_years"],
+                    signed_year=datetime.now(timezone.utc).year, source="draft", is_active=True,
+                ))
 
     await db.commit()
     await db.refresh(draft_pick)
