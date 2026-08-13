@@ -19,6 +19,7 @@ import {
   ListChecks,
   Shield,
   Skull,
+  DollarSign,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -80,6 +81,19 @@ interface ScheduleWeek {
   matchups: ScheduleMatchup[];
 }
 
+// Salary-Cap + Contract Leagues (Phase 5) -- mirrors
+// salary_cap_service.team_cap_summary's response shape exactly.
+interface CapSummary {
+  cap_total: number;
+  contracts_total: number;
+  dead_money_total: number;
+  cap_used: number;
+  cap_space: number;
+  max_roster_size: number;
+  roster_size: number;
+  contracts: { player_id: string; salary: number; contract_years: number; signed_year: number }[];
+}
+
 const CURRENT_YEAR = new Date().getFullYear();
 
 export default function TeamPage() {
@@ -96,6 +110,8 @@ export default function TeamPage() {
   const [claimingCoOwner, setClaimingCoOwner] = useState(false);
   const [lastWordsInput, setLastWordsInput] = useState("");
   const [savingLastWords, setSavingLastWords] = useState(false);
+  const [capEnabled, setCapEnabled] = useState(false);
+  const [cap, setCap] = useState<CapSummary | null>(null);
 
   const currentUserId = getCurrentUserId();
 
@@ -138,6 +154,19 @@ export default function TeamPage() {
     standingsApi
       .getSchedule(leagueId, CURRENT_YEAR)
       .then((data) => setSchedule((data as { schedule: ScheduleWeek[] }).schedule || []))
+      .catch(() => {});
+
+    // Salary-Cap + Contract Leagues (Phase 5) -- only fetch the (join-
+    // heavy) cap summary when the league actually has the feature on.
+    leaguesApi
+      .getSalaryCapSettings(leagueId)
+      .then((data) => {
+        const enabled = !!(data as { enabled?: boolean })?.enabled;
+        setCapEnabled(enabled);
+        if (enabled) {
+          teamsApi.getCap(teamId).then((c) => setCap(c as CapSummary)).catch(() => {});
+        }
+      })
       .catch(() => {});
   }, [leagueId, teamId]);
 
@@ -200,6 +229,7 @@ export default function TeamPage() {
 
   const avatar = getAvatarStyle(team.avatar_url);
   const roster = (team.roster || []).map((pid) => playersById[pid]).filter(Boolean) as RosterPlayer[];
+  const salaryByPlayerId = new Map((cap?.contracts || []).map((c) => [c.player_id, c.salary]));
   const rosterByPos: Record<string, RosterPlayer[]> = {};
   roster.forEach((p) => {
     if (!rosterByPos[p.position]) rosterByPos[p.position] = [];
@@ -321,6 +351,14 @@ export default function TeamPage() {
               <div className="text-xl font-bold text-white">{team.points_against.toFixed(1)}</div>
               <div className="text-[10px] text-surface-500 uppercase tracking-wider">Points Against</div>
             </div>
+            {capEnabled && cap && (
+              <div>
+                <div className={`text-xl font-bold ${cap.cap_space >= 0 ? "text-gold-400" : "text-red-400"}`}>
+                  ${cap.cap_space.toFixed(1)}
+                </div>
+                <div className="text-[10px] text-surface-500 uppercase tracking-wider">Cap Space</div>
+              </div>
+            )}
           </div>
           {(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && team.eliminated_week == null && (
             <Link
@@ -354,6 +392,11 @@ export default function TeamPage() {
                       {p.season_points != null && (
                         <span className="text-[10px] text-gold-400/80 font-semibold">
                           {Math.round(p.season_points * 10) / 10}
+                        </span>
+                      )}
+                      {capEnabled && salaryByPlayerId.has(p.id) && (
+                        <span className="text-[10px] text-blue-400/80 font-semibold">
+                          ${salaryByPlayerId.get(p.id)}
                         </span>
                       )}
                       <span className="text-[10px] text-surface-500">{p.team}</span>
