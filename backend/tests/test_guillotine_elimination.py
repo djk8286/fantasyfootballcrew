@@ -480,3 +480,83 @@ async def test_calculate_endpoint_elimination_is_null_for_non_guillotine_league(
 
     assert r.status_code == 200
     assert r.json()["elimination"] is None
+
+
+# ─── Salary-Cap interaction (Phase 5, "Salary-Cap + Contract Leagues") ──
+# Guillotine and salary cap are two independent bolt-ons that can coexist
+# on one league -- an eliminated team's Contract rows should deactivate
+# alongside its roster wipe, with no dead money charged.
+
+async def _enable_cap(db_session_factory, league_id):
+    async with db_session_factory() as db:
+        result = await db.execute(select(League).where(League.id == league_id))
+        league = result.scalar_one()
+        league.salary_cap_settings = {
+            "enabled": True, "cap_total": 200.0, "max_roster_size": 20,
+            "top_salary": 50.0, "bottom_salary": 1.0, "waiver_salary_pct": 0.6,
+            "dead_money_pct": 0.5, "default_contract_years": 2, "waiver_contract_years": 1,
+        }
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_elimination_deactivates_contracts_when_cap_enabled(guillotine_seed):
+    from app.models.contract import Contract, DeadMoney
+
+    league_id = guillotine_seed["league_id"]
+    t1, t2, t3, t4 = guillotine_seed["team_ids"]
+    db_session_factory = guillotine_seed["db_session_factory"]
+
+    await _enable_cap(db_session_factory, league_id)
+    await _add_coach(db_session_factory, t1, "flat_weekly", 20.0)  # keep t2/t3/t4 the tied-low group
+
+    async with db_session_factory() as db:
+        db.add(Contract(league_id=league_id, team_id=t2, player_id="ghost-player-1",
+                         salary=15.0, contract_years=3, signed_year=2026, source="draft", is_active=True))
+        db.add(Contract(league_id=league_id, team_id=t3, player_id="ghost-player-2",
+                         salary=10.0, contract_years=2, signed_year=2026, source="draft", is_active=True))
+        db.add(Contract(league_id=league_id, team_id=t4, player_id="ghost-player-3",
+                         salary=5.0, contract_years=2, signed_year=2026, source="draft", is_active=True))
+        await db.commit()
+        await calculate_week(league_id, 1, 2026, db, sleeper_stats={})
+
+    async with db_session_factory() as db:
+        league_result = await db.execute(select(League).where(League.id == league_id))
+        league = league_result.scalar_one()
+        elimination = await process_league_guillotine(league, 2026, 1, db)
+
+    assert elimination is not None
+    eliminated_id = elimination["eliminated_team_id"]
+
+    async with db_session_factory() as db:
+        contracts = (await db.execute(select(Contract).where(Contract.team_id == eliminated_id))).scalars().all()
+        dead_money = (await db.execute(select(DeadMoney).where(DeadMoney.team_id == eliminated_id))).scalars().all()
+
+    assert len(contracts) == 1
+    assert contracts[0].is_active is False  # deactivated by the elimination wipe
+    assert dead_money == []  # no dead money charged on elimination
+
+
+@pytest.mark.asyncio
+async def test_non_cap_guillotine_league_elimination_touches_no_contracts(guillotine_seed):
+    from app.models.contract import Contract
+
+    league_id = guillotine_seed["league_id"]
+    t1 = guillotine_seed["team_ids"][0]
+    db_session_factory = guillotine_seed["db_session_factory"]
+
+    await _add_coach(db_session_factory, t1, "flat_weekly", 20.0)
+
+    async with db_session_factory() as db:
+        await calculate_week(league_id, 1, 2026, db, sleeper_stats={})
+
+    async with db_session_factory() as db:
+        league_result = await db.execute(select(League).where(League.id == league_id))
+        league = league_result.scalar_one()
+        elimination = await process_league_guillotine(league, 2026, 1, db)
+
+    assert elimination is not None
+
+    async with db_session_factory() as db:
+        contracts = (await db.execute(select(Contract).where(Contract.league_id == league_id))).scalars().all()
+    assert contracts == []

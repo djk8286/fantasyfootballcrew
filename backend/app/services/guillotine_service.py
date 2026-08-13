@@ -22,12 +22,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.league import League, LeagueType
 from app.models.team import Team
 from app.models.weekly_score import WeeklyScore
+from app.models.contract import Contract
 from app.services.standings_service import get_standings
+from app.services.salary_cap_service import get_salary_cap_settings
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
 
 
-async def _self_heal_ghost_rosters(all_teams: list[Team], db: AsyncSession) -> bool:
+async def _deactivate_contracts(team: Team, league: League, db: AsyncSession) -> None:
+    """Salary-Cap interaction (Phase 5): Guillotine and salary cap are
+    two independent bolt-ons that can coexist on one league. When an
+    eliminated team's roster is wiped, its active Contract rows are
+    marked is_active=False too -- no dead money, since dead money
+    constrains a team's FUTURE spending, and an eliminated team already
+    has zero future spending capacity (the existing process_waivers/
+    claim_co_owner gates already block it from acting at all). Leaving
+    those rows is_active=True forever would just be a driftable no-op
+    that could wrongly inflate a future query if this invariant is ever
+    assumed elsewhere. A strict no-op for a non-cap league (nothing to
+    deactivate)."""
+    if not get_salary_cap_settings(league)["enabled"]:
+        return
+    await db.execute(
+        update(Contract)
+        .where(Contract.league_id == league.id, Contract.team_id == team.id, Contract.is_active == True)  # noqa: E712
+        .values(is_active=False)
+    )
+
+
+async def _self_heal_ghost_rosters(all_teams: list[Team], league: League, db: AsyncSession) -> bool:
     """Any already-eliminated team should have an empty roster (see the
     CAS dump in process_league_guillotine below). Re-checked on every
     call, not just at the moment of elimination, so a lost CAS race (or
@@ -42,6 +65,7 @@ async def _self_heal_ghost_rosters(all_teams: list[Team], db: AsyncSession) -> b
                 .where(Team.id == team.id, Team.roster_version == team.roster_version)
                 .values(roster=[], roster_version=Team.roster_version + 1)
             )
+            await _deactivate_contracts(team, league, db)
             changed = True
     return changed
 
@@ -69,7 +93,7 @@ async def process_league_guillotine(league: League, year: int, week: int, db: As
     teams_result = await db.execute(select(Team).where(Team.league_id == league.id))
     all_teams = list(teams_result.scalars().all())
 
-    if await _self_heal_ghost_rosters(all_teams, db):
+    if await _self_heal_ghost_rosters(all_teams, league, db):
         await db.commit()
 
     if any(t.eliminated_week == week for t in all_teams):
@@ -109,6 +133,7 @@ async def process_league_guillotine(league: League, year: int, week: int, db: As
         .values(roster=[], roster_version=Team.roster_version + 1)
     )
     eliminated_team.eliminated_week = week
+    await _deactivate_contracts(eliminated_team, league, db)
 
     link = f"/leagues/{league.id}/standings"
     await notify_team_owners(
