@@ -45,6 +45,7 @@ const features = [
       "Split your league into two head-to-head conferences",
       "Conference-wide standings alongside individual team records",
       "Built for larger leagues that want more structure than one big pool",
+      "Name your conferences and set a Rivalry Week bonus for the biggest grudge match of the season",
     ],
   },
   {
