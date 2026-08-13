@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus } from "lucide-react";
+import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -62,6 +62,15 @@ interface FreeAgent {
   season_points_year: number | null;
 }
 
+// Salary-Cap + Contract Leagues (Phase 5) -- mirrors
+// salary_cap_service.team_cap_summary's response shape.
+interface CapSummary {
+  cap_total: number;
+  cap_used: number;
+  cap_space: number;
+  contracts: { player_id: string; salary: number }[];
+}
+
 const statusColor: Record<string, string> = {
   pending: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
   approved: "bg-green-500/15 text-green-400 border-green-500/25",
@@ -94,6 +103,12 @@ export default function WaiversPage() {
   const [freeAgents, setFreeAgents] = useState<Record<string, FreeAgent[]>>({});
   const [faLoading, setFaLoading] = useState(true);
   const [faPosition, setFaPosition] = useState("QB");
+
+  // Salary-Cap + Contract Leagues (Phase 5).
+  const [capEnabled, setCapEnabled] = useState(false);
+  const [myCap, setMyCap] = useState<CapSummary | null>(null);
+  const [previewSalary, setPreviewSalary] = useState<number | null>(null);
+  const [releasing, setReleasing] = useState(false);
 
   // Fixed hover card state -- same pattern the draft room already uses.
   const [hoveredPlayer, setHoveredPlayer] = useState<FreeAgent | null>(null);
@@ -158,7 +173,56 @@ export default function WaiversPage() {
     loadClaims();
     loadPriority();
     loadFreeAgents();
+
+    leaguesApi
+      .getSalaryCapSettings(leagueId)
+      .then((data) => setCapEnabled(!!(data as { enabled?: boolean })?.enabled))
+      .catch(() => {});
   }, [leagueId, loadClaims, loadPriority, loadFreeAgents]);
+
+  const loadMyCap = useCallback(async () => {
+    if (!myTeam || !capEnabled) return;
+    try {
+      const data = await teamsApi.getCap(myTeam.id);
+      setMyCap(data as CapSummary);
+    } catch {
+      // silent
+    }
+  }, [myTeam, capEnabled]);
+
+  useEffect(() => {
+    loadMyCap();
+  }, [loadMyCap]);
+
+  // Estimate what the currently-selected free agent would cost, so the
+  // claim form can show a real number before a claim is ever submitted.
+  useEffect(() => {
+    if (!capEnabled || !addPlayerId) {
+      setPreviewSalary(null);
+      return;
+    }
+    leaguesApi
+      .previewSigning(leagueId, addPlayerId)
+      .then((data) => setPreviewSalary((data as { estimated_salary: number }).estimated_salary))
+      .catch(() => setPreviewSalary(null));
+  }, [capEnabled, addPlayerId, leagueId]);
+
+  const handleReleaseOnly = async () => {
+    if (!myTeam || !dropPlayerId) return;
+    setReleasing(true);
+    setError("");
+    try {
+      await teamsApi.release(myTeam.id, dropPlayerId);
+      setDropPlayerId("");
+      const updatedTeams = await teamsApi.getByLeague(leagueId);
+      setTeams(updatedTeams as Team[]);
+      await loadMyCap();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to release player");
+    } finally {
+      setReleasing(false);
+    }
+  };
 
   // Resolve names for roster players (drop candidates) + claim history
   useEffect(() => {
@@ -319,19 +383,61 @@ export default function WaiversPage() {
 
               <div>
                 <label className="block text-xs text-surface-400 mb-1.5">Drop (optional)</label>
-                <select
-                  value={dropPlayerId}
-                  onChange={(e) => setDropPlayerId(e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
-                >
-                  <option value="">No drop</option>
-                  {(myTeam.roster || []).map((pid) => (
-                    <option key={pid} value={pid}>
-                      {playerLabel(pid)}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={dropPlayerId}
+                    onChange={(e) => setDropPlayerId(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
+                  >
+                    <option value="">No drop</option>
+                    {(myTeam.roster || []).map((pid) => (
+                      <option key={pid} value={pid}>
+                        {playerLabel(pid)}
+                        {capEnabled && myCap ? ` ($${myCap.contracts.find((c) => c.player_id === pid)?.salary ?? 0})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {/* Salary-Cap (Phase 5): a unilateral release (shed cap
+                      space without needing to add anyone) -- reuses this
+                      same select's current value rather than a separate
+                      picker. */}
+                  {capEnabled && dropPlayerId && (
+                    <button
+                      type="button"
+                      onClick={handleReleaseOnly}
+                      disabled={releasing}
+                      className="shrink-0 text-xs text-red-400 hover:text-red-300 font-medium disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {releasing ? "Releasing…" : "Release only"}
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {capEnabled && addPlayerId && (
+                <div className="flex items-center gap-1.5 text-xs text-surface-400 bg-surface-900/60 border border-surface-700 rounded-lg px-3 py-2">
+                  <DollarSign className="w-3.5 h-3.5 text-gold-400 shrink-0" />
+                  {previewSalary == null ? (
+                    "Estimating salary…"
+                  ) : (
+                    <span>
+                      Estimated salary: <span className="text-white font-semibold">${previewSalary}</span>
+                      {myCap && (
+                        <>
+                          {" "}
+                          · Cap space after signing:{" "}
+                          <span className={`font-semibold ${
+                            myCap.cap_space - previewSalary + (myCap.contracts.find((c) => c.player_id === dropPlayerId)?.salary ?? 0) >= 0
+                              ? "text-gold-400" : "text-red-400"
+                          }`}>
+                            ${(myCap.cap_space - previewSalary + (myCap.contracts.find((c) => c.player_id === dropPlayerId)?.salary ?? 0)).toFixed(1)}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
 
               <button
                 type="submit"
