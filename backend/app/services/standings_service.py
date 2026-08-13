@@ -151,6 +151,52 @@ def _build_league_schedule(teams: List[Team], week: int) -> List[Tuple[str, str]
     return matchups
 
 
+def _alive_at_week(team: Team, week: int) -> bool:
+    """A team counts as alive for a given week if it's never been
+    eliminated, or was eliminated exactly THIS week -- its own
+    elimination is DETERMINED from this week's score (see
+    guillotine_service.process_league_guillotine), so it must still
+    appear as a real opponent for the week it goes out. Only weeks
+    strictly AFTER its elimination week are skipped. Always True for
+    every non-Guillotine team, since eliminated_week is never set there."""
+    return team.eliminated_week is None or team.eliminated_week >= week
+
+
+def _effective_matchups(league: Optional[League], teams: List[Team], week: int) -> List[Tuple[str, str]]:
+    """_build_league_schedule's raw round-robin output, adjusted for
+    Guillotine eliminations (Phase 4, "Guillotine + Custom Twist") --
+    a strict no-op for every other league type, since Team.eliminated_week
+    is always None there. _build_league_schedule itself is never
+    regenerated/modified -- the fixed schedule stays exactly as
+    generated at season start.
+
+    1. Drop any pairing where either side was eliminated in a strictly
+       earlier week -- that team's slot in the schedule just stops
+       mattering ("stop-scoring slot", the resolved binding decision for
+       this phase, as opposed to weekly schedule re-shrinking).
+    2. Guillotine finale fix-up: a classic round-robin only pairs any
+       two specific teams once per full cycle (num_rounds weeks), not
+       every week -- so once elimination has whittled a league down to
+       exactly two teams, most remaining weeks' raw schedule pairs each
+       survivor against a now-eliminated team (dropped by step 1),
+       producing no game that week. Once exactly two teams are alive in
+       a GUILLOTINE league, force them onto a direct matchup every
+       remaining week so the finale actually plays out head-to-head --
+       the only special-casing this phase adds beyond the existing
+       generator, and it only ever engages for the final two.
+    """
+    raw = _build_league_schedule(teams, week)
+    alive_ids = {t.id for t in teams if _alive_at_week(t, week)}
+    matchups = [(a, b) for (a, b) in raw if a in alive_ids and b in alive_ids]
+
+    if league is not None and league.league_type == LeagueType.GUILLOTINE and len(alive_ids) == 2:
+        pair = tuple(sorted(alive_ids))
+        if pair not in matchups and (pair[1], pair[0]) not in matchups:
+            matchups.append(pair)
+
+    return matchups
+
+
 async def calculate_week(
     league_id: str,
     week: int,
@@ -340,7 +386,7 @@ async def calculate_week(
     # just computed here instead of re-derived later, so win_bonus can be
     # applied before the upsert. A tie gets no bonus on either side, same
     # as get_standings never credits a win for one.
-    matchups = _build_league_schedule(teams, week)
+    matchups = _effective_matchups(league, teams, week)
     winners: set = set()
     for team_a, team_b in matchups:
         score_a = base_totals.get(team_a, 0.0)
@@ -461,6 +507,12 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
     if not teams:
         return []
 
+    # Needed by _effective_matchups (Phase 4, Guillotine finale pairing) --
+    # a no-op fetch for the vast majority of leagues, which aren't
+    # Guillotine, but cheap enough not to special-case around.
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+
     # Get all weekly scores for this league
     scores_query = select(WeeklyScore).where(WeeklyScore.league_id == league_id)
     if through_week is not None:
@@ -512,7 +564,7 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
 
     # Compute wins/losses/ties from head-to-head matchups each week
     for (year, week), week_scores in weekly_scores.items():
-        matchups = _build_league_schedule(teams, week)
+        matchups = _effective_matchups(league, teams, week)
         for team_a, team_b in matchups:
             score_a = week_scores.get(team_a, 0.0)
             score_b = week_scores.get(team_b, 0.0)
@@ -574,6 +626,10 @@ async def get_season_schedule(
     if len(team_ids) < 2:
         return []
 
+    # Needed by _effective_matchups (Phase 4, Guillotine finale pairing).
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+
     scores_result = await db.execute(
         select(WeeklyScore).where(WeeklyScore.league_id == league_id, WeeklyScore.year == year)
     )
@@ -603,7 +659,7 @@ async def get_season_schedule(
 
     schedule = []
     for week in range(1, num_weeks + 1):
-        matchups = _build_league_schedule(teams, week)
+        matchups = _effective_matchups(league, teams, week)
         schedule.append({
             "week": week,
             "matchups": [
@@ -637,7 +693,11 @@ async def get_weekly_matchups(
     teams = teams_result.scalars().all()
     team_map = {t.id: t.name for t in teams}
 
-    matchups = _build_league_schedule(teams, week)
+    # Needed by _effective_matchups (Phase 4, Guillotine finale pairing).
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+
+    matchups = _effective_matchups(league, teams, week)
 
     # Fetch scores for this week
     scores_result = await db.execute(
