@@ -30,7 +30,3 @@ export async function signUpWithEmail(
   return res.json();
 }
 
-export async function signInWithGoogle() {
-  // Placeholder — will use Supabase Google OAuth
-  console.log("Google sign-in coming when Supabase is configured");
-}
