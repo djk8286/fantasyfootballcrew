@@ -7,6 +7,7 @@ import {
   Target,
   Sparkles,
   Infinity as InfinityIcon,
+  Skull,
 } from "lucide-react";
 import StatTile from "@/components/ui/StatTile";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
@@ -46,6 +47,13 @@ const features = [
     description:
       "Lineup optimization, trade evaluation, bet analysis — all powered by AI that considers matchups, weather, and trends.",
     gradient: "from-purple-400 to-pink-500",
+  },
+  {
+    icon: Skull,
+    title: "Guillotine Leagues",
+    description:
+      "Lowest score gets eliminated every week until two teams remain for a head-to-head finale. Their roster hits waivers instantly, and their ghost still haunts the priority order.",
+    gradient: "from-red-600 to-surface-900",
   },
   {
     icon: Sparkles,
@@ -109,7 +117,7 @@ export default function Home() {
             {/* Stats */}
             <div className="grid grid-cols-3 gap-8 mt-20 max-w-lg mx-auto py-6 border-y border-surface-700/60">
               <StatTile icon={InfinityIcon} value="∞" label="Scoring Combos" accent />
-              <StatTile icon={Trophy} value="3" label="League Types" accent />
+              <StatTile icon={Trophy} value="4" label="League Types" accent />
               <StatTile icon={Bot} value="AI" label="Powered Analysis" accent />
             </div>
           </div>

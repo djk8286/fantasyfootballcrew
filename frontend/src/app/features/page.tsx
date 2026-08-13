@@ -7,6 +7,7 @@ import {
   Target,
   Sparkles,
   Check,
+  Skull,
 } from "lucide-react";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
@@ -70,6 +71,20 @@ const features = [
       "Start/sit recommendations based on your actual scoring config",
       "Trade grades that account for both sides of the deal",
       "Freeform betting-angle analysis for any matchup you ask about",
+    ],
+  },
+  {
+    icon: Skull,
+    title: "Guillotine Leagues",
+    gradient: "from-red-600 to-surface-900",
+    description:
+      "Survival fantasy football. Lowest score every week gets eliminated — no mercy, no re-draft, just a shrinking field until a champion stands alone.",
+    points: [
+      "Weekly lowest-score elimination starting week 1, down to a final 2-team head-to-head",
+      "An eliminated team's whole roster hits free agency immediately",
+      "The haunt twist: an eliminated team's ghost stays in the waiver priority order forever",
+      "Eliminated managers can join a survivor's team as co-owner and keep playing",
+      "Leave your last words and see the full elimination history",
     ],
   },
   {
