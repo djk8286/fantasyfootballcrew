@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn } from "@/lib/api-client";
+import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -32,6 +32,10 @@ import {
   ArrowLeftRight,
   ListOrdered,
   ListChecks,
+  Lock,
+  Send,
+  Clock,
+  Mail,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -78,6 +82,11 @@ interface LeagueData {
   draft_type: string;
   co_commissioner_ids: string[] | null;
   created_at: string;
+  visibility: "private" | "invite_only" | "open";
+  // "commissioner"|"member"|"eligible"|"requested"|"invited"|"blocked",
+  // null only when logged out (backend doesn't compute it without a
+  // viewer). See get_league's _compute_viewer_join_status.
+  viewer_join_status: string | null;
 }
 
 // ─── Avatar Options ──────────────────────────────────────────
@@ -169,6 +178,18 @@ export default function LeagueDetailPage() {
   const isCommissioner = league && getCurrentUserId() === league.commissioner_id;
   const isCoCommissioner = league && league.co_commissioner_ids?.includes(getCurrentUserId());
   const isLeagueManager = isCommissioner || isCoCommissioner;
+  // Backend's claim_team/claim_co_owner (Step 6) already enforce this --
+  // this just keeps the buttons from being shown (and dead-ending in a
+  // 403) to someone who can't actually use them. "eligible" covers OPEN
+  // outright, plus INVITE_ONLY/PRIVATE once an invite's been accepted or
+  // a join request approved.
+  const canSelfClaim = isLoggedIn() && !isLeagueManager && league?.viewer_join_status === "eligible";
+
+  // Join-request state (Step 7) -- INVITE_ONLY leagues where the viewer
+  // isn't a member/manager/eligible yet.
+  const [joinMessage, setJoinMessage] = useState("");
+  const [submittingJoinRequest, setSubmittingJoinRequest] = useState(false);
+  const [joinRequestError, setJoinRequestError] = useState("");
 
   // ─── Data fetching ─────────────────────────────────────
 
@@ -285,7 +306,7 @@ export default function LeagueDetailPage() {
       const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
       stored[id] = teamId;
       localStorage.setItem("ffc_user_teams", JSON.stringify(stored));
-      await refreshTeams();
+      await Promise.all([refreshTeams(), refreshLeague()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to claim team");
     }
@@ -296,11 +317,24 @@ export default function LeagueDetailPage() {
     setClaimingTeamId(teamId);
     try {
       await teamsApi.claimCoOwner(teamId);
-      await refreshTeams();
+      await Promise.all([refreshTeams(), refreshLeague()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
     }
     setClaimingTeamId(null);
+  };
+
+  const handleRequestToJoin = async () => {
+    setSubmittingJoinRequest(true);
+    setJoinRequestError("");
+    try {
+      await joinRequestsApi.create(id, joinMessage || undefined);
+      setJoinMessage("");
+      await refreshLeague(); // picks up the new viewer_join_status: "requested"
+    } catch (err) {
+      setJoinRequestError(err instanceof Error ? err.message : "Failed to send join request");
+    }
+    setSubmittingJoinRequest(false);
   };
 
   const handleDeleteTeam = async (teamId: string) => {
@@ -881,7 +915,7 @@ export default function LeagueDetailPage() {
                   <th className="text-center px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">T</th>
                   <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">PF</th>
                   <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">PA</th>
-                  {isLeagueManager && <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-16">Actions</th>}
+                  {(isLeagueManager || canSelfClaim) && <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-16">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-700">
@@ -975,7 +1009,7 @@ export default function LeagueDetailPage() {
                               <UserCheck className="w-3.5 h-3.5" />
                               {owner.label}
                             </span>
-                            {!team.co_owner_id && !owner.isMe && isLoggedIn() && (
+                            {!team.co_owner_id && !owner.isMe && (isLeagueManager || canSelfClaim) && (
                               <button
                                 onClick={() => handleClaimCoOwner(team.id)}
                                 disabled={claimingTeamId === team.id}
@@ -998,10 +1032,15 @@ export default function LeagueDetailPage() {
                       <td className="px-4 py-4 text-center text-surface-400">{team.ties}</td>
                       <td className="px-5 py-4 text-right text-white font-medium">{team.points_for?.toFixed(1) || "0.0"}</td>
                       <td className="px-5 py-4 text-right text-surface-400">{team.points_against?.toFixed(1) || "0.0"}</td>
-                      {isLeagueManager && (
+                      {(isLeagueManager || canSelfClaim) && (
                         <td className="px-5 py-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Claim CPU team */}
+                            {/* Claim CPU team -- open to any eligible
+                                logged-in user (Step 7), not just managers.
+                                This is what actually makes claiming
+                                self-service instead of commissioner-only;
+                                the backend has enforced this per-visibility
+                                since Step 6 regardless. */}
                             {team.is_cpu && (
                               <button
                                 onClick={() => handleClaimTeam(team.id)}
@@ -1012,32 +1051,34 @@ export default function LeagueDetailPage() {
                                 <UserCheck className="w-4 h-4" />
                               </button>
                             )}
-                            {/* Delete team */}
-                            {deleteConfirmId === team.id ? (
-                              <div className="flex items-center gap-1">
+                            {/* Delete team -- commissioner/co-commissioner only */}
+                            {isLeagueManager && (
+                              deleteConfirmId === team.id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleDeleteTeam(team.id)}
+                                    className="p-1.5 text-red-400 hover:text-red-300 transition-colors"
+                                    title="Confirm delete"
+                                  >
+                                    <Check className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    className="p-1.5 text-surface-500 hover:text-white transition-colors"
+                                    title="Cancel"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              ) : (
                                 <button
-                                  onClick={() => handleDeleteTeam(team.id)}
-                                  className="p-1.5 text-red-400 hover:text-red-300 transition-colors"
-                                  title="Confirm delete"
+                                  onClick={() => setDeleteConfirmId(team.id)}
+                                  className="p-1.5 text-surface-500 hover:text-red-400 transition-colors"
+                                  title="Delete team"
                                 >
-                                  <Check className="w-4 h-4" />
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
-                                <button
-                                  onClick={() => setDeleteConfirmId(null)}
-                                  className="p-1.5 text-surface-500 hover:text-white transition-colors"
-                                  title="Cancel"
-                                >
-                                  <X className="w-4 h-4" />
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmId(team.id)}
-                                className="p-1.5 text-surface-500 hover:text-red-400 transition-colors"
-                                title="Delete team"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              )
                             )}
                           </div>
                         </td>
@@ -1169,6 +1210,71 @@ export default function LeagueDetailPage() {
                       Log in
                     </Link>{" "}
                     to claim a team.
+                  </p>
+                </div>
+              )}
+
+              {/* Join UX for Invite-only/Private leagues (Step 7) --
+                  branches on viewer_join_status, which already accounts
+                  for accepted invites/approved requests (Step 6's exact
+                  claim-gating logic, computed server-side so this can't
+                  drift out of sync with what the claim buttons above
+                  will actually let through). Only relevant once logged
+                  in -- logged-out visitors get the generic prompt above
+                  regardless of visibility, since there's no viewer to
+                  compute a status for yet. */}
+              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "blocked" && (
+                <div className="border-t border-surface-700 pt-3 mt-1">
+                  {league.visibility === "invite_only" ? (
+                    <>
+                      <p className="text-surface-400 text-xs flex items-center gap-1.5 mb-2">
+                        <Lock className="w-3.5 h-3.5 text-surface-500" />
+                        This is an invite-only league. Ask the commissioner for an invite, or request to join below.
+                      </p>
+                      {joinRequestError && (
+                        <p className="text-red-400 text-xs mb-2" role="alert">{joinRequestError}</p>
+                      )}
+                      <textarea
+                        value={joinMessage}
+                        onChange={(e) => setJoinMessage(e.target.value)}
+                        placeholder="Optional note to the commissioner..."
+                        rows={2}
+                        className="w-full px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-xs text-white placeholder-surface-500 resize-none mb-2"
+                      />
+                      <button
+                        onClick={handleRequestToJoin}
+                        disabled={submittingJoinRequest}
+                        className="inline-flex items-center justify-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 w-full"
+                      >
+                        {submittingJoinRequest ? (
+                          <div className="w-3.5 h-3.5 border-2 border-surface-900 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Send className="w-3.5 h-3.5" />
+                        )}
+                        Request to Join
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-surface-400 text-xs flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-surface-500" />
+                      This league is private.
+                    </p>
+                  )}
+                </div>
+              )}
+              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "requested" && (
+                <div className="border-t border-surface-700 pt-3 mt-1">
+                  <p className="text-surface-400 text-xs flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-yellow-400" />
+                    Your request to join is pending commissioner review.
+                  </p>
+                </div>
+              )}
+              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "invited" && (
+                <div className="border-t border-surface-700 pt-3 mt-1">
+                  <p className="text-surface-400 text-xs flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-gold-400" />
+                    You&apos;ve been invited to this league -- check your email for the invite link.
                   </p>
                 </div>
               )}

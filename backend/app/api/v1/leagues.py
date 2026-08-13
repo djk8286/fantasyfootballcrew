@@ -9,7 +9,9 @@ from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_settings
-from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
+from app.models.league_invite import LeagueInvite, InviteStatus
+from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
+from app.api.deps import get_current_user, get_current_user_optional, require_commissioner, user_can_join_league
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
@@ -368,8 +370,66 @@ async def manage_commissioners(
     }
 
 
+async def _compute_viewer_join_status(db: AsyncSession, league: League, user: User) -> str:
+    """One of "commissioner"|"member"|"eligible"|"requested"|"invited"|
+    "blocked" -- drives the league detail page's claim-button region
+    (Step 7). Priority order matters: a commissioner who also happens to
+    have a stray pending join request should still see "commissioner",
+    not "requested".
+    """
+    if user.id in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
+        return "commissioner"
+
+    member_result = await db.execute(
+        select(Team.id).where(
+            Team.league_id == league.id,
+            (Team.owner_id == user.id) | (Team.co_owner_id == user.id),
+        )
+    )
+    if member_result.first() is not None:
+        return "member"
+
+    # Covers OPEN outright, plus INVITE_ONLY/PRIVATE with an accepted
+    # invite or approved join request already on file -- same check
+    # claim_team/claim_co_owner enforce (Step 6), so this can't drift out
+    # of sync with what actually gets a claim through.
+    if await user_can_join_league(db, league, user):
+        return "eligible"
+
+    pending_request = await db.execute(
+        select(LeagueJoinRequest.id).where(
+            LeagueJoinRequest.league_id == league.id,
+            LeagueJoinRequest.requested_by_user_id == user.id,
+            LeagueJoinRequest.status == JoinRequestStatus.PENDING,
+        )
+    )
+    if pending_request.first() is not None:
+        return "requested"
+
+    # Matched by email, not user id -- an invite is sent before the
+    # recipient necessarily has an account, so there's no user id to
+    # match against yet. Informational only (the league page can point
+    # them at their email); accepting still requires the actual token
+    # link, per LeagueInvite's token-possession trust model.
+    pending_invite = await db.execute(
+        select(LeagueInvite.id).where(
+            LeagueInvite.league_id == league.id,
+            LeagueInvite.invited_email == user.email,
+            LeagueInvite.status == InviteStatus.PENDING,
+        )
+    )
+    if pending_invite.first() is not None:
+        return "invited"
+
+    return "blocked"
+
+
 @router.get("/{league_id}", response_model=LeagueRead)
-async def get_league(league_id: str, db: AsyncSession = Depends(get_db)):
+async def get_league(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
     result = await db.execute(
         select(
             League,
@@ -384,4 +444,6 @@ async def get_league(league_id: str, db: AsyncSession = Depends(get_db)):
     league, team_count = row
     league_dict = LeagueRead.model_validate(league)
     league_dict.team_count = team_count
+    if current_user is not None:
+        league_dict.viewer_join_status = await _compute_viewer_join_status(db, league, current_user)
     return league_dict
