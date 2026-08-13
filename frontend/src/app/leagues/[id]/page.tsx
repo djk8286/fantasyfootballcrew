@@ -358,6 +358,24 @@ export default function LeagueDetailPage() {
     }
   };
 
+  // Conference reassignment (Phase 3 Step 7) -- the backend PATCH already
+  // enforced commissioner-only + "A"/"B" validation since before this
+  // phase; this is purely the missing frontend surface for it. No
+  // confirm dialog (trivially reversible -- click again to swap back)
+  // and no balance warning, matching the backend having neither on this
+  // path either.
+  const [swappingConferenceTeamId, setSwappingConferenceTeamId] = useState<string | null>(null);
+  const handleSwapConference = async (teamId: string, newConference: "A" | "B") => {
+    setSwappingConferenceTeamId(teamId);
+    try {
+      await teamsApi.update(teamId, { conference: newConference });
+      await refreshTeams();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reassign conference");
+    }
+    setSwappingConferenceTeamId(null);
+  };
+
   const handleFillCpuAll = async () => {
     if (!league) return;
     setLoading(true);
@@ -1126,6 +1144,17 @@ export default function LeagueDetailPage() {
                                 title="Claim this CPU team"
                               >
                                 <UserCheck className="w-4 h-4" />
+                              </button>
+                            )}
+                            {/* Swap conference -- commissioner/co-commissioner only */}
+                            {isLeagueManager && league.league_type === "conference" && team.conference && (
+                              <button
+                                onClick={() => handleSwapConference(team.id, team.conference === "A" ? "B" : "A")}
+                                disabled={swappingConferenceTeamId === team.id}
+                                className="p-1.5 text-surface-500 hover:text-gold-400 transition-colors disabled:opacity-50"
+                                title={`Move to ${conferenceShortLabel(team.conference === "A" ? "B" : "A", league.conference_a_name, league.conference_b_name)}`}
+                              >
+                                <ArrowLeftRight className="w-4 h-4" />
                               </button>
                             )}
                             {/* Delete team -- commissioner/co-commissioner only */}
