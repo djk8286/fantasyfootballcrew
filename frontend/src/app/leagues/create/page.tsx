@@ -16,6 +16,12 @@ const draftTypes = [
   { value: "auction", label: "Auction Draft", desc: "Budget-based bidding" },
 ] as const;
 
+const visibilities = [
+  { value: "open", label: "Open", desc: "Listed publicly, anyone can join while spots remain" },
+  { value: "invite_only", label: "Invite Only", desc: "Listed, but joining needs an invite or your approval" },
+  { value: "private", label: "Private", desc: "Invite-only and not listed anywhere public" },
+] as const;
+
 export default function CreateLeaguePage() {
   const router = useRouter();
   const [form, setForm] = useState({
@@ -24,6 +30,7 @@ export default function CreateLeaguePage() {
     league_type: "standard",
     max_teams: 12,
     draft_type: "snake",
+    visibility: "open",
     team_name: "",
   });
   const [loading, setLoading] = useState(false);
@@ -51,6 +58,7 @@ export default function CreateLeaguePage() {
         league_type: form.league_type,
         max_teams: form.max_teams,
         draft_type: form.draft_type,
+        visibility: form.visibility,
         scoring_config: {},
       }) as { id: string; name: string };
 
@@ -200,6 +208,35 @@ export default function CreateLeaguePage() {
                       {lt.label}
                     </p>
                     <p className="text-surface-400 text-xs mt-1">{lt.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Visibility */}
+            <div>
+              <label className="block text-sm font-medium text-surface-300 mb-3">
+                Visibility <span className="text-red-400">*</span>
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {visibilities.map((v) => (
+                  <button
+                    key={v.value}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, visibility: v.value }))}
+                    aria-pressed={form.visibility === v.value}
+                    className={`text-left p-4 rounded-xl border transition-all ${
+                      form.visibility === v.value
+                        ? "bg-gold-400/10 border-gold-400/40 ring-1 ring-gold-400/30"
+                        : "bg-surface-900 border-surface-600 hover:border-surface-500"
+                    }`}
+                  >
+                    <p className={`font-semibold text-sm ${
+                      form.visibility === v.value ? "text-gold-400" : "text-white"
+                    }`}>
+                      {v.label}
+                    </p>
+                    <p className="text-surface-400 text-xs mt-1">{v.desc}</p>
                   </button>
                 ))}
               </div>

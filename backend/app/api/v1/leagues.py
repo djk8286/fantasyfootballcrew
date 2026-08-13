@@ -1,9 +1,9 @@
 import copy
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, asc, desc
 from app.core.database import get_db
-from app.models.league import League, LeagueVisibility
+from app.models.league import League, LeagueVisibility, LeagueType
 from app.models.team import Team
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
@@ -55,12 +55,23 @@ async def create_league(
     return league
 
 
+_VALID_SORTS = {"newest", "open_spots", "name", "size"}
+
+
 @router.get("", response_model=list[LeagueRead])
 async def list_leagues(
     mine: bool = False,
+    visibility: LeagueVisibility | None = None,
+    league_type: LeagueType | None = None,
+    open_only: bool = False,
+    wanted_board_only: bool = False,
+    sort: str = "newest",
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
+    if sort not in _VALID_SORTS:
+        raise HTTPException(status_code=422, detail=f"sort must be one of {sorted(_VALID_SORTS)}")
+
     query = select(
         League,
         func.count(Team.id).label("team_count")
@@ -83,7 +94,33 @@ async def list_leagues(
         # restricts the general/discovery listing.
         query = query.where(League.visibility != LeagueVisibility.PRIVATE)
 
+    if wanted_board_only:
+        # Overrides/ignores a conflicting visibility=private param --
+        # the Wanted Board is never allowed to surface a Private league
+        # regardless of what the caller asked for.
+        query = query.where(League.visibility != LeagueVisibility.PRIVATE, League.wanted_board_hidden == False)  # noqa: E712
+    elif visibility is not None:
+        query = query.where(League.visibility == visibility)
+
+    if league_type is not None:
+        query = query.where(League.league_type == league_type)
+
     query = query.group_by(League.id)
+
+    # team_count is the aggregate from the group_by above -- needs HAVING,
+    # not WHERE, which can't reference an aggregated column.
+    if open_only or wanted_board_only:
+        query = query.having(func.count(Team.id) < League.max_teams)
+
+    if sort == "newest":
+        query = query.order_by(desc(League.created_at))
+    elif sort == "open_spots":
+        query = query.order_by(desc(League.max_teams - func.count(Team.id)))
+    elif sort == "name":
+        query = query.order_by(asc(League.name))
+    elif sort == "size":
+        query = query.order_by(asc(League.max_teams))
+
     result = await db.execute(query)
     rows = result.all()
     leagues = []

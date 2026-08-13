@@ -135,10 +135,28 @@ export const usersApi = {
     }),
 };
 
+export interface LeagueListFilters {
+  mine?: boolean;
+  visibility?: "private" | "invite_only" | "open";
+  league_type?: "standard" | "two_man" | "conference";
+  open_only?: boolean;
+  wanted_board_only?: boolean;
+  sort?: "newest" | "open_spots" | "name" | "size";
+}
+
 // Leagues
 export const leaguesApi = {
-  list: (mine?: boolean) =>
-    apiRequest(`/api/v1/leagues${mine ? "?mine=true" : ""}`),
+  list: (filters?: LeagueListFilters) => {
+    const params = new URLSearchParams();
+    if (filters?.mine) params.set("mine", "true");
+    if (filters?.visibility) params.set("visibility", filters.visibility);
+    if (filters?.league_type) params.set("league_type", filters.league_type);
+    if (filters?.open_only) params.set("open_only", "true");
+    if (filters?.wanted_board_only) params.set("wanted_board_only", "true");
+    if (filters?.sort) params.set("sort", filters.sort);
+    const qs = params.toString();
+    return apiRequest(`/api/v1/leagues${qs ? `?${qs}` : ""}`);
+  },
   get: (id: string) => apiRequest(`/api/v1/leagues/${id}`),
   create: (data: Record<string, unknown>) =>
     apiRequest("/api/v1/leagues", { method: "POST", body: data }),

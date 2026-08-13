@@ -115,7 +115,7 @@ function LineupTab() {
 
   useEffect(() => {
     leaguesApi
-      .list(true)
+      .list({ mine: true })
       .then((data) => setLeagues(Array.isArray(data) ? (data as League[]) : []))
       .catch(() => {});
   }, []);
@@ -216,7 +216,7 @@ function TradeTab() {
 
   useEffect(() => {
     leaguesApi
-      .list(true)
+      .list({ mine: true })
       .then((data) => setLeagues(Array.isArray(data) ? (data as League[]) : []))
       .catch(() => {});
   }, []);

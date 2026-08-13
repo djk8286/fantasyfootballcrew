@@ -374,7 +374,7 @@ export default function DashboardPage() {
       return;
     }
     leaguesApi
-      .list(true)
+      .list({ mine: true })
       .then((data) => {
         setLeagues(Array.isArray(data) ? data : []);
       })
