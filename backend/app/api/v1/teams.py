@@ -333,3 +333,23 @@ async def get_team(team_id: str, db: AsyncSession = Depends(get_db)):
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
     return team
+
+
+@router.get("/{team_id}/cap")
+async def get_team_cap(team_id: str, db: AsyncSession = Depends(get_db)):
+    """A team's active contracts + dead money + derived cap space.
+    Ungated public read, mirroring get_team's own unauthenticated-read
+    house style. Always available regardless of the league's
+    salary_cap_settings.enabled (cheap, informative even for a league
+    considering turning the feature on later -- cap_total will just be
+    the default and every contracts list will be empty) -- gating on
+    `enabled` is a frontend rendering decision, not an API-serving one."""
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return await team_cap_summary(team, league, db)
