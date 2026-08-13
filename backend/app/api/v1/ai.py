@@ -9,6 +9,7 @@ from app.core.limiter import limiter
 from app.models.team import Team
 from app.models.league import League
 from app.models.player import Player
+from app.models.coach import Coach
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.services.ai_service import AIService
@@ -35,6 +36,19 @@ async def _roster_summary(team: Team, db: AsyncSession) -> dict:
         p.id: {"name": f"{p.first_name} {p.last_name}", "position": p.position, "team": p.team}
         for p in players
     }
+
+
+async def _coach_summary(team: Team, db: AsyncSession) -> list[dict]:
+    """A team's active coaching staff, for threading into AI prompt
+    context (Phase 2 Step 3, "Front-Office finish-out") -- lets the AI
+    factor a team's win_bonus/flat_weekly coaches into its commentary."""
+    result = await db.execute(
+        select(Coach).where(Coach.team_id == team.id, Coach.is_active == True)  # noqa: E712
+    )
+    return [
+        {"position": c.position.value, "name": c.name, "bonus_type": c.bonus_type, "bonus_value": c.bonus_value}
+        for c in result.scalars().all()
+    ]
 
 
 class LineupAnalysisRequest(BaseModel):
@@ -74,10 +88,11 @@ async def analyze_lineup(
     scoring = (league.scoring_config if league else None) or {}
 
     roster = await _roster_summary(team, db)
+    coaching_staff = await _coach_summary(team, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_lineup(
-        roster=roster, opponent_roster={}, matchups={}, scoring=scoring
+        roster=roster, opponent_roster={}, matchups={}, scoring=scoring, coaching_staff=coaching_staff
     )
     return {"analysis": analysis}
 
@@ -128,10 +143,13 @@ async def analyze_trade(
     requested = [player_map.get(pid, {"name": pid}) for pid in requested_ids]
 
     standings = await get_standings(trade.league_id, db)
+    team_a_coaching = await _coach_summary(proposer, db)
+    team_b_coaching = await _coach_summary(target, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_trade(
-        team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings}
+        team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings},
+        team_a_coaching=team_a_coaching, team_b_coaching=team_b_coaching,
     )
     return {"analysis": analysis}
 
