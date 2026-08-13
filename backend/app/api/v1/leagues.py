@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_settings
+from app.services.standings_service import DEFAULT_RIVALRY_WEEK_SETTINGS, get_rivalry_week_settings
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.api.deps import get_current_user, get_current_user_optional, require_commissioner, user_can_join_league
@@ -267,6 +268,58 @@ async def update_league_playoff_settings(
     league.playoff_settings = merged
     await db.commit()
     return {"status": "ok", "playoff_settings": league.playoff_settings}
+
+
+@router.get("/{league_id}/rivalry-week-settings")
+async def get_league_rivalry_week_settings(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the Rivalry Week config for a league, or defaults (disabled).
+    Ungated -- safe to read regardless of league_type, same as
+    GET playoff-settings."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return get_rivalry_week_settings(league)
+
+
+class RivalryWeekSettingsUpdate(BaseModel):
+    rivalry_week_settings: dict
+
+
+@router.put("/{league_id}/rivalry-week-settings")
+async def update_league_rivalry_week_settings(
+    league_id: str,
+    data: RivalryWeekSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the Rivalry Week config for a league (commissioner only).
+    Only meaningful for CONFERENCE leagues (see calculate_week's gate) --
+    unlike conference naming, enabling this on a non-conference league
+    would look like it succeeded while silently never paying out, so
+    it's rejected outright rather than a harmless no-op."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
+    merged = dict(DEFAULT_RIVALRY_WEEK_SETTINGS)
+    merged.update(data.rivalry_week_settings)
+
+    if not isinstance(merged.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="rivalry_week_settings.enabled must be a boolean")
+    if merged["enabled"]:
+        if league.league_type != LeagueType.CONFERENCE:
+            raise HTTPException(status_code=400, detail="Rivalry Week can only be enabled for Conference leagues")
+        if not isinstance(merged.get("week"), int) or isinstance(merged.get("week"), bool) or merged["week"] < 1:
+            raise HTTPException(status_code=422, detail="rivalry_week_settings.week must be a positive integer when enabled")
+    if not isinstance(merged.get("bonus_value"), (int, float)) or isinstance(merged.get("bonus_value"), bool) or merged["bonus_value"] < 0:
+        raise HTTPException(status_code=422, detail="rivalry_week_settings.bonus_value must be a non-negative number")
+
+    league.rivalry_week_settings = merged
+    await db.commit()
+    return {"status": "ok", "rivalry_week_settings": league.rivalry_week_settings}
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)

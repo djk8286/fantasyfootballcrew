@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sql_func
 
 from app.models.team import Team
-from app.models.league import League
+from app.models.league import League, LeagueType
 from app.models.player import Player
 from app.models.weekly_score import WeeklyScore
 from app.models.coach import Coach
@@ -59,6 +59,27 @@ async def _coach_bonus_sum(team_id: str, bonus_type: str, db: AsyncSession) -> f
     )
     coaches = result.scalars().all()
     return sum(c.bonus_value or 0.0 for c in coaches)
+
+
+# Rivalry Week (Phase 3, "Enhanced Conference/Rivalry") -- a commissioner-
+# designated week where every team that wins its normal (same-conference)
+# matchup that week gets a flat bonus, on top of any Coach win_bonus. Same
+# JSON-blob-with-defaults pattern as DEFAULT_PLAYOFF_SETTINGS in
+# playoff_service.py; lives here rather than a dedicated module since this
+# is the module that actually consumes it (calculate_week, below).
+# Entirely opt-in (enabled defaults False) and only meaningful for
+# LeagueType.CONFERENCE -- see calculate_week's gate.
+DEFAULT_RIVALRY_WEEK_SETTINGS: Dict[str, Any] = {
+    "enabled": False,
+    "week": None,
+    "bonus_value": 0.0,
+}
+
+
+def get_rivalry_week_settings(league: League) -> Dict[str, Any]:
+    merged = dict(DEFAULT_RIVALRY_WEEK_SETTINGS)
+    merged.update(league.rivalry_week_settings or {})
+    return merged
 
 
 def _build_round_robin_schedule(team_ids: List[str], week: int) -> List[Tuple[str, str]]:
