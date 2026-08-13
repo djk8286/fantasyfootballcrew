@@ -1,8 +1,19 @@
 "use client";
 
+import { memo } from "react";
 import { Search, Plus, Loader2 } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
+import { PickCountdownBadge } from "./PickCountdown";
+import { useVirtualList } from "@/lib/useVirtualList";
+
+// Matches the row's actual rendered height (verified via CDP against a
+// real draft page: 64px, driven by the two-line name/team block, not the
+// 36px avatar). Virtualizing this list is the fix for a real, large
+// perf bug -- the undrafted player pool can be thousands of entries, all
+// previously mounted at once (thousands of concurrent avatar image
+// loads, confirmed via a live MutationObserver check), not just tens.
+const PLAYER_ROW_HEIGHT = 64;
 
 interface PlayerPoolPlayer {
   id: string;
@@ -95,7 +106,10 @@ interface PlayerPoolProps {
   onShowQueueChange: (show: boolean) => void;
   // "On the clock" banner
   currentPick: { pick_number: number; team: { name: string } } | null;
-  timeLeft: number | null;
+  // Deadline, not a ticking number -- see PickCountdown.tsx. Stable across
+  // the 500ms ticks (only changes when a new pick actually starts), which
+  // is what lets this whole component be wrapped in React.memo below.
+  pickStartedAt: string | null;
   timerSeconds: number;
   totalPicks: number;
   cpuingPick: boolean;
@@ -108,7 +122,7 @@ interface PlayerPoolProps {
   onPlayerHover: (player: PlayerPoolPlayer | null, el: HTMLElement | null) => void;
 }
 
-export default function PlayerPool({
+function PlayerPool({
   filteredPlayers,
   searchQuery,
   onSearchQueryChange,
@@ -126,7 +140,7 @@ export default function PlayerPool({
   showQueue,
   onShowQueueChange,
   currentPick,
-  timeLeft,
+  pickStartedAt,
   timerSeconds,
   totalPicks,
   cpuingPick,
@@ -136,6 +150,18 @@ export default function PlayerPool({
   nextTwoTeamNames,
   onPlayerHover,
 }: PlayerPoolProps) {
+  // Reset scroll on an actual filter/search edit (a deliberate "show me
+  // something different" action), not on every filteredPlayers reference
+  // change -- that also happens on the ~5s poll once any team picks, and
+  // resetting scroll then would yank anyone mid-browse back to the top.
+  const {
+    containerRef: playerListRef,
+    onScroll: onPlayerListScroll,
+    visibleItems: visiblePlayers,
+    paddingTop: playerListPaddingTop,
+    paddingBottom: playerListPaddingBottom,
+  } = useVirtualList(filteredPlayers, PLAYER_ROW_HEIGHT, `${positionFilter}:${searchQuery}`);
+
   return (
     <div className="flex-1 min-w-0">
       {/* ON THE CLOCK banner */}
@@ -172,19 +198,7 @@ export default function PlayerPool({
                 )}
               </p>
             </div>
-            {timeLeft !== null && timerSeconds > 0 && (
-              <div
-                className={`text-2xl font-bold font-mono tabular-nums ${
-                  timeLeft <= 10
-                    ? "text-red-400 animate-pulse"
-                    : timeLeft <= 30
-                      ? "text-yellow-400"
-                      : "text-surface-300"
-                }`}
-              >
-                {timeLeft}s
-              </div>
-            )}
+            <PickCountdownBadge startedAt={pickStartedAt} timerSeconds={timerSeconds} />
             <span className="text-surface-500 text-xs hidden sm:block">
               Pick {currentPick.pick_number}/{totalPicks}
             </span>
@@ -308,14 +322,20 @@ export default function PlayerPool({
 
         {/* Player/Queue list */}
         <div
+          ref={!showQueue ? playerListRef : undefined}
+          onScroll={!showQueue ? onPlayerListScroll : undefined}
           className={`${
             userOnClock
               ? "max-h-[calc(100vh-480px)]"
               : "max-h-[calc(100vh-430px)]"
-          } overflow-y-auto divide-y divide-surface-700/50`}
+          } overflow-y-auto ${showQueue ? "divide-y divide-surface-700/50" : ""}`}
         >
           {!showQueue ? (
-            // Player list
+            // Player list -- virtualized (see useVirtualList.ts). Only
+            // paddingTop/paddingBottom spacers + the rows actually in view
+            // are real DOM nodes; divide-y moves onto this inner wrapper
+            // since it needs to apply between the rendered rows, not
+            // between the spacers and the rows.
             filteredPlayers.length === 0 ? (
               <div className="p-6 text-center text-surface-500 text-sm">
                 {searchQuery
@@ -323,86 +343,92 @@ export default function PlayerPool({
                   : "No players available"}
               </div>
             ) : (
-              filteredPlayers.map((player) => {
-                const mine = userOnClock;
-                return (
-                  <div
-                    key={player.id}
-                    className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                      mine ? "hover:bg-surface-700/30 cursor-pointer" : ""
-                    } ${isQueued(player.id) ? "bg-gold-400/5" : ""}`}
-                  >
-                    {/* Avatar */}
-                    <PlayerAvatar player={player} size="md" onHover={onPlayerHover} />
-                    {/* Player info */}
+              <div
+                style={{ paddingTop: playerListPaddingTop, paddingBottom: playerListPaddingBottom }}
+                className="divide-y divide-surface-700/50"
+              >
+                {visiblePlayers.map((player) => {
+                  const mine = userOnClock;
+                  return (
                     <div
-                      className="flex-1 min-w-0"
-                      onMouseEnter={(e) => onPlayerHover(player, e.currentTarget)}
-                      onMouseLeave={() => onPlayerHover(null, null)}
+                      key={player.id}
+                      style={{ height: PLAYER_ROW_HEIGHT }}
+                      className={`flex items-center gap-3 px-4 py-3 transition-colors ${
+                        mine ? "hover:bg-surface-700/30 cursor-pointer" : ""
+                      } ${isQueued(player.id) ? "bg-gold-400/5" : ""}`}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-white truncate">
-                          {player.full_name}
-                        </span>
-                        <PositionBadge pos={player.position} />
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-surface-500 mt-0.5">
-                        <span>{player.team || "FA"}</span>
-                        {player.rank_score < 500 && (
-                          <span className="text-gold-400/70">
-                            Rank #{player.rank_score}
+                      {/* Avatar */}
+                      <PlayerAvatar player={player} size="md" onHover={onPlayerHover} />
+                      {/* Player info */}
+                      <div
+                        className="flex-1 min-w-0"
+                        onMouseEnter={(e) => onPlayerHover(player, e.currentTarget)}
+                        onMouseLeave={() => onPlayerHover(null, null)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-white truncate">
+                            {player.full_name}
                           </span>
+                          <PositionBadge pos={player.position} />
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-surface-500 mt-0.5">
+                          <span>{player.team || "FA"}</span>
+                          {player.rank_score < 500 && (
+                            <span className="text-gold-400/70">
+                              Rank #{player.rank_score}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {/* Last season's stats + team -- was blank space here before */}
+                      <PlayerStatsLine player={player} />
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Queue toggle */}
+                        <button
+                          onClick={() => onToggleQueue(player)}
+                          className={`p-1.5 rounded-lg transition-all ${
+                            isQueued(player.id)
+                              ? "bg-gold-400/20 text-gold-400"
+                              : "text-surface-500 hover:text-surface-300 hover:bg-surface-700"
+                          }`}
+                          title={
+                            isQueued(player.id)
+                              ? "Remove from queue"
+                              : "Add to queue"
+                          }
+                        >
+                          <Plus
+                            className={`w-4 h-4 transition-transform ${
+                              isQueued(player.id) ? "rotate-45" : ""
+                            }`}
+                          />
+                        </button>
+                        {/* Pick button */}
+                        {!isCompleted && (
+                          <button
+                            onClick={() => onMakePick(player.id)}
+                            disabled={actionLoading === "pick" || !mine}
+                            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+                              mine
+                                ? "bg-gold-400 hover:bg-gold-300 text-surface-900 hover:shadow-lg hover:shadow-gold-400/25 active:scale-95"
+                                : "bg-surface-700 text-surface-500 cursor-not-allowed"
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          >
+                            {actionLoading === "pick" ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : mine ? (
+                              "Pick"
+                            ) : (
+                              "—"
+                            )}
+                          </button>
                         )}
                       </div>
                     </div>
-                    {/* Last season's stats + team -- was blank space here before */}
-                    <PlayerStatsLine player={player} />
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Queue toggle */}
-                      <button
-                        onClick={() => onToggleQueue(player)}
-                        className={`p-1.5 rounded-lg transition-all ${
-                          isQueued(player.id)
-                            ? "bg-gold-400/20 text-gold-400"
-                            : "text-surface-500 hover:text-surface-300 hover:bg-surface-700"
-                        }`}
-                        title={
-                          isQueued(player.id)
-                            ? "Remove from queue"
-                            : "Add to queue"
-                        }
-                      >
-                        <Plus
-                          className={`w-4 h-4 transition-transform ${
-                            isQueued(player.id) ? "rotate-45" : ""
-                          }`}
-                        />
-                      </button>
-                      {/* Pick button */}
-                      {!isCompleted && (
-                        <button
-                          onClick={() => onMakePick(player.id)}
-                          disabled={actionLoading === "pick" || !mine}
-                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
-                            mine
-                              ? "bg-gold-400 hover:bg-gold-300 text-surface-900 hover:shadow-lg hover:shadow-gold-400/25 active:scale-95"
-                              : "bg-surface-700 text-surface-500 cursor-not-allowed"
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
-                        >
-                          {actionLoading === "pick" ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : mine ? (
-                            "Pick"
-                          ) : (
-                            "—"
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </div>
             )
           ) : (
             // Queue list
@@ -465,3 +491,13 @@ export default function PlayerPool({
     </div>
   );
 }
+
+// filteredPlayers can be thousands of rows -- memo() so a parent re-render
+// that doesn't actually change any of this component's props (e.g. the
+// 5s draft-state poll ticking `draft` while nothing here changed) doesn't
+// force React to re-reconcile all of them. Only actually works because
+// pickStartedAt replaced a raw ticking timeLeft number (see above) and
+// the page memoizes filteredPlayers/availableQueue/positionCounts with
+// useMemo so their array/object references stay stable across renders
+// that don't change their real inputs.
+export default memo(PlayerPool);

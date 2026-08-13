@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3 } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import TeamCircle from "./DraftTeamCircle";
+import { PickCountdownText } from "./PickCountdown";
 import { formatPickLabel, picksUntilMyTurn, projectNextPick } from "@/lib/draftPickMath";
 
 // Matches draft/[id]/page.tsx's Player interface exactly (structurally --
@@ -74,7 +75,8 @@ interface MobileDraftRoomProps {
   isQueued: (id: string) => boolean;
   queue: MobileDraftPlayer[];
 
-  timeLeft: number | null;
+  // Deadline, not a ticking number -- see PickCountdown.tsx.
+  pickStartedAt: string | null;
   timerSeconds: number;
 
   autoPickForMe: boolean;
@@ -84,7 +86,7 @@ interface MobileDraftRoomProps {
   onShowBoard?: () => void;
 }
 
-export default function MobileDraftRoom({
+function MobileDraftRoom({
   teamOrder,
   teams,
   currentTeamId,
@@ -111,7 +113,7 @@ export default function MobileDraftRoom({
   onToggleQueue,
   isQueued,
   queue,
-  timeLeft,
+  pickStartedAt,
   timerSeconds,
   autoPickForMe,
   onToggleAutoPickForMe,
@@ -193,7 +195,8 @@ export default function MobileDraftRoom({
               <span className="text-xs text-green-400 font-semibold">Draft complete</span>
             ) : isUserOnClock ? (
               <span className="text-xs text-gold-400 font-bold animate-pulse">
-                YOUR PICK{timeLeft !== null && timerSeconds > 0 ? ` — ${timeLeft}s` : ""}
+                YOUR PICK
+                <PickCountdownText startedAt={pickStartedAt} timerSeconds={timerSeconds} prefix=" — " />
               </span>
             ) : picksAway !== null && nextPickLabel ? (
               <span className="text-xs text-surface-300">
@@ -456,3 +459,7 @@ export default function MobileDraftRoom({
     </div>
   );
 }
+
+// Same reasoning as PlayerPool.tsx's memo() wrap -- filteredPlayers here
+// can also be thousands of rows.
+export default memo(MobileDraftRoom);

@@ -58,7 +58,14 @@ export default function TeamRosters({
   onPlayerHover,
 }: TeamRostersProps) {
   return (
-    <div className="w-full xl:w-[380px] shrink-0">
+    // w-full, not a fixed width -- this only ever renders inside
+    // draft/[id]/page.tsx's left column, which is itself already fixed at
+    // w-[300px]. An xl:w-[380px] here used to force this component 80px
+    // wider than that parent allows, and with no overflow-hidden on the
+    // parent that overflow just spilled straight into the center player
+    // pool column instead of being clipped -- the actual cause of the
+    // reported "left panel overlaps center panel" bug.
+    <div className="w-full shrink-0">
       <div className="xl:sticky xl:top-20 space-y-4">
         {/* My Team */}
         <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">

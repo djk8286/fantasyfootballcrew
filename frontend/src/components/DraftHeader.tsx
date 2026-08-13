@@ -12,7 +12,20 @@ import {
   History,
 } from "lucide-react";
 import TeamCircle from "./DraftTeamCircle";
+import { usePickCountdown } from "./PickCountdown";
 import { formatPickLabel, picksUntilMyTurn } from "@/lib/draftPickMath";
+
+// Its own leaf component (not just an inline expression using the hook
+// directly in DraftHeader's body) so the 500ms tick only re-renders this
+// button, not the whole header -- same reasoning as PickCountdown.tsx.
+// Needs its own idle fallback (the static configured timerSeconds, shown
+// before the first tick / between picks) that PickCountdownText/Badge
+// don't provide, so it's colocated here rather than a third exported
+// variant there.
+function TimerButtonLabel({ startedAt, timerSeconds }: { startedAt: string | null; timerSeconds: number }) {
+  const timeLeft = usePickCountdown(startedAt, timerSeconds);
+  return <>{timeLeft !== null ? timeLeft : timerSeconds}s</>;
+}
 
 interface DraftHeaderProps {
   leagueId: string;
@@ -22,7 +35,7 @@ interface DraftHeaderProps {
   totalPicks: number;
   completedPicks: number;
   timerSeconds: number;
-  timeLeft: number | null;
+  pickStartedAt: string | null;
   showTimerSettings: boolean;
   viewMode: "draft" | "board" | "history";
   actionLoading: string;
@@ -48,7 +61,7 @@ export default function DraftHeader({
   totalPicks,
   completedPicks,
   timerSeconds,
-  timeLeft,
+  pickStartedAt,
   showTimerSettings,
   viewMode,
   actionLoading,
@@ -71,7 +84,15 @@ export default function DraftHeader({
       : null;
   return (
     <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5">
+      {/* max-w-7xl (1280px) was fine for every other page, but the draft
+          room's desktop layout is two fixed 300px side columns plus a
+          stats-dense center player list -- that alone needs ~800px+ of
+          breathing room, which 1280px can't give it without squeezing the
+          player-name column down toward 0px (verified via CDP -- see the
+          commit this landed in). Widened here AND in draft/[id]/page.tsx's
+          own containers so the header stays edge-aligned with the body
+          below it. */}
+      <div className="max-w-425 mx-auto px-4 sm:px-6 lg:px-8 py-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <Link
@@ -148,7 +169,7 @@ export default function DraftHeader({
                   title="Timer settings"
                 >
                   <Timer className="w-3 h-3" />
-                  {timeLeft !== null ? timeLeft : timerSeconds}s
+                  <TimerButtonLabel startedAt={pickStartedAt} timerSeconds={timerSeconds} />
                 </button>
                 {showTimerSettings && (
                   <div className="absolute right-0 top-full mt-2 bg-surface-800 border border-surface-700 rounded-xl p-3 shadow-xl z-50 min-w-[180px]">

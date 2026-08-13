@@ -626,7 +626,24 @@ export default function LeagueDetailPage() {
             </div>
 
             {/* Draft + Commissioner Buttons */}
-            <div className="shrink-0 flex flex-col sm:flex-row gap-2">
+            {/* No shrink-0 here (confirmed empirically -- see the commit
+                this landed in): flex-wrap alone does NOT shrink a flex
+                item's own contribution to an ancestor flex row's layout --
+                that's governed by flex-shrink, and shrink-0 pins this
+                container at its full *unwrapped* intrinsic width (10
+                buttons, 1400px+) regardless of whether its own children
+                can wrap. The sibling name/description block (flex-1
+                min-w-0, so it DOES shrink) was getting squeezed to a
+                literal 0px, wrapping the league name one word per line.
+                Removing shrink-0 lets this container's own min-content
+                width shrink to just its widest single child once
+                flex-wrap is honored, so both siblings share space. An
+                explicit max-width keeps it from claiming more than a
+                reasonable chunk of a very wide viewport once it's free to
+                shrink -- flex-shrink alone would still let it eat almost
+                all the width purely because it starts out much wider
+                than the title block's flex-basis. */}
+            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-end gap-2 lg:max-w-160">
               {isLeagueManager && (
                 <Link
                   href={`/leagues/${id}/commissioner`}

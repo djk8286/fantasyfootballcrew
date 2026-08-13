@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { draftsApi } from "@/lib/api-client";
@@ -113,7 +113,6 @@ export default function DraftPage() {
   const [actionLoading, setActionLoading] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [positionFilter, setPositionFilter] = useState("ALL");
-  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [cpuingPick, setCpuingPick] = useState(false);
   const [showTimerSettings, setShowTimerSettings] = useState(false);
   const [viewMode, setViewMode] = useState<"draft" | "board" | "history">("draft");
@@ -136,6 +135,53 @@ export default function DraftPage() {
 
   // Queue system
   const [queue, setQueue] = useState<Player[]>([]);
+
+  // Filter + search players. Memoized -- available_players can be
+  // thousands of entries (the full undrafted NFL+IDP pool), and this page
+  // re-renders for lots of reasons that have nothing to do with the
+  // player list (hover state, action-loading toggles, panel expand/
+  // collapse, etc.). Without memoizing, every one of those would
+  // recompute a brand-new filteredPlayers array reference, which -- since
+  // PlayerPool/MobileDraftRoom are wrapped in React.memo -- would defeat
+  // that memo and force a full re-reconciliation of the whole list on
+  // every unrelated state change. This only recomputes when the real
+  // inputs (fresh poll data, or an actual filter/search edit) change.
+  //
+  // Placed here (above the loading/error early returns below, unlike
+  // where this used to live as plain consts after them) because hooks
+  // can't follow a conditional return -- these are read directly off
+  // `draft` (possibly still null pre-load) rather than the later `allPicks`
+  // derived const, which relies on the early returns having already
+  // guaranteed draft is non-null by that point.
+  const available = useMemo(() => draft?.available_players || [], [draft?.available_players]);
+  const draftedIds = useMemo(
+    () => new Set((draft?.picks || []).filter(p => p.player).map(p => p.player!.id)),
+    [draft?.picks],
+  );
+  const filteredPlayers = useMemo(() => available.filter((p) => {
+    if (positionFilter !== "ALL" && p.position !== positionFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return (
+        p.full_name.toLowerCase().includes(q) ||
+        p.team.toLowerCase().includes(q) ||
+        p.position.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  }), [available, positionFilter, searchQuery]);
+
+  // Filter queue to only show still-available players
+  const availableQueue = useMemo(
+    () => queue.filter(p => !draftedIds.has(p.id)),
+    [queue, draftedIds],
+  );
+
+  const positionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    available.forEach((p) => { counts[p.position] = (counts[p.position] || 0) + 1; });
+    return counts;
+  }, [available]);
   const [showQueue, setShowQueue] = useState(false);
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
 
@@ -220,7 +266,11 @@ export default function DraftPage() {
     setActionLoading("");
   };
 
-  const handleMakePick = async (playerId: string) => {
+  // useCallback (like handlePlayerHover/fetchState already were) so this
+  // stays a stable reference across renders that don't actually need a
+  // new one -- part of what lets PlayerPool/MobileDraftRoom's React.memo
+  // actually skip re-rendering the player list on unrelated state changes.
+  const handleMakePick = useCallback(async (playerId: string) => {
     if (!draft?.current_team_id) return;
     setActionLoading("pick");
     try {
@@ -232,25 +282,15 @@ export default function DraftPage() {
       setError(err instanceof Error ? err.message : "Failed to make pick");
     }
     setActionLoading("");
-  };
+  }, [draft?.current_team_id, id, fetchState]);
 
-  // Timer countdown
-  useEffect(() => {
-    if (!draft || draft.draft.status !== "in_progress" || !draft.draft.current_pick_started_at) {
-      setTimeLeft(null);
-      return;
-    }
-    const timer = draft.draft.timer_seconds;
-    if (!timer || timer <= 0) { setTimeLeft(null); return; }
-    const updateTimer = () => {
-      const started = new Date(draft.draft.current_pick_started_at!).getTime();
-      const elapsed = (Date.now() - started) / 1000;
-      setTimeLeft(Math.max(0, Math.ceil(timer - elapsed)));
-    };
-    updateTimer();
-    const interval = setInterval(updateTimer, 500);
-    return () => clearInterval(interval);
-  }, [draft?.draft.status, draft?.draft.current_pick_started_at, draft?.draft.timer_seconds]);
+  // No more page-level ticking timer state here -- see PickCountdown.tsx.
+  // The deadline is just draft.draft.current_pick_started_at, which is
+  // already page state that only changes when a pick actually starts;
+  // PlayerPool/MobileDraftRoom each own their own 500ms tick internally
+  // now, instead of that tick forcing this whole page (and its
+  // potentially thousands-of-rows player list) to re-render twice a
+  // second regardless of whose clock is running.
 
   const isUserOnClock = (): boolean => {
     if (!draft || !draft.current_team_id) return false;
@@ -287,14 +327,31 @@ export default function DraftPage() {
     return () => clearTimeout(timer);
   }, [draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, draft?.draft?.current_round, doCpuPick]);
 
-  // Auto-pick when user's timer expires
+  // Auto-pick when the user's own timer expires. Previously driven by
+  // watching the page-level ticking `timeLeft` state cross to 0 (removed
+  // -- see PickCountdown.tsx for why that state doesn't live here
+  // anymore) -- a single setTimeout scheduled for the exact deadline does
+  // the same job without needing a 500ms tick anywhere on this page. Only
+  // reschedules when a new pick actually starts or turn ownership
+  // changes, not on every poll (current_pick_started_at/timer_seconds
+  // are stable across polls of the same in-progress pick).
   useEffect(() => {
-    if (!draft || timeLeft === null || timeLeft > 0 || !isUserOnClock()) return;
-    const doAutoPick = async () => {
-      try { await draftsApi.autoPick(id); await fetchState(); } catch {}
+    if (!draft || !isUserOnClock()) return;
+    const startedAt = draft.draft.current_pick_started_at;
+    const timer = draft.draft.timer_seconds;
+    if (!startedAt || !timer || timer <= 0) return;
+
+    const doAutoPick = () => {
+      draftsApi.autoPick(id).then(() => fetchState()).catch(() => {});
     };
-    doAutoPick();
-  }, [timeLeft]);
+    const msLeft = new Date(startedAt).getTime() + timer * 1000 - Date.now();
+    if (msLeft <= 0) {
+      doAutoPick();
+      return;
+    }
+    const t = setTimeout(doAutoPick, msLeft);
+    return () => clearTimeout(t);
+  }, [draft?.draft.current_pick_started_at, draft?.draft.timer_seconds, draft?.current_team_id, myTeamId, id, fetchState]);
 
   // Auto-pick from queue when it's user's turn
   useEffect(() => {
@@ -356,15 +413,15 @@ export default function DraftPage() {
     }
   };
 
-  const toggleQueue = (player: Player) => {
+  const toggleQueue = useCallback((player: Player) => {
     setQueue(prev => {
       const exists = prev.find(p => p.id === player.id);
       if (exists) return prev.filter(p => p.id !== player.id);
       return [...prev, player];
     });
-  };
+  }, []);
 
-  const isQueued = (playerId: string) => queue.some(p => p.id === playerId);
+  const isQueued = useCallback((playerId: string) => queue.some(p => p.id === playerId), [queue]);
 
   // Build team rosters
   const teamRosters: Record<string, DraftPick[]> = {};
@@ -408,7 +465,7 @@ export default function DraftPage() {
   if (draft && draft.draft.status === "pending") {
     return (
       <div className="min-h-screen bg-surface-900">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <div className="max-w-425 mx-auto px-4 sm:px-6 lg:px-8 py-10">
           <Link href={`/leagues/${draft.draft.league_id}`} className="inline-flex items-center gap-1 text-surface-400 hover:text-gold-400 transition-colors text-sm mb-8">
             <ChevronLeft className="w-4 h-4" /> Back to League
           </Link>
@@ -536,28 +593,6 @@ export default function DraftPage() {
     ? team_order.slice(0, draftInfo.num_teams).map(tid => ({ id: tid, ...draft.teams[tid] })).filter(Boolean)
     : [];
 
-  // Filter + search players
-  const available = draft!.available_players || [];
-  const draftedIds = new Set(allPicks.filter(p => p.player).map(p => p.player!.id));
-  const filteredPlayers = available.filter((p) => {
-    if (positionFilter !== "ALL" && p.position !== positionFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return (
-        p.full_name.toLowerCase().includes(q) ||
-        p.team.toLowerCase().includes(q) ||
-        p.position.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
-
-  // Filter queue to only show still-available players
-  const availableQueue = queue.filter(p => !draftedIds.has(p.id));
-
-  const positionCounts: Record<string, number> = {};
-  available.forEach((p) => { positionCounts[p.position] = (positionCounts[p.position] || 0) + 1; });
-
   const currentRound = isCompleted ? draftInfo.total_rounds : draftInfo.current_round;
 
   // Build my team roster by position
@@ -582,7 +617,7 @@ export default function DraftPage() {
       {/* Draft complete — nothing used to point people anywhere from here */}
       {isCompleted && (
         <div className="bg-gold-400/10 border-b border-gold-400/25 px-4 py-3">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="max-w-425 mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-gold-300">
               <Trophy className="w-5 h-5" />
               <span className="font-semibold">Draft complete!</span>
@@ -610,7 +645,7 @@ export default function DraftPage() {
         totalPicks={draftInfo.total_picks}
         completedPicks={completedPicks.length}
         timerSeconds={draftInfo.timer_seconds}
-        timeLeft={timeLeft}
+        pickStartedAt={draft?.draft.current_pick_started_at || null}
         showTimerSettings={showTimerSettings}
         viewMode={viewMode}
         actionLoading={actionLoading}
@@ -627,7 +662,13 @@ export default function DraftPage() {
       />
 
       {/* BODY — Two modes */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+      {/* max-w-425 (1700px), not max-w-7xl (1280px) -- see DraftHeader.tsx's
+          comment on its own matching container. The desktop 3-column
+          layout below (two fixed 300px side panels + PlayerPool) needs
+          real room; at 1280px the center player list's name column was
+          measured at 14px wide (verified via CDP), which is what the
+          reported "player names overlapping" bug actually was. */}
+      <div className="max-w-425 mx-auto px-4 sm:px-6 lg:px-8 py-4">
         {/* Panel layout for draft mode */}
         {viewMode === "draft" && (
           <>
@@ -658,7 +699,7 @@ export default function DraftPage() {
             onToggleQueue={toggleQueue}
             isQueued={isQueued}
             queue={availableQueue}
-            timeLeft={timeLeft}
+            pickStartedAt={draft?.draft.current_pick_started_at || null}
             timerSeconds={draftInfo.timer_seconds}
             autoPickForMe={autoPickForMe}
             onToggleAutoPickForMe={() => setAutoPickForMe((prev) => !prev)}
@@ -716,7 +757,7 @@ export default function DraftPage() {
               showQueue={showQueue}
               onShowQueueChange={setShowQueue}
               currentPick={currentPick}
-              timeLeft={timeLeft}
+              pickStartedAt={draft?.draft.current_pick_started_at || null}
               timerSeconds={draftInfo.timer_seconds}
               totalPicks={draftInfo.total_picks}
               cpuingPick={cpuingPick}
