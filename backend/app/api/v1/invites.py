@@ -10,10 +10,12 @@ from app.models.league import League, LeagueVisibility
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.models.user import User
+from app.models.notification import NotificationType
 from app.schemas.league_invite import InviteCreateRequest, InviteRead, InviteLandingRead
 from app.schemas.league_join_request import JoinRequestCreate, JoinRequestRead, JoinRequestDecision
 from app.services.auth_service import hash_token
 from app.services.email_service import send_league_invite_email
+from app.services.notification_service import create_notification
 from app.api.deps import get_current_user, require_commissioner
 
 # No router-level prefix -- unlike every other feature router, this one
@@ -167,6 +169,16 @@ async def accept_invite(
     invite.status = InviteStatus.ACCEPTED
     invite.accepted_at = datetime.now(timezone.utc)
     invite.accepted_by_user_id = current_user.id
+
+    league = await _get_league_or_404(invite.league_id, db)
+    # Notify whoever specifically sent this invite, not every commissioner
+    # -- they're the one with context on who they invited and why.
+    await create_notification(
+        db, invite.invited_by_user_id, NotificationType.LEAGUE_INVITE_ACCEPTED,
+        f"{current_user.username} accepted your invite to {league.name}.",
+        league_id=league.id, link=f"/leagues/{league.id}/commissioner",
+    )
+
     await db.commit()
     return {"status": "ok", "league_id": invite.league_id}
 
@@ -184,6 +196,14 @@ async def _username_map(db: AsyncSession, user_ids: set[str]) -> dict[str, str]:
         return {}
     result = await db.execute(select(User.id, User.username).where(User.id.in_(user_ids)))
     return {uid: username for uid, username in result.all()}
+
+
+async def _notify_commissioners(db: AsyncSession, league: League, type: NotificationType, message: str, link: str) -> None:
+    """Unlike LeagueInvite's accept (one specific inviter has context),
+    a join request isn't addressed to anyone in particular -- any
+    commissioner or co-commissioner should see it and can act on it."""
+    for user_id in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
+        await create_notification(db, user_id, type, message, league_id=league.id, link=link)
 
 
 @router.post("/leagues/{league_id}/join-requests", response_model=JoinRequestRead, status_code=201)
@@ -218,6 +238,13 @@ async def create_join_request(
         message=data.message,
     )
     db.add(join_request)
+
+    await _notify_commissioners(
+        db, league, NotificationType.JOIN_REQUEST_RECEIVED,
+        f"{current_user.username} requested to join {league.name}.",
+        link=f"/leagues/{league_id}/commissioner",
+    )
+
     await db.commit()
     await db.refresh(join_request)
     return JoinRequestRead(
@@ -275,5 +302,13 @@ async def decide_join_request(
     join_request.status = JoinRequestStatus.APPROVED if data.action == "approve" else JoinRequestStatus.DENIED
     join_request.decided_by_user_id = current_user.id
     join_request.decided_at = datetime.now(timezone.utc)
+
+    decision_word = "approved" if join_request.status == JoinRequestStatus.APPROVED else "denied"
+    await create_notification(
+        db, join_request.requested_by_user_id, NotificationType.JOIN_REQUEST_DECIDED,
+        f"Your request to join {league.name} was {decision_word}.",
+        league_id=league.id, link=f"/leagues/{league.id}",
+    )
+
     await db.commit()
     return {"status": "ok", "decision": join_request.status.value}

@@ -14,6 +14,9 @@ class NotificationType(str, enum.Enum):
     MATCHUP_WON = "matchup_won"
     MATCHUP_LOST = "matchup_lost"
     MATCHUP_TIED = "matchup_tied"
+    LEAGUE_INVITE_ACCEPTED = "league_invite_accepted"
+    JOIN_REQUEST_RECEIVED = "join_request_received"
+    JOIN_REQUEST_DECIDED = "join_request_decided"
 
 
 class Notification(Base):
