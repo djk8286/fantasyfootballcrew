@@ -485,3 +485,33 @@ async def test_noop_when_a_team_is_not_yet_scored(guillotine_seed):
 
     result = await _run_guillotine(db_session_factory, league_id, 2026, 1)
     assert result is None
+
+
+# ─── Step 4: wired into POST /standings/calculate (manual entry point) ──
+
+@pytest.mark.asyncio
+async def test_calculate_endpoint_returns_elimination_for_guillotine_league(client, guillotine_seed):
+    league_id = guillotine_seed["league_id"]
+    t1 = guillotine_seed["team_ids"][0]
+    db_session_factory = guillotine_seed["db_session_factory"]
+    await _add_coach(db_session_factory, t1, "flat_weekly", 20.0)
+
+    client.headers["Authorization"] = f"Bearer {guillotine_seed['token']}"
+    r = await client.post(f"/leagues/{league_id}/standings/calculate?week=1&year=2026")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["elimination"] is not None
+    assert body["elimination"]["week"] == 1
+    assert body["elimination"]["eliminated_team_id"] != t1
+
+
+@pytest.mark.asyncio
+async def test_calculate_endpoint_elimination_is_null_for_non_guillotine_league(client, seed):
+    league_id = seed["league_id"]
+
+    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    r = await client.post(f"/leagues/{league_id}/standings/calculate?week=1&year=2026")
+
+    assert r.status_code == 200
+    assert r.json()["elimination"] is None

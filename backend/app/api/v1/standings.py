@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
-from app.models.league import League
+from app.models.league import League, LeagueType
 from app.models.weekly_score import WeeklyScore
 from app.models.user import User
 from app.services.standings_service import (
@@ -12,6 +12,7 @@ from app.services.standings_service import (
     get_season_schedule,
     DEFAULT_SEASON_WEEKS,
 )
+from app.services.guillotine_service import process_league_guillotine
 from app.api.deps import get_current_user, require_commissioner
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
@@ -150,9 +151,21 @@ async def calculate_week_standings(
 
     try:
         result = await calculate_week(league_id, week, year, db)
+
+        # Guillotine (Phase 4): the commissioner's manual trigger is a
+        # second, independent entry point into elimination alongside the
+        # scheduler's own once-per-week-transition hook (see scheduler.py)
+        # -- process_league_guillotine is idempotent, so calling it here
+        # too can't double-eliminate anyone even if both paths ever fire
+        # for the same week.
+        elimination = None
+        if league.league_type == LeagueType.GUILLOTINE:
+            elimination = await process_league_guillotine(league, year, week, db)
+
         return {
             "message": f"Calculated scores for week {week}, {year}",
             "result": result,
+            "elimination": elimination,
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

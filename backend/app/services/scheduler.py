@@ -40,7 +40,8 @@ from app.core.database import async_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, SLEEPER_API
 from app.services.standings_service import calculate_week, notify_matchup_results
 from app.services.playoff_service import process_league_playoffs
-from app.models.league import League, DraftStatus
+from app.services.guillotine_service import process_league_guillotine
+from app.models.league import League, DraftStatus, LeagueType
 
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
 STATS_SYNC_INTERVAL = 2 * 60    # 2 minutes -- as live as practical without hammering Sleeper's free API
@@ -140,6 +141,35 @@ async def _process_all_league_playoffs_once(season: int, week: int) -> None:
         print(f"[scheduler] Processed playoffs for {processed} league(s)" + (f", {failed} failed" if failed else ""))
 
 
+async def _process_all_league_guillotines_once(season: int, week: int) -> None:
+    """Runs Guillotine elimination for every real, draft-completed
+    GUILLOTINE league for the week that JUST ended. Elimination is
+    irreversible, so -- unlike playoff advancement's repeatable
+    live-week-comparison style above, which just re-checks and no-ops
+    once a round is already resolved -- this must only ever act on a
+    week Sleeper's own live clock has already moved past, the same
+    one-time signal _notify_matchup_results_for_all_leagues_once uses.
+    Called from that exact same _last_seen_week transition block, right
+    before it, so a team's TEAM_ELIMINATED notification and its
+    matchup-result notification land together for the same, now-settled
+    week."""
+    async with async_session() as db:
+        result = await db.execute(select(League).where(League.league_type == LeagueType.GUILLOTINE))
+        leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
+
+        processed, failed = 0, 0
+        for league in leagues:
+            try:
+                await process_league_guillotine(league, season, week, db)
+                processed += 1
+            except Exception as e:
+                failed += 1
+                print(f"[scheduler] Guillotine processing failed for league {league.id}: {e}")
+
+    if processed:
+        print(f"[scheduler] Processed guillotine elimination for {processed} league(s), week {week} {season}" + (f", {failed} failed" if failed else ""))
+
+
 # In-memory only -- see run_scheduler's call site for why that's an
 # acceptable, deliberate tradeoff (a redeploy landing at the exact moment
 # the live week changes just misses that one notification pass, not a
@@ -224,6 +254,10 @@ async def run_scheduler() -> None:
             # scores yet.
             if _last_seen_week is not None and _last_seen_week != (season, week):
                 prev_season, prev_week = _last_seen_week
+                try:
+                    await _process_all_league_guillotines_once(prev_season, prev_week)
+                except Exception as e:
+                    print(f"[scheduler] Guillotine pass failed: {e}")
                 try:
                     await _notify_matchup_results_for_all_leagues_once(prev_season, prev_week)
                 except Exception as e:
