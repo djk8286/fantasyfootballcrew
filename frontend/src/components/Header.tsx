@@ -7,10 +7,15 @@ import { Menu, X, Settings } from "lucide-react";
 import { isLoggedIn, logout } from "@/lib/api-client";
 import NotificationBell from "./NotificationBell";
 
+// Features is a logged-out marketing page (RedirectIfLoggedIn already
+// bounces a logged-in visitor who navigates there directly to /dashboard)
+// -- loggedOutOnly keeps the nav link itself from dangling around
+// pointing somewhere a logged-in user would just get redirected away
+// from anyway.
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/mock-draft", label: "Mock Draft" },
-  { href: "/features", label: "Features" },
+  { href: "/features", label: "Features", loggedOutOnly: true },
   { href: "/leagues", label: "Leagues" },
   { href: "/ai-analysis", label: "AI Analysis" },
 ];
@@ -57,7 +62,7 @@ export default function Header() {
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-8">
-            {NAV_LINKS.map((link) => (
+            {NAV_LINKS.filter((link) => !link.loggedOutOnly || !loggedIn).map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
@@ -136,7 +141,7 @@ export default function Header() {
       {menuOpen && (
         <div className="md:hidden border-t border-surface-700 bg-surface-900/95 backdrop-blur-md">
           <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-1">
-            {NAV_LINKS.map((link) => (
+            {NAV_LINKS.filter((link) => !link.loggedOutOnly || !loggedIn).map((link) => (
               <Link
                 key={link.href}
                 href={link.href}

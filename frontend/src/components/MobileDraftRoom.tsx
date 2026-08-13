@@ -55,6 +55,10 @@ interface MobileDraftRoomProps {
   totalRounds: number;
   isCompleted: boolean;
   myTeamId: string | null;
+  // 2-Man team on-the-clock indicator -- see draft/[id]/page.tsx for how
+  // these are derived (display convention only, not enforcement).
+  currentTeamHasCoOwner: boolean;
+  onClockManagerIsOwner: boolean;
 
   lastPick: MobileDraftPick | null;
 
@@ -98,6 +102,8 @@ function MobileDraftRoom({
   totalRounds,
   isCompleted,
   myTeamId,
+  currentTeamHasCoOwner,
+  onClockManagerIsOwner,
   lastPick,
   availablePlayers,
   myRosterByPos,
@@ -226,6 +232,28 @@ function MobileDraftRoom({
             )}
           </div>
         </div>
+
+        {/* 2-Man team: whose turn it "should" be within the shared team --
+            convention only, either co-manager can actually submit the pick.
+            Same reasoning as PlayerPool.tsx's matching desktop chips. */}
+        {!isCompleted && currentTeamHasCoOwner && (
+          <div className="flex items-center gap-1.5 px-4 mt-1.5">
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                onClockManagerIsOwner ? "bg-gold-400/20 text-gold-400" : "bg-surface-800 text-surface-500"
+              }`}
+            >
+              Owner{onClockManagerIsOwner ? "'s pick" : ""}
+            </span>
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                !onClockManagerIsOwner ? "bg-gold-400/20 text-gold-400" : "bg-surface-800 text-surface-500"
+              }`}
+            >
+              Co-Owner{!onClockManagerIsOwner ? "'s pick" : ""}
+            </span>
+          </div>
+        )}
 
         {/* Last pick */}
         {lastPick?.player && (

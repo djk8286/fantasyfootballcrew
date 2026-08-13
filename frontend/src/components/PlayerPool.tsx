@@ -115,6 +115,10 @@ interface PlayerPoolProps {
   cpuingPick: boolean;
   draftCurrentTeamName: string | null;
   myTeamId: string | null;
+  // 2-Man team on-the-clock indicator -- see draft/[id]/page.tsx for how
+  // these are derived (display convention only, not enforcement).
+  currentTeamHasCoOwner: boolean;
+  onClockManagerIsOwner: boolean;
   // Last pick + on deck
   lastPick: PlayerPoolPick | null;
   nextTwoTeamNames: string[];
@@ -146,6 +150,8 @@ function PlayerPool({
   cpuingPick,
   draftCurrentTeamName,
   myTeamId,
+  currentTeamHasCoOwner,
+  onClockManagerIsOwner,
   lastPick,
   nextTwoTeamNames,
   onPlayerHover,
@@ -210,6 +216,32 @@ function PlayerPool({
                   </span>
                 )}
               </p>
+              {/* 2-Man team: shows whose turn it "should" be within the
+                  shared team, alternating by pick count -- a convention
+                  for the two co-managers to coordinate by, not an
+                  enforcement (either can actually submit the pick). */}
+              {currentTeamHasCoOwner && (
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      onClockManagerIsOwner
+                        ? "bg-gold-400/20 text-gold-400"
+                        : "bg-surface-700/60 text-surface-500"
+                    }`}
+                  >
+                    Owner{onClockManagerIsOwner ? "'s pick" : ""}
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      !onClockManagerIsOwner
+                        ? "bg-gold-400/20 text-gold-400"
+                        : "bg-surface-700/60 text-surface-500"
+                    }`}
+                  >
+                    Co-Owner{!onClockManagerIsOwner ? "'s pick" : ""}
+                  </span>
+                </div>
+              )}
             </div>
             <PickCountdownBadge startedAt={pickStartedAt} timerSeconds={timerSeconds} />
             <span className="text-surface-500 text-xs hidden sm:block">

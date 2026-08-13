@@ -1,6 +1,18 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { isLoggedIn } from "@/lib/api-client";
 
 export default function Footer() {
+  // Features is a logged-out marketing page (see Header.tsx's matching
+  // treatment) -- same brief-flash-before-effect-runs tradeoff already
+  // accepted elsewhere in this app (RedirectIfLoggedIn), not a new one.
+  const [loggedIn, setLoggedIn] = useState(false);
+  useEffect(() => {
+    setLoggedIn(isLoggedIn());
+  }, []);
+
   return (
     <footer className="border-t border-surface-700 bg-surface-900 py-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -30,14 +42,16 @@ export default function Footer() {
               Product
             </h3>
             <ul className="space-y-2">
-              <li>
-                <Link
-                  href="/features"
-                  className="text-surface-400 hover:text-gold-400 text-sm transition-colors"
-                >
-                  Features
-                </Link>
-              </li>
+              {!loggedIn && (
+                <li>
+                  <Link
+                    href="/features"
+                    className="text-surface-400 hover:text-gold-400 text-sm transition-colors"
+                  >
+                    Features
+                  </Link>
+                </li>
+              )}
               <li>
                 <Link
                   href="/leagues"

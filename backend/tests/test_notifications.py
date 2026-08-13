@@ -119,6 +119,42 @@ async def test_trade_notification_goes_to_the_right_specific_owner(client, seed)
 
 
 @pytest.mark.asyncio
+async def test_2man_team_notifies_both_owner_and_co_owner(client, seed):
+    """A 2-Man/Household team's co-owner is exactly as much a real manager
+    of that team as the owner -- confirms notify_team_owners' fan-out
+    (notification_service.py) actually reaches both humans, not just
+    whichever one happens to be `owner_id`, using a real notification-
+    triggering flow (trade approval) rather than calling the helper
+    directly."""
+    league_id = seed["league_id"]
+    team_a, team_b = seed["team_a"], seed["team_b"]
+    a0, b0 = seed["players"][0], seed["players"][2]
+    db_session_factory = seed["db_session_factory"]
+
+    async with db_session_factory() as db:
+        co_owner = User(id=str(uuid.uuid4()), email="coowner@test.local", username="coowner", hashed_password="x")
+        db.add(co_owner)
+        await db.flush()
+        (await db.execute(select(Team).where(Team.id == team_a))).scalar_one().co_owner_id = co_owner.id
+        await db.commit()
+
+    trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
+
+    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
+    assert r.status_code == 200
+
+    # team_a's owner is the seed commissioner (owns team_b too, so 2 notes
+    # land on them overall) -- the real assertion here is that the
+    # co-owner, a distinct human with no other connection to this trade,
+    # also got notified for team_a specifically.
+    co_owner_notes = await _notifications_for(db_session_factory, co_owner.id)
+    approved = [n for n in co_owner_notes if n.type == NotificationType.TRADE_APPROVED]
+    assert len(approved) == 1
+    assert "Team B" in approved[0].message
+
+
+@pytest.mark.asyncio
 async def test_granted_waiver_claim_notifies_the_claiming_team(client, seed):
     league_id = seed["league_id"]
     team_a = seed["team_a"]

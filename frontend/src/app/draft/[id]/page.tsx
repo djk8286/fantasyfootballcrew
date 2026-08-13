@@ -97,7 +97,7 @@ interface DraftState {
   current_team_id: string | null;
   current_team_name: string | null;
   available_players: Player[];
-  teams: Record<string, { name: string }>;
+  teams: Record<string, { name: string; owner_id: string | null; co_owner_id: string | null }>;
   team_order: string[];
   claimed_teams: Record<string, string>;
 }
@@ -574,6 +574,17 @@ export default function DraftPage() {
   const completedPicks = allPicks.filter(p => p.player);
   const lastPick = completedPicks.length > 0 ? completedPicks[completedPicks.length - 1] : null;
 
+  // 2-Man team on-the-clock indicator: a display convention only (either
+  // owner or co-owner can already submit the pick via the backend's own
+  // team-scoped authorization -- see draft_manager.make_pick, which has
+  // no concept of "which human" at all). Alternates by parity of how many
+  // times this specific team has already picked, so both managers get a
+  // predictable, even turn order rather than whoever's faster every round.
+  const currentTeamInfo = draft?.current_team_id ? draft.teams[draft.current_team_id] : null;
+  const currentTeamHasCoOwner = !!currentTeamInfo?.co_owner_id;
+  const picksByCurrentTeam = completedPicks.filter(p => p.team.id === draft?.current_team_id).length;
+  const onClockManagerIsOwner = picksByCurrentTeam % 2 === 0;
+
   // Next teams up (on deck) — show next 2 unique teams
   const nextTwoTeamNames: string[] = [];
   if (currentPick && !isCompleted) {
@@ -683,6 +694,8 @@ export default function DraftPage() {
             totalRounds={draftInfo.total_rounds}
             isCompleted={isCompleted}
             myTeamId={myTeamId}
+            currentTeamHasCoOwner={currentTeamHasCoOwner}
+            onClockManagerIsOwner={onClockManagerIsOwner}
             lastPick={lastPick}
             availablePlayers={available}
             myRosterByPos={myRosterByPos}
@@ -763,6 +776,8 @@ export default function DraftPage() {
               cpuingPick={cpuingPick}
               draftCurrentTeamName={draft?.current_team_name || null}
               myTeamId={myTeamId}
+              currentTeamHasCoOwner={currentTeamHasCoOwner}
+              onClockManagerIsOwner={onClockManagerIsOwner}
               lastPick={lastPick}
               nextTwoTeamNames={nextTwoTeamNames}
               onPlayerHover={handlePlayerHover}
