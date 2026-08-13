@@ -6,7 +6,7 @@ from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
-from app.api.deps import get_current_user, require_team_or_league_access
+from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -111,6 +111,16 @@ async def claim_co_owner(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    # Visibility gate -- see user_can_join_league's docstring. Without
+    # this, INVITE_ONLY/PRIVATE leagues were only "private" in the
+    # discovery listing, not in who could actually claim a slot.
+    if not await user_can_join_league(db, league, current_user):
+        raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
+
     if team.is_cpu:
         raise HTTPException(status_code=400, detail="Claim this team as owner first, not co-owner")
     if team.co_owner_id:
@@ -135,6 +145,13 @@ async def claim_team(
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
+
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    if not await user_can_join_league(db, league, current_user):
+        raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
 
     if not team.is_cpu:
         raise HTTPException(status_code=400, detail="Team is already owned by a user")

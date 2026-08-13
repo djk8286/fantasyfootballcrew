@@ -5,8 +5,10 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.models.user import User
-from app.models.league import League
+from app.models.league import League, LeagueVisibility
 from app.models.team import Team
+from app.models.league_invite import LeagueInvite, InviteStatus
+from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.services.auth_service import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -84,3 +86,42 @@ async def require_league_participant(league: League, current_user: User, db: Asy
     )
     if result.first() is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
+
+
+async def user_can_join_league(db: AsyncSession, league: League, user: User) -> bool:
+    """Whether `user` is allowed to claim a team/co-owner slot in
+    `league`, given its visibility. Shared by teams.py's claim_team/
+    claim_co_owner (Step 6 -- this is what actually enforces visibility,
+    not just discovery listing) and leagues.py's viewer_join_status
+    computation (Step 7), so the two can't drift out of sync.
+
+    OPEN -> anyone. Commissioner/co-commissioner -> always, regardless of
+    visibility (they made the league). Otherwise (INVITE_ONLY, PRIVATE)
+    -> only if this user holds an ACCEPTED LeagueInvite or an APPROVED
+    LeagueJoinRequest for this league. PRIVATE leagues have no join-
+    request path (see invites.py's create_join_request), so an accepted
+    invite is the only route in for them.
+    """
+    if league.visibility == LeagueVisibility.OPEN:
+        return True
+    if user.id in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
+        return True
+
+    invite_result = await db.execute(
+        select(LeagueInvite.id).where(
+            LeagueInvite.league_id == league.id,
+            LeagueInvite.accepted_by_user_id == user.id,
+            LeagueInvite.status == InviteStatus.ACCEPTED,
+        )
+    )
+    if invite_result.first() is not None:
+        return True
+
+    request_result = await db.execute(
+        select(LeagueJoinRequest.id).where(
+            LeagueJoinRequest.league_id == league.id,
+            LeagueJoinRequest.requested_by_user_id == user.id,
+            LeagueJoinRequest.status == JoinRequestStatus.APPROVED,
+        )
+    )
+    return request_result.first() is not None
