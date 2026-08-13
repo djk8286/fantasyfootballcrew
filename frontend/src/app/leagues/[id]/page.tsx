@@ -156,6 +156,8 @@ export default function LeagueDetailPage() {
     description: "",
     visibility: "open" as "open" | "invite_only" | "private",
     wanted_board_hidden: false,
+    conference_a_name: "",
+    conference_b_name: "",
   });
 
   // Co-commissioner input
@@ -389,6 +391,8 @@ export default function LeagueDetailPage() {
         description: leagueEditForm.description || null,
         visibility: leagueEditForm.visibility,
         wanted_board_hidden: leagueEditForm.wanted_board_hidden,
+        conference_a_name: leagueEditForm.conference_a_name,
+        conference_b_name: leagueEditForm.conference_b_name,
       });
       await refreshLeague();
       setEditingLeague(false);
@@ -637,6 +641,32 @@ export default function LeagueDetailPage() {
                       </label>
                     )}
                   </div>
+                  {league.league_type === "conference" && (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div>
+                        <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Conference A Name</label>
+                        <input
+                          type="text"
+                          value={leagueEditForm.conference_a_name}
+                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, conference_a_name: e.target.value }))}
+                          placeholder="Conference A"
+                          maxLength={40}
+                          className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Conference B Name</label>
+                        <input
+                          type="text"
+                          value={leagueEditForm.conference_b_name}
+                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, conference_b_name: e.target.value }))}
+                          placeholder="Conference B"
+                          maxLength={40}
+                          className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <button
                       onClick={handleSaveLeagueSettings}
@@ -669,6 +699,8 @@ export default function LeagueDetailPage() {
                             description: league.description || "",
                             visibility: league.visibility,
                             wanted_board_hidden: league.wanted_board_hidden,
+                            conference_a_name: league.conference_a_name || "",
+                            conference_b_name: league.conference_b_name || "",
                           });
                           setEditingLeague(true);
                         }}
