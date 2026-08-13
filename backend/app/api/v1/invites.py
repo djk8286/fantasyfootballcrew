@@ -6,10 +6,12 @@ from sqlalchemy import select
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.limiter import limiter
-from app.models.league import League
+from app.models.league import League, LeagueVisibility
 from app.models.league_invite import LeagueInvite, InviteStatus
+from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.models.user import User
 from app.schemas.league_invite import InviteCreateRequest, InviteRead, InviteLandingRead
+from app.schemas.league_join_request import JoinRequestCreate, JoinRequestRead, JoinRequestDecision
 from app.services.auth_service import hash_token
 from app.services.email_service import send_league_invite_email
 from app.api.deps import get_current_user, require_commissioner
@@ -167,3 +169,111 @@ async def accept_invite(
     invite.accepted_by_user_id = current_user.id
     await db.commit()
     return {"status": "ok", "league_id": invite.league_id}
+
+
+# ─── Join requests ──────────────────────────────────────────────────
+# The "or approval" half of Invite-only: a user who found the league
+# through discovery asks the commissioner for access, rather than the
+# commissioner reaching out first (LeagueInvite). Only meaningful for
+# INVITE_ONLY leagues -- OPEN leagues are joined directly via
+# claim_team, PRIVATE leagues aren't discoverable enough to request
+# against in the first place.
+
+async def _username_map(db: AsyncSession, user_ids: set[str]) -> dict[str, str]:
+    if not user_ids:
+        return {}
+    result = await db.execute(select(User.id, User.username).where(User.id.in_(user_ids)))
+    return {uid: username for uid, username in result.all()}
+
+
+@router.post("/leagues/{league_id}/join-requests", response_model=JoinRequestRead, status_code=201)
+async def create_join_request(
+    league_id: str,
+    data: JoinRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league_or_404(league_id, db)
+    if league.visibility != LeagueVisibility.INVITE_ONLY:
+        raise HTTPException(
+            status_code=400,
+            detail="Join requests are only for invite-only leagues -- open leagues can be joined directly, private leagues aren't discoverable.",
+        )
+
+    # Application-level dedup, not a DB constraint -- a DENIED request can
+    # be resubmitted later, just not spammed while one is still PENDING.
+    existing = await db.execute(
+        select(LeagueJoinRequest).where(
+            LeagueJoinRequest.league_id == league_id,
+            LeagueJoinRequest.requested_by_user_id == current_user.id,
+            LeagueJoinRequest.status == JoinRequestStatus.PENDING,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="You already have a pending request for this league")
+
+    join_request = LeagueJoinRequest(
+        league_id=league_id,
+        requested_by_user_id=current_user.id,
+        message=data.message,
+    )
+    db.add(join_request)
+    await db.commit()
+    await db.refresh(join_request)
+    return JoinRequestRead(
+        id=join_request.id, league_id=join_request.league_id,
+        requested_by_user_id=join_request.requested_by_user_id,
+        requester_username=current_user.username,
+        message=join_request.message, status=join_request.status.value,
+        created_at=join_request.created_at, decided_at=join_request.decided_at,
+    )
+
+
+@router.get("/leagues/{league_id}/join-requests", response_model=list[JoinRequestRead])
+async def list_join_requests(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league_or_404(league_id, db)
+    require_commissioner(league, current_user)
+    result = await db.execute(
+        select(LeagueJoinRequest).where(LeagueJoinRequest.league_id == league_id).order_by(LeagueJoinRequest.created_at.desc())
+    )
+    requests = result.scalars().all()
+    usernames = await _username_map(db, {r.requested_by_user_id for r in requests})
+    return [
+        JoinRequestRead(
+            id=r.id, league_id=r.league_id, requested_by_user_id=r.requested_by_user_id,
+            requester_username=usernames.get(r.requested_by_user_id, "Unknown"),
+            message=r.message, status=r.status.value,
+            created_at=r.created_at, decided_at=r.decided_at,
+        )
+        for r in requests
+    ]
+
+
+@router.post("/leagues/{league_id}/join-requests/{request_id}/decision")
+async def decide_join_request(
+    league_id: str,
+    request_id: str,
+    data: JoinRequestDecision,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league_or_404(league_id, db)
+    require_commissioner(league, current_user)
+    result = await db.execute(
+        select(LeagueJoinRequest).where(LeagueJoinRequest.id == request_id, LeagueJoinRequest.league_id == league_id)
+    )
+    join_request = result.scalar_one_or_none()
+    if not join_request:
+        raise HTTPException(status_code=404, detail="Join request not found")
+    if join_request.status != JoinRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="This request has already been decided")
+
+    join_request.status = JoinRequestStatus.APPROVED if data.action == "approve" else JoinRequestStatus.DENIED
+    join_request.decided_by_user_id = current_user.id
+    join_request.decided_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "ok", "decision": join_request.status.value}

@@ -443,6 +443,24 @@ export const invitesApi = {
     apiRequest(`/api/v1/invites/${token}/accept`, { method: "POST" }),
 };
 
+// League Join Requests -- the "or approval" half of Invite-only, where a
+// user found the league through discovery and asks the commissioner for
+// access, rather than the commissioner reaching out first (invitesApi).
+export const joinRequestsApi = {
+  create: (leagueId: string, message?: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/join-requests`, {
+      method: "POST",
+      body: { message: message || undefined },
+    }),
+  list: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/join-requests`),
+  decide: (leagueId: string, requestId: string, action: "approve" | "deny") =>
+    apiRequest(`/api/v1/leagues/${leagueId}/join-requests/${requestId}/decision`, {
+      method: "POST",
+      body: { action },
+    }),
+};
+
 // Coaches
 export const coachesApi = {
   listByTeam: (teamId: string) => apiRequest(`/api/v1/teams/${teamId}/coaches`),

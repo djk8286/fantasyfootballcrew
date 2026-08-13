@@ -22,8 +22,9 @@ import {
   Mail,
   Send,
   Clock,
+  UserPlus,
 } from "lucide-react";
-import { commissionerApi, leaguesApi, teamsApi, coachesApi, invitesApi } from "@/lib/api-client";
+import { commissionerApi, leaguesApi, teamsApi, coachesApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 
 // ─── Types ───
 interface League {
@@ -88,6 +89,16 @@ interface Invite {
   created_at: string;
   expires_at: string;
   accepted_at: string | null;
+}
+
+interface JoinRequest {
+  id: string;
+  requested_by_user_id: string;
+  requester_username: string;
+  message: string | null;
+  status: string;
+  created_at: string;
+  decided_at: string | null;
 }
 
 // Every other page that needs "this season's year" computes it (standings,
@@ -1168,6 +1179,130 @@ function InvitesPanel({ leagueId }: { leagueId: string }) {
           ))}
         </div>
       )}
+
+      <JoinRequestsSection leagueId={leagueId} />
+    </div>
+  );
+}
+
+// ─── Join requests sub-section ───────────────────────────────────────
+// The "or approval" half of Invite-only: someone found the league via
+// discovery and asked to join, rather than the commissioner reaching out
+// first (the invites above). Same tab -- both are "who's trying to get
+// into this league" concerns.
+
+function JoinRequestsSection({ leagueId }: { leagueId: string }) {
+  const [requests, setRequests] = useState<JoinRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [deciding, setDeciding] = useState<string | null>(null);
+
+  const loadRequests = useCallback(async () => {
+    try {
+      const data = await joinRequestsApi.list(leagueId);
+      setRequests(data as JoinRequest[]);
+    } catch {
+      // silent
+    } finally {
+      setLoading(false);
+    }
+  }, [leagueId]);
+
+  useEffect(() => {
+    loadRequests();
+  }, [loadRequests]);
+
+  const handleDecide = async (requestId: string, action: "approve" | "deny") => {
+    setDeciding(requestId);
+    setError("");
+    try {
+      await joinRequestsApi.decide(leagueId, requestId, action);
+      await loadRequests();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to decide request");
+    }
+    setDeciding(null);
+  };
+
+  const pending = requests.filter((r) => r.status === "pending");
+  const decided = requests.filter((r) => r.status !== "pending");
+
+  if (loading) return null;
+  // Nothing to show for OPEN/PRIVATE leagues or an invite-only league
+  // with no requests yet -- no point taking up space with an empty
+  // section every time.
+  if (requests.length === 0) return null;
+
+  return (
+    <div className="mt-6">
+      <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+        <UserPlus className="w-4 h-4 text-gold-400" />
+        Join Requests
+        {pending.length > 0 && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+            {pending.length} pending
+          </span>
+        )}
+      </h3>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
+          <p className="text-red-400 text-sm">{error}</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {[...pending, ...decided].map((req) => (
+          <div
+            key={req.id}
+            className="flex items-center justify-between bg-surface-800/50 border border-surface-700 rounded-xl px-4 py-3"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-surface-700 flex items-center justify-center shrink-0 text-[10px] font-bold text-surface-300">
+                {req.requester_username.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <span className="text-sm font-semibold text-white">{req.requester_username}</span>
+                {req.message && (
+                  <p className="text-xs text-surface-400 truncate">&ldquo;{req.message}&rdquo;</p>
+                )}
+              </div>
+            </div>
+            {req.status === "pending" ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleDecide(req.id, "approve")}
+                  disabled={deciding === req.id}
+                  className="inline-flex items-center gap-1 bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  {deciding === req.id ? (
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-3 h-3" />
+                  )}
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleDecide(req.id, "deny")}
+                  disabled={deciding === req.id}
+                  className="inline-flex items-center gap-1 bg-red-500 hover:bg-red-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  <XCircle className="w-3 h-3" />
+                  Deny
+                </button>
+              </div>
+            ) : (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border shrink-0 ${
+                req.status === "approved"
+                  ? "bg-green-500/10 text-green-400 border-green-500/20"
+                  : "bg-surface-700 text-surface-400 border-surface-600"
+              }`}>
+                {req.status}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
