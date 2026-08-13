@@ -71,3 +71,72 @@ async def test_no_api_key_never_calls_call_llm_network_path():
     service = AIService(api_key=None)
     result = await service.analyze_lineup(roster={}, opponent_roster={}, matchups={}, scoring={})
     assert "not configured" in result
+
+
+# ─── Salary-Cap awareness (Phase 5, "Salary-Cap + Contract Leagues") ────
+
+@pytest.mark.asyncio
+async def test_lineup_prompt_includes_salary_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_lineup(
+        roster={}, opponent_roster={}, matchups={}, scoring={},
+        salary_context={"cap_total": 200.0, "cap_space": 45.5},
+    )
+    assert "45.5" in captured["prompt"]
+    assert "Salary Cap" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_lineup_prompt_renders_without_salary_context():
+    """No salary_context passed at all -- must not KeyError on the new
+    prompt field, same as every other optional prompt field here."""
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_lineup(roster={}, opponent_roster={}, matchups={}, scoring={})
+    assert "Salary Cap" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_prompt_includes_both_teams_salary_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_trade(
+        team_a_players=[], team_b_players=[], scoring={},
+        team_a_salary={"cap_space": 12.0},
+        team_b_salary={"cap_space": -3.5},
+    )
+    assert "12.0" in captured["prompt"]
+    assert "-3.5" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_prompt_renders_without_salary_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
+    assert "Salary Cap" in captured["prompt"]

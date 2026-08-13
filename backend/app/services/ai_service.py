@@ -32,6 +32,9 @@ You are an expert fantasy football analyst. Analyze the following lineup and mat
 **Coaching Staff:**
 {coaching_staff}
 
+**Salary Cap:**
+{salary_context}
+
 Provide:
 1. Optimal lineup recommendation (who to start/sit)
 2. Confidence level for this week (1-10)
@@ -57,6 +60,10 @@ You are an expert fantasy football trade analyzer. Evaluate this trade proposal:
 **Coaching Staff:**
 - Team A: {team_a_coaching}
 - Team B: {team_b_coaching}
+
+**Salary Cap:**
+- Team A: {team_a_salary}
+- Team B: {team_b_salary}
 
 Provide:
 1. Trade grade for each team (A-F)
@@ -102,6 +109,7 @@ class AIService:
         scoring: Dict[str, Any],
         weather: Optional[Dict] = None,
         coaching_staff: Optional[list] = None,
+        salary_context: Optional[dict] = None,
     ) -> str:
         """Analyze and optimize a user's lineup."""
         prompt = LINEUP_ANALYSIS_PROMPT.format(
@@ -111,6 +119,7 @@ class AIService:
             weather=json.dumps(weather or {}, indent=2),
             scoring_settings=json.dumps(scoring, indent=2),
             coaching_staff=json.dumps(coaching_staff or [], indent=2),
+            salary_context=json.dumps(salary_context or {}, indent=2),
         )
         return await self._call_llm(prompt)
 
@@ -122,6 +131,8 @@ class AIService:
         standings: Optional[Dict] = None,
         team_a_coaching: Optional[list] = None,
         team_b_coaching: Optional[list] = None,
+        team_a_salary: Optional[dict] = None,
+        team_b_salary: Optional[dict] = None,
     ) -> str:
         """Analyze a trade proposal between two teams."""
         prompt = TRADE_ANALYSIS_PROMPT.format(
@@ -131,6 +142,8 @@ class AIService:
             standings_context=json.dumps(standings or {}, indent=2),
             team_a_coaching=json.dumps(team_a_coaching or [], indent=2),
             team_b_coaching=json.dumps(team_b_coaching or [], indent=2),
+            team_a_salary=json.dumps(team_a_salary or {}, indent=2),
+            team_b_salary=json.dumps(team_b_salary or {}, indent=2),
         )
         return await self._call_llm(prompt)
 

@@ -14,6 +14,7 @@ from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.services.ai_service import AIService
 from app.services.standings_service import get_standings
+from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -49,6 +50,17 @@ async def _coach_summary(team: Team, db: AsyncSession) -> list[dict]:
         {"position": c.position.value, "name": c.name, "bonus_type": c.bonus_type, "bonus_value": c.bonus_value}
         for c in result.scalars().all()
     ]
+
+
+async def _salary_summary(team: Team, league: League, db: AsyncSession) -> dict:
+    """A team's cap situation, for threading into AI prompt context
+    (Phase 5, "Salary-Cap + Contract Leagues") -- lets the AI factor cap
+    space/contract obligations into its lineup/trade commentary. No-ops
+    to {} for a non-cap league, same house style as _coach_summary
+    returning [] for a team with no coaches."""
+    if not league or not get_salary_cap_settings(league)["enabled"]:
+        return {}
+    return await team_cap_summary(team, league, db)
 
 
 class LineupAnalysisRequest(BaseModel):
@@ -89,10 +101,12 @@ async def analyze_lineup(
 
     roster = await _roster_summary(team, db)
     coaching_staff = await _coach_summary(team, db)
+    salary_context = await _salary_summary(team, league, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_lineup(
-        roster=roster, opponent_roster={}, matchups={}, scoring=scoring, coaching_staff=coaching_staff
+        roster=roster, opponent_roster={}, matchups={}, scoring=scoring,
+        coaching_staff=coaching_staff, salary_context=salary_context,
     )
     return {"analysis": analysis}
 
@@ -145,11 +159,14 @@ async def analyze_trade(
     standings = await get_standings(trade.league_id, db)
     team_a_coaching = await _coach_summary(proposer, db)
     team_b_coaching = await _coach_summary(target, db)
+    team_a_salary = await _salary_summary(proposer, league, db)
+    team_b_salary = await _salary_summary(target, league, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_trade(
         team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings},
         team_a_coaching=team_a_coaching, team_b_coaching=team_b_coaching,
+        team_a_salary=team_a_salary, team_b_salary=team_b_salary,
     )
     return {"analysis": analysis}
 
