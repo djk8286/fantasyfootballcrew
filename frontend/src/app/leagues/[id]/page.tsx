@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
+import { VisibilityBadge, ConferenceBadge } from "@/components/LeagueBadges";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -657,6 +658,7 @@ export default function LeagueDetailPage() {
                     <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
                       {league.name}
                     </h1>
+                    <VisibilityBadge visibility={league.visibility} />
                     {isLeagueManager && (
                       <button
                         onClick={() => {
@@ -1015,9 +1017,9 @@ export default function LeagueDetailPage() {
                           </div>
                           <div>
                             <span className="font-medium text-white">{team.name}</span>
-                            {league.league_type === "conference" && team.conference && (
-                              <span className="ml-2 text-[10px] text-surface-400 font-semibold uppercase tracking-wider bg-surface-700/60 px-1.5 py-0.5 rounded">
-                                Conf {team.conference}
+                            {league.league_type === "conference" && (
+                              <span className="ml-2 inline-block align-middle">
+                                <ConferenceBadge conference={team.conference} />
                               </span>
                             )}
                             {isMyTeam && (
