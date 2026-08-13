@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 from app.core.database import get_db
-from app.models.league import League
+from app.models.league import League, LeagueVisibility
 from app.models.team import Team
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
@@ -47,6 +47,7 @@ async def create_league(
         max_teams=league_data.max_teams,
         draft_type=league_data.draft_type,
         co_commissioner_ids=[],
+        visibility=league_data.visibility,
     )
     db.add(league)
     await db.commit()
@@ -74,6 +75,13 @@ async def list_leagues(
         query = query.where(
             or_(League.commissioner_id == current_user.id, League.id.in_(my_league_ids))
         )
+    else:
+        # The actual privacy gate -- previously every league was 100%
+        # publicly listable regardless of any setting, since visibility
+        # didn't exist. A user's OWN leagues (including Private ones they
+        # belong to) still show via the `mine` branch above; this only
+        # restricts the general/discovery listing.
+        query = query.where(League.visibility != LeagueVisibility.PRIVATE)
 
     query = query.group_by(League.id)
     result = await db.execute(query)
@@ -254,6 +262,10 @@ async def update_league(
         league.max_teams = update_data.max_teams
     if update_data.draft_type is not None:
         league.draft_type = update_data.draft_type
+    if update_data.visibility is not None:
+        league.visibility = update_data.visibility
+    if update_data.wanted_board_hidden is not None:
+        league.wanted_board_hidden = update_data.wanted_board_hidden
 
     await db.commit()
     await db.refresh(league)

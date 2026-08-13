@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List
-from app.models.league import LeagueType, DraftType, DraftStatus
+from app.models.league import LeagueType, DraftType, DraftStatus, LeagueVisibility
 
 
 class ScoringConfigSchema(BaseModel):
@@ -19,6 +19,7 @@ class LeagueCreate(BaseModel):
     max_teams: int = 12
     draft_type: DraftType = DraftType.SNAKE
     auto_fill_cpu: bool = True
+    visibility: LeagueVisibility = LeagueVisibility.OPEN
 
 
 class LeagueUpdate(BaseModel):
@@ -27,6 +28,8 @@ class LeagueUpdate(BaseModel):
     max_teams: Optional[int] = None
     draft_type: Optional[DraftType] = None
     scoring_config: Optional[dict] = None
+    visibility: Optional[LeagueVisibility] = None
+    wanted_board_hidden: Optional[bool] = None
 
 
 class LeagueRead(BaseModel):
@@ -42,6 +45,12 @@ class LeagueRead(BaseModel):
     co_commissioner_ids: Optional[list] = None
     created_at: datetime
     team_count: Optional[int] = None
+    visibility: LeagueVisibility = LeagueVisibility.OPEN
+    wanted_board_hidden: bool = False
+    # Only populated when the caller passes a current_user (see get_league/
+    # list_leagues) -- "member"|"commissioner"|"invited"|"requested"|
+    # "eligible"|"blocked". None for anonymous/unauthenticated reads.
+    viewer_join_status: Optional[str] = None
 
     class Config:
         from_attributes = True

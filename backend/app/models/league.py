@@ -25,6 +25,12 @@ class DraftType(str, enum.Enum):
     AUCTION = "auction"
 
 
+class LeagueVisibility(str, enum.Enum):
+    PRIVATE = "private"          # invite-only, not listed anywhere public
+    INVITE_ONLY = "invite_only"  # listed, but joining needs an accepted invite or approved request
+    OPEN = "open"                # listed, anyone can claim an open slot directly
+
+
 class League(Base):
     __tablename__ = "leagues"
 
@@ -64,6 +70,18 @@ class League(Base):
     # This keeps those scratch leagues out of "my leagues" and public
     # discovery -- see the is_mock filter in list_leagues.
     is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Discovery/privacy. Defaults to OPEN deliberately -- every league
+    # created before this field existed already behaves exactly like
+    # "Open" today (fully public, freely claimable), so this migration
+    # changes nothing for existing leagues until a commissioner
+    # deliberately opts into something stricter. See list_leagues/
+    # get_league in api/v1/leagues.py for how this is actually enforced.
+    visibility: Mapped[LeagueVisibility] = mapped_column(Enum(LeagueVisibility), default=LeagueVisibility.OPEN, nullable=False)
+    # Commissioner pause/hide for the Wanted Board specifically -- does
+    # NOT remove the league from general discovery (list_leagues), only
+    # from the highlighted "needs managers" section. A league stays
+    # findable either way; this just stops it being pushed as "join now."
+    wanted_board_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
