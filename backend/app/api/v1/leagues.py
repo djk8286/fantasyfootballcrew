@@ -10,6 +10,8 @@ from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_settings
 from app.services.standings_service import DEFAULT_RIVALRY_WEEK_SETTINGS, get_rivalry_week_settings
+from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_salary_cap_settings, compute_waiver_salary
+from app.models.player import Player
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.api.deps import get_current_user, get_current_user_optional, require_commissioner, user_can_join_league
@@ -320,6 +322,91 @@ async def update_league_rivalry_week_settings(
     league.rivalry_week_settings = merged
     await db.commit()
     return {"status": "ok", "rivalry_week_settings": league.rivalry_week_settings}
+
+
+@router.get("/{league_id}/salary-cap-settings")
+async def get_league_salary_cap_settings(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the Salary-Cap config for a league, or defaults (disabled).
+    Ungated -- same house style as GET playoff-settings/rivalry-week-settings."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return get_salary_cap_settings(league)
+
+
+class SalaryCapSettingsUpdate(BaseModel):
+    salary_cap_settings: dict
+
+
+@router.put("/{league_id}/salary-cap-settings")
+async def update_league_salary_cap_settings(
+    league_id: str,
+    data: SalaryCapSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the Salary-Cap config for a league (commissioner only). A
+    bolt-on flag for ANY league_type (not gated to a specific type, since
+    cap enforcement is purely a roster-construction-time concern, unlike
+    Rivalry Week's scoring-path gate)."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
+    merged = dict(DEFAULT_SALARY_CAP_SETTINGS)
+    merged.update(data.salary_cap_settings)
+
+    def _is_number(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    def _is_int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if not isinstance(merged.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="salary_cap_settings.enabled must be a boolean")
+    if not _is_number(merged.get("cap_total")) or merged["cap_total"] <= 0:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.cap_total must be a positive number")
+    if not _is_int(merged.get("max_roster_size")) or merged["max_roster_size"] < 1:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.max_roster_size must be a positive integer")
+    if not _is_number(merged.get("top_salary")) or merged["top_salary"] < 0:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.top_salary must be a non-negative number")
+    if not _is_number(merged.get("bottom_salary")) or merged["bottom_salary"] < 0:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.bottom_salary must be a non-negative number")
+    if merged["top_salary"] < merged["bottom_salary"]:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.top_salary must be >= bottom_salary")
+    if not _is_number(merged.get("waiver_salary_pct")) or merged["waiver_salary_pct"] < 0:
+        raise HTTPException(status_code=422, detail="salary_cap_settings.waiver_salary_pct must be a non-negative number")
+    if not _is_number(merged.get("dead_money_pct")) or not (0 <= merged["dead_money_pct"] <= 1):
+        raise HTTPException(status_code=422, detail="salary_cap_settings.dead_money_pct must be between 0 and 1")
+    if not _is_int(merged.get("default_contract_years")) or not (1 <= merged["default_contract_years"] <= 4):
+        raise HTTPException(status_code=422, detail="salary_cap_settings.default_contract_years must be an integer 1-4")
+    if not _is_int(merged.get("waiver_contract_years")) or not (1 <= merged["waiver_contract_years"] <= 4):
+        raise HTTPException(status_code=422, detail="salary_cap_settings.waiver_contract_years must be an integer 1-4")
+
+    league.salary_cap_settings = merged
+    await db.commit()
+    return {"status": "ok", "salary_cap_settings": league.salary_cap_settings}
+
+
+@router.get("/{league_id}/salary-cap/preview-signing")
+async def preview_salary_cap_signing(league_id: str, player_id: str, db: AsyncSession = Depends(get_db)):
+    """Estimate what a free-agent/waiver signing WOULD cost, without
+    creating a Contract -- lets the waivers page show a real number
+    before a claim is submitted. Ungated, works even when the league's
+    salary_cap_settings.enabled is False (a harmless preview either way)."""
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    player_result = await db.execute(select(Player).where(Player.id == player_id))
+    player = player_result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    settings = get_salary_cap_settings(league)
+    return {"player_id": player_id, "estimated_salary": compute_waiver_salary(player, settings)}
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)
