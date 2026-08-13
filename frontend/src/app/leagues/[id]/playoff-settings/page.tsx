@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
-import { ArrowLeft, Save, Loader2, RefreshCw, Trophy } from "lucide-react";
+import { ArrowLeft, Save, Loader2, RefreshCw, Trophy, Swords } from "lucide-react";
 
 interface PlayoffSettings {
   enabled: boolean;
@@ -12,6 +12,16 @@ interface PlayoffSettings {
   num_teams: number;
   seeding_method: "wins" | "points";
   conference_bracket_mode: "combined" | "separate";
+}
+
+// Rivalry Week (Phase 3) -- backed by its own API resource
+// (rivalry-week-settings), independent of playoff_settings above, so it
+// gets its own local state and its own small save action rather than
+// being folded into the page's single top-level Save button.
+interface RivalryWeekSettings {
+  enabled: boolean;
+  week: number | null;
+  bonus_value: number;
 }
 
 export default function PlayoffSettingsPage() {
@@ -26,19 +36,30 @@ export default function PlayoffSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
+  const [rivalrySettings, setRivalrySettings] = useState<RivalryWeekSettings | null>(null);
+  const [rivalryOriginal, setRivalryOriginal] = useState<RivalryWeekSettings | null>(null);
+  const [rivalrySaving, setRivalrySaving] = useState(false);
+  const [rivalrySaved, setRivalrySaved] = useState(false);
+  const [rivalryError, setRivalryError] = useState("");
+
   useEffect(() => {
     if (!id) return;
     Promise.all([
       leaguesApi.get(id).catch(() => null),
       leaguesApi.getPlayoffSettings(id).catch(() => null),
+      leaguesApi.getRivalryWeekSettings(id).catch(() => null),
     ])
-      .then(([leagueData, settingsData]) => {
+      .then(([leagueData, settingsData, rivalryData]) => {
         if (leagueData) setLeague(leagueData as { name: string; league_type: string });
         if (settingsData) {
           setSettings(settingsData as PlayoffSettings);
           setOriginal(JSON.parse(JSON.stringify(settingsData)));
         } else {
           setError("Failed to load playoff settings");
+        }
+        if (rivalryData) {
+          setRivalrySettings(rivalryData as RivalryWeekSettings);
+          setRivalryOriginal(JSON.parse(JSON.stringify(rivalryData)));
         }
       })
       .catch(() => setError("Failed to load playoff settings"))
@@ -66,7 +87,29 @@ export default function PlayoffSettingsPage() {
     }
   };
 
+  const updateRivalry = <K extends keyof RivalryWeekSettings>(key: K, value: RivalryWeekSettings[K]) => {
+    setRivalrySettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setRivalrySaved(false);
+  };
+
+  const handleSaveRivalry = async () => {
+    if (!rivalrySettings || !id) return;
+    setRivalrySaving(true);
+    setRivalryError("");
+    try {
+      await leaguesApi.updateRivalryWeekSettings(id, rivalrySettings as unknown as Record<string, unknown>);
+      setRivalrySaved(true);
+      setRivalryOriginal(JSON.parse(JSON.stringify(rivalrySettings)));
+      setTimeout(() => setRivalrySaved(false), 3000);
+    } catch (err: unknown) {
+      setRivalryError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setRivalrySaving(false);
+    }
+  };
+
   const hasChanges = JSON.stringify(settings) !== JSON.stringify(original);
+  const rivalryHasChanges = JSON.stringify(rivalrySettings) !== JSON.stringify(rivalryOriginal);
   const isConference = league?.league_type === "conference";
 
   if (loading) {
@@ -239,6 +282,85 @@ export default function PlayoffSettingsPage() {
                 </div>
               )}
             </div>
+
+            {/* Rivalry Week -- deliberately OUTSIDE the opacity-gated
+                block above: it's a regular-season scoring bonus, not a
+                playoff feature, so it stays fully usable/visible whether
+                or not playoffs are enabled at all. Own local state, own
+                small save action, since it's backed by a separate API
+                resource (rivalry-week-settings) from playoff_settings. */}
+            {isConference && rivalrySettings && (
+              <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
+                <div className="px-5 py-3.5 bg-surface-800 border-b border-surface-700 flex items-center justify-between">
+                  <h3 className="text-white font-bold text-sm flex items-center gap-2">
+                    <Swords className="w-4 h-4 text-gold-400" />
+                    Rivalry Week
+                  </h3>
+                  <button
+                    onClick={handleSaveRivalry}
+                    disabled={rivalrySaving || !rivalryHasChanges}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      rivalrySaved ? "bg-green-500 text-white" : "bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-40 disabled:cursor-not-allowed"
+                    }`}
+                  >
+                    {rivalrySaving ? (
+                      <><Loader2 className="w-3 h-3 animate-spin" /> Saving...</>
+                    ) : rivalrySaved ? (
+                      <><RefreshCw className="w-3 h-3" /> Saved!</>
+                    ) : (
+                      <><Save className="w-3 h-3" /> Save</>
+                    )}
+                  </button>
+                </div>
+                <div className="p-4 space-y-3">
+                  <p className="text-surface-400 text-xs">
+                    Every team that wins its matchup in the designated week gets a
+                    bonus, on top of any coach win bonus. Only affects the week you
+                    pick -- no schedule changes.
+                  </p>
+                  {rivalryError && (
+                    <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs" role="alert">{rivalryError}</div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <label id="enable-rivalry-label" className="text-sm text-surface-300">Enable Rivalry Week</label>
+                    <button
+                      onClick={() => updateRivalry("enabled", !rivalrySettings.enabled)}
+                      role="switch"
+                      aria-checked={rivalrySettings.enabled}
+                      aria-labelledby="enable-rivalry-label"
+                      className={`shrink-0 relative w-11 h-6 rounded-full transition-colors ${rivalrySettings.enabled ? "bg-gold-400" : "bg-surface-700"}`}
+                    >
+                      <span
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${rivalrySettings.enabled ? "translate-x-6" : "translate-x-1"}`}
+                      />
+                    </button>
+                  </div>
+                  <div className={`flex items-center gap-3 transition-opacity ${rivalrySettings.enabled ? "" : "opacity-40 pointer-events-none"}`}>
+                    <div>
+                      <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Week</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={rivalrySettings.week ?? ""}
+                        onChange={(e) => updateRivalry("week", e.target.value ? parseInt(e.target.value, 10) : null)}
+                        className="w-20 px-2.5 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm text-right focus:outline-none focus:ring-1 focus:ring-gold-400 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Bonus Points</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        value={rivalrySettings.bonus_value}
+                        onChange={(e) => updateRivalry("bonus_value", parseFloat(e.target.value) || 0)}
+                        className="w-24 px-2.5 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm text-right focus:outline-none focus:ring-1 focus:ring-gold-400 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

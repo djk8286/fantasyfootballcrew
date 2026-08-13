@@ -183,6 +183,13 @@ export const leaguesApi = {
     }),
   getPlayoffs: (id: string) =>
     apiRequest(`/api/v1/leagues/${id}/playoffs`),
+  getRivalryWeekSettings: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/rivalry-week-settings`),
+  updateRivalryWeekSettings: (id: string, rivalryWeekSettings: Record<string, unknown>) =>
+    apiRequest(`/api/v1/leagues/${id}/rivalry-week-settings`, {
+      method: "PUT",
+      body: { rivalry_week_settings: rivalryWeekSettings },
+    }),
 };
 
 // Teams
