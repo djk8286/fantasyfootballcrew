@@ -45,10 +45,26 @@ interface Matchup {
   week: number;
 }
 
+interface TeamWeeklyScore {
+  team_id: string;
+  total_score: number;
+  projected_score: number | null;
+  lineup_data: {
+    coach_bonus?: number;
+    win_bonus?: number;
+    [key: string]: unknown;
+  } | null;
+}
+
 interface WeeklyScoresResponse {
   week: number;
   year: number;
   matchups: Matchup[];
+  // Already returned by the API but unused here until Step 6 -- carries
+  // each team's coach_bonus/win_bonus contribution for the week (see
+  // standings_service.calculate_week), which get_weekly_matchups itself
+  // doesn't include.
+  team_scores?: TeamWeeklyScore[];
 }
 
 interface RawTeam {
@@ -125,6 +141,23 @@ export default function StandingsPage() {
 
   const myTeamId = getMyTeamId(leagueId);
   const currentUserId = getCurrentUserId();
+  // team_id -> that team's coach_bonus/win_bonus contribution this week,
+  // for the small badge next to each team's score in the matchup card
+  // below (Phase 2 Step 6).
+  const coachBonusByTeam = new Map(
+    (weeklyData?.team_scores || [])
+      .filter((ts) => ts.lineup_data?.coach_bonus || ts.lineup_data?.win_bonus)
+      .map((ts) => [ts.team_id, ts.lineup_data as NonNullable<TeamWeeklyScore["lineup_data"]>]),
+  );
+  // A team can have both a flat_weekly and a win_bonus coach at once --
+  // show each present bonus separately rather than picking one value
+  // with a label that might not match it.
+  function formatCoachBonus(bonus: NonNullable<TeamWeeklyScore["lineup_data"]>): string {
+    const parts: string[] = [];
+    if (bonus.coach_bonus) parts.push(`+${bonus.coach_bonus} coach bonus`);
+    if (bonus.win_bonus) parts.push(`+${bonus.win_bonus} win bonus`);
+    return parts.join(", ");
+  }
   const isCommissioner =
     league && currentUserId === league.commissioner_id;
   const isCoCommissioner =
@@ -568,7 +601,10 @@ export default function StandingsPage() {
 
                 {weeklyData && weeklyData.matchups && weeklyData.matchups.length > 0 ? (
                   <div className="divide-y divide-surface-700">
-                    {weeklyData.matchups.map((m, i) => (
+                    {weeklyData.matchups.map((m, i) => {
+                      const homeBonus = coachBonusByTeam.get(m.home_team_id);
+                      const awayBonus = coachBonusByTeam.get(m.away_team_id);
+                      return (
                       <div
                         key={i}
                         className="px-5 py-4 hover:bg-surface-750 transition-colors"
@@ -584,6 +620,14 @@ export default function StandingsPage() {
                             >
                               {m.home_team}
                             </span>
+                            {homeBonus && (
+                              <span
+                                className="text-[10px] text-green-400 font-semibold shrink-0"
+                                title="From coaching staff"
+                              >
+                                {formatCoachBonus(homeBonus)}
+                              </span>
+                            )}
                             <span className="text-gold-400 font-bold font-mono text-lg tabular-nums shrink-0">
                               {m.home_score?.toFixed(1) || "0.0"}
                             </span>
@@ -600,13 +644,22 @@ export default function StandingsPage() {
                             >
                               @ {m.away_team}
                             </span>
+                            {awayBonus && (
+                              <span
+                                className="text-[10px] text-green-400 font-semibold shrink-0"
+                                title="From coaching staff"
+                              >
+                                {formatCoachBonus(awayBonus)}
+                              </span>
+                            )}
                             <span className="text-gold-400 font-bold font-mono text-lg tabular-nums shrink-0">
                               {m.away_score?.toFixed(1) || "0.0"}
                             </span>
                           </div>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="px-5 py-10 text-center">
