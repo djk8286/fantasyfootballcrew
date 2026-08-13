@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 from app.models.league import LeagueType, DraftType, DraftStatus, LeagueVisibility
@@ -30,6 +30,10 @@ class LeagueUpdate(BaseModel):
     scoring_config: Optional[dict] = None
     visibility: Optional[LeagueVisibility] = None
     wanted_board_hidden: Optional[bool] = None
+    # Display-only conference naming (Phase 3) -- harmless if set on a
+    # non-conference league, just never rendered anywhere.
+    conference_a_name: Optional[str] = Field(default=None, max_length=40)
+    conference_b_name: Optional[str] = Field(default=None, max_length=40)
 
 
 class LeagueRead(BaseModel):
@@ -47,6 +51,8 @@ class LeagueRead(BaseModel):
     team_count: Optional[int] = None
     visibility: LeagueVisibility = LeagueVisibility.OPEN
     wanted_board_hidden: bool = False
+    conference_a_name: Optional[str] = None
+    conference_b_name: Optional[str] = None
     # Only populated when the caller passes a current_user (see get_league/
     # list_leagues) -- "member"|"commissioner"|"invited"|"requested"|
     # "eligible"|"blocked". None for anonymous/unauthenticated reads.

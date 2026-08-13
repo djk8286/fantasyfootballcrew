@@ -305,6 +305,13 @@ async def update_league(
         league.visibility = update_data.visibility
     if update_data.wanted_board_hidden is not None:
         league.wanted_board_hidden = update_data.wanted_board_hidden
+    if update_data.conference_a_name is not None:
+        # Empty string clears it back to "not customized" (None), rather
+        # than storing a literal blank -- matches how a cleared display
+        # field should read as "use the default", not "named ''".
+        league.conference_a_name = update_data.conference_a_name or None
+    if update_data.conference_b_name is not None:
+        league.conference_b_name = update_data.conference_b_name or None
 
     await db.commit()
     await db.refresh(league)
