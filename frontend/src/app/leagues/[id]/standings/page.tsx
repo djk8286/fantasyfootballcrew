@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi, teamsApi } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
-import { conferenceFullLabel } from "@/components/LeagueBadges";
+import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
 import {
   ChevronRight,
@@ -17,6 +17,7 @@ import {
   Calculator,
   Award,
   ChevronDown,
+  Skull,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -34,6 +35,8 @@ interface Standing {
   points_for: number;
   points_against: number;
   avatar_url: string | null;
+  eliminated_week: number | null;
+  last_words: string | null;
 }
 
 interface Matchup {
@@ -77,6 +80,8 @@ interface RawTeam {
   is_cpu: boolean;
   conference: string | null;
   avatar_url: string | null;
+  eliminated_week: number | null;
+  last_words: string | null;
 }
 
 interface RawStandingEntry {
@@ -206,6 +211,8 @@ export default function StandingsPage() {
         points_for: s.points_for,
         points_against: s.points_against,
         avatar_url: team?.avatar_url ?? null,
+        eliminated_week: team?.eliminated_week ?? null,
+        last_words: team?.last_words ?? null,
       };
     });
   }, [leagueId]);
@@ -381,6 +388,18 @@ export default function StandingsPage() {
                                   Your Team
                                 </span>
                               )}
+                              {team.eliminated_week != null && <EliminatedBadge week={team.eliminated_week} />}
+                              {league?.league_type === "guillotine" &&
+                                myTeamEliminated &&
+                                team.eliminated_week == null &&
+                                !team.co_owner_id && (
+                                  <Link
+                                    href={`/leagues/${leagueId}/teams/${team.id}`}
+                                    className="text-[11px] text-gold-400 hover:text-gold-300 underline decoration-dotted shrink-0"
+                                  >
+                                    Join as Co-Owner
+                                  </Link>
+                                )}
                             </div>
                             <span
                               className={`text-xs ${
@@ -453,9 +472,19 @@ export default function StandingsPage() {
     );
   }
 
-  const sortedStandings = [...standings].sort(
-    (a, b) => b.wins - a.wins || a.losses - b.losses || b.points_for - a.points_for
-  );
+  // Guillotine (Phase 4): alive teams keep the existing wins/losses/
+  // points_for ordering; eliminated teams sort below them, most-
+  // recently-eliminated first. A strict no-op for every non-Guillotine
+  // league, since eliminated_week is always null there.
+  const sortedStandings = [...standings].sort((a, b) => {
+    const aAlive = a.eliminated_week == null;
+    const bAlive = b.eliminated_week == null;
+    if (aAlive !== bAlive) return aAlive ? -1 : 1;
+    if (!aAlive) return (b.eliminated_week ?? 0) - (a.eliminated_week ?? 0);
+    return b.wins - a.wins || a.losses - b.losses || b.points_for - a.points_for;
+  });
+  const myStanding = sortedStandings.find(isMyTeam);
+  const myTeamEliminated = league?.league_type === "guillotine" && myStanding?.eliminated_week != null;
 
   return (
     <div className="min-h-screen bg-surface-900">
@@ -593,6 +622,38 @@ export default function StandingsPage() {
               ) : (
                 renderStandingsTable(sortedStandings)
               )}
+
+              {/* Guillotine (Phase 4): elimination history -- every
+                  eliminated team, in the order they went out, with any
+                  last words they left on their team page. */}
+              {league?.league_type === "guillotine" &&
+                sortedStandings.some((t) => t.eliminated_week != null) && (
+                  <div className="bg-surface-800 border border-surface-700 rounded-xl p-5">
+                    <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                      <Skull className="w-4 h-4 text-red-400" />
+                      Elimination History
+                    </h3>
+                    <ol className="space-y-2.5">
+                      {sortedStandings
+                        .filter((t) => t.eliminated_week != null)
+                        .sort((a, b) => (a.eliminated_week ?? 0) - (b.eliminated_week ?? 0))
+                        .map((t) => (
+                          <li key={t.id} className="text-sm">
+                            <span className="text-red-400 font-semibold">Week {t.eliminated_week}:</span>{" "}
+                            <Link
+                              href={`/leagues/${leagueId}/teams/${t.id}`}
+                              className="text-white hover:text-gold-400 transition-colors"
+                            >
+                              {t.name}
+                            </Link>
+                            {t.last_words && (
+                              <p className="text-surface-500 text-xs italic mt-0.5">&ldquo;{t.last_words}&rdquo;</p>
+                            )}
+                          </li>
+                        ))}
+                    </ol>
+                  </div>
+                )}
             </div>
 
             {/* Weekly Matchups */}
