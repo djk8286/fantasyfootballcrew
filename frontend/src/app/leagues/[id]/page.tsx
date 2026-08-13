@@ -37,6 +37,7 @@ import {
   Send,
   Clock,
   Mail,
+  DollarSign,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -808,6 +809,13 @@ export default function LeagueDetailPage() {
               >
                 <Settings className="w-4 h-4" />
                 Playoff Settings
+              </Link>
+              <Link
+                href={`/leagues/${id}/salary-cap-settings`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <DollarSign className="w-4 h-4" />
+                Salary Cap Settings
               </Link>
               <Link
                 href={`/leagues/${id}/standings`}
