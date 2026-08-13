@@ -14,6 +14,7 @@ interface Team {
   owner_id: string | null;
   co_owner_id: string | null;
   roster: string[] | null;
+  eliminated_week: number | null;
 }
 
 interface League {
@@ -246,6 +247,7 @@ export default function WaiversPage() {
   };
 
   const teamMap = Object.fromEntries(teams.map((t) => [t.id, t.name]));
+  const teamsById = new Map(teams.map((t) => [t.id, t]));
 
   if (loading) {
     return (
@@ -481,12 +483,25 @@ export default function WaiversPage() {
               Waiver Priority (Commissioner)
             </h2>
             <ol className="space-y-1.5 mb-4">
-              {priority.map((p, i) => (
-                <li key={p.id} className="text-sm text-surface-300">
-                  <span className="text-surface-500 mr-2">{i + 1}.</span>
-                  {p.name}
-                </li>
-              ))}
+              {priority.map((p, i) => {
+                // Guillotine "haunt" twist (Phase 4): an eliminated team
+                // stays in the priority order forever (see the backend's
+                // ghost-priority skip in process_waivers) -- greyed out
+                // and tagged here so it doesn't look like a display bug,
+                // still occupying its normal numbered position.
+                const ghostWeek = teamsById.get(p.id)?.eliminated_week ?? null;
+                return (
+                  <li key={p.id} className={`text-sm ${ghostWeek != null ? "text-surface-600" : "text-surface-300"}`}>
+                    <span className="text-surface-500 mr-2">{i + 1}.</span>
+                    {p.name}
+                    {ghostWeek != null && (
+                      <span className="ml-2 text-[10px] text-red-400/70 uppercase tracking-wider">
+                        Eliminated Wk {ghostWeek}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
             <button
               type="button"
