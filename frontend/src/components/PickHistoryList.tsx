@@ -50,9 +50,9 @@ export default function PickHistoryList({ picks, numTeams, myTeamId, onPlayerHov
   return (
     <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-surface-700">
-        <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
+        <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
           Full Pick History · {sorted.length} picks
-        </h3>
+        </h2>
       </div>
       <div className="divide-y divide-surface-800/70 max-h-[calc(100vh-320px)] overflow-y-auto">
         {sorted.map((p) => {

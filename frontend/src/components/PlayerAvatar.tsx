@@ -66,6 +66,20 @@ function PlayerAvatar({
         e.stopPropagation();
         onHover?.(player, e.currentTarget);
       }}
+      // Only a real control when onHover is actually wired up (it's
+      // optional) -- the player's name/position it reveals is usually
+      // already visible in the surrounding row text, but where it isn't
+      // this was a keyboard dead-end.
+      role={onHover ? "button" : undefined}
+      tabIndex={onHover ? 0 : undefined}
+      aria-label={onHover ? `View details for ${player.full_name}` : undefined}
+      onKeyDown={(e) => {
+        if (onHover && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.stopPropagation();
+          onHover(player, e.currentTarget);
+        }
+      }}
     >
       <div
         className={`${dims[size]} rounded-full bg-surface-700 flex-shrink-0 overflow-hidden border border-surface-600 cursor-pointer`}

@@ -70,12 +70,12 @@ export default function TeamRosters({
         {/* My Team */}
         <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-surface-700 flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
               <Star className="w-3.5 h-3.5 text-gold-400" />
               {myTeamId
                 ? teams[myTeamId]?.name || "My Team"
                 : "Your Team"}
-            </h3>
+            </h2>
             <span className="text-surface-500 text-xs">
               {myPicks.length} players
             </span>
@@ -158,9 +158,9 @@ export default function TeamRosters({
         {/* Team Rosters */}
         <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-surface-700">
-            <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
               League · {Object.keys(teamRosters).length || "?"} Teams
-            </h3>
+            </h2>
           </div>
           <div className="divide-y divide-surface-800 max-h-[400px] overflow-y-auto">
             {Object.entries(teamRosters).map(([teamId, picks]) => {
@@ -182,6 +182,16 @@ export default function TeamRosters({
                   <div
                     className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-surface-800/30 transition-colors"
                     onClick={() => onToggleExpand(teamId)}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expanded}
+                    aria-label={`${expanded ? "Collapse" : "Expand"} ${picks[0]?.team.name || "team"} roster`}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onToggleExpand(teamId);
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {isMine && (

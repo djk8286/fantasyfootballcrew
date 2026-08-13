@@ -42,10 +42,10 @@ export default function RecentPicksPanel({ picks, myTeamId, onPlayerHover }: Rec
   return (
     <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-surface-700">
-        <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
           <Radio className="w-3.5 h-3.5 text-gold-400" />
           Recent Picks
-        </h3>
+        </h2>
       </div>
       {picks.length === 0 ? (
         <div className="p-5 text-center text-surface-500 text-xs">

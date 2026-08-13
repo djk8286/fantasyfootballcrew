@@ -120,6 +120,8 @@ export default function SchedulePage() {
               <button
                 onClick={() => setSelectedWeek((w) => Math.max(1, w - 1))}
                 disabled={selectedWeek <= 1}
+                title="Previous week"
+                aria-label="Previous week"
                 className="p-1 rounded text-surface-500 hover:text-white disabled:opacity-30 transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -127,6 +129,8 @@ export default function SchedulePage() {
               <button
                 onClick={() => setSelectedWeek((w) => Math.min(maxWeek, w + 1))}
                 disabled={selectedWeek >= maxWeek}
+                title="Next week"
+                aria-label="Next week"
                 className="p-1 rounded text-surface-500 hover:text-white disabled:opacity-30 transition-colors"
               >
                 <ChevronRightIcon className="w-4 h-4" />

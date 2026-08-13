@@ -143,7 +143,7 @@ export default function CommissionerPage() {
 
       {error && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+          <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3" role="alert">
             <p className="text-red-400 text-sm">{error}</p>
           </div>
         </div>
@@ -151,7 +151,7 @@ export default function CommissionerPage() {
 
       {/* Tab bar */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <div className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700">
+        <div role="tablist" aria-label="Commissioner sections" className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700">
           {[
             { id: "adjustments" as Tab, label: "Points Adjustments", icon: Scale },
             { id: "trades" as Tab, label: "Trades", icon: Ban },
@@ -161,6 +161,8 @@ export default function CommissionerPage() {
             <button
               key={id}
               onClick={() => setActiveTab(id)}
+              role="tab"
+              aria-selected={activeTab === id}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                 activeTab === id
                   ? "bg-surface-700 text-white shadow-sm"
@@ -275,7 +277,7 @@ function PointsAdjustments({
   return (
     <div>
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
           <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}
@@ -504,7 +506,7 @@ function TradesPanel({
   return (
     <div>
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
           <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}
@@ -668,7 +670,7 @@ function DraftOrderPanel({
   return (
     <div>
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
           <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}
@@ -724,6 +726,8 @@ function DraftOrderPanel({
                   <button
                     onClick={() => moveTeam(idx, -1)}
                     disabled={idx === 0}
+                    title="Move up in draft order"
+                    aria-label="Move up in draft order"
                     className="p-1 text-surface-500 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />
@@ -731,6 +735,8 @@ function DraftOrderPanel({
                   <button
                     onClick={() => moveTeam(idx, 1)}
                     disabled={idx === order.length - 1}
+                    title="Move down in draft order"
+                    aria-label="Move down in draft order"
                     className="p-1 text-surface-500 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                   >
                     <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
@@ -845,7 +851,7 @@ function CoachesPanel({ teams }: { teams: Team[] }) {
   return (
     <div>
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 mb-4" role="alert">
           <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}

@@ -112,7 +112,7 @@ export default function CreateLeaguePage() {
       <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <div className="bg-surface-800 border border-surface-700 rounded-2xl p-8">
           {error && (
-            <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm" role="alert">
               {error}
             </div>
           )}
@@ -187,6 +187,7 @@ export default function CreateLeaguePage() {
                     key={lt.value}
                     type="button"
                     onClick={() => setForm((prev) => ({ ...prev, league_type: lt.value }))}
+                    aria-pressed={form.league_type === lt.value}
                     className={`text-left p-4 rounded-xl border transition-all ${
                       form.league_type === lt.value
                         ? "bg-gold-400/10 border-gold-400/40 ring-1 ring-gold-400/30"
@@ -239,6 +240,7 @@ export default function CreateLeaguePage() {
                     key={dt.value}
                     type="button"
                     onClick={() => setForm((prev) => ({ ...prev, draft_type: dt.value }))}
+                    aria-pressed={form.draft_type === dt.value}
                     className={`text-left p-4 rounded-xl border transition-all ${
                       form.draft_type === dt.value
                         ? "bg-gold-400/10 border-gold-400/40 ring-1 ring-gold-400/30"

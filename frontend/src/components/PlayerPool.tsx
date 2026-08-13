@@ -175,6 +175,19 @@ function PlayerPool({
                 : "bg-surface-800/50 border-surface-700"
           }`}
         >
+          {/* Announces whose turn it is without a screen-reader user having
+              to re-scan the page -- the draft room is entirely timer-driven,
+              so this is the single highest-impact a11y fix here. Only the
+              turn-change text lives in the live region, not the ticking
+              countdown (PickCountdownBadge below) -- that would announce
+              every second and make the page unusable with a screen reader. */}
+          <span className="sr-only" aria-live="polite" aria-atomic="true">
+            {userOnClock
+              ? "It's your turn to pick."
+              : cpuingPick
+                ? `${draftCurrentTeamName || "A team"} is auto-picking.`
+                : `${draftCurrentTeamName || "A team"} is on the clock.`}
+          </span>
           <div className="flex items-center gap-3">
             <div
               className={`w-3 h-3 rounded-full shrink-0 ${
@@ -250,6 +263,7 @@ function PlayerPool({
           <div className="flex gap-1 bg-surface-900 rounded-lg p-0.5 mb-4">
             <button
               onClick={() => onShowQueueChange(false)}
+              aria-pressed={!showQueue}
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
                 !showQueue ? "bg-surface-700 text-white" : "text-surface-400"
               }`}
@@ -258,6 +272,7 @@ function PlayerPool({
             </button>
             <button
               onClick={() => onShowQueueChange(true)}
+              aria-pressed={showQueue}
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all relative ${
                 showQueue ? "bg-surface-700 text-white" : "text-surface-400"
               }`}
@@ -279,6 +294,7 @@ function PlayerPool({
                 <input
                   type="text"
                   placeholder="Search by name, team, or position..."
+                  aria-label="Search players by name, team, or position"
                   value={searchQuery}
                   onChange={(e) => onSearchQueryChange(e.target.value)}
                   className="w-full pl-10 pr-3 py-2.5 bg-surface-900 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
@@ -289,6 +305,7 @@ function PlayerPool({
               <div className="flex flex-wrap gap-1.5">
                 <button
                   onClick={() => onPositionFilterChange("ALL")}
+                  aria-pressed={positionFilter === "ALL"}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     positionFilter === "ALL"
                       ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
@@ -303,6 +320,7 @@ function PlayerPool({
                     <button
                       key={pos}
                       onClick={() => onPositionFilterChange(pos)}
+                      aria-pressed={positionFilter === pos}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                         positionFilter === pos
                           ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"

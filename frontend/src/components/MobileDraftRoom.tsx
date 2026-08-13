@@ -7,6 +7,7 @@ import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import TeamCircle from "./DraftTeamCircle";
 import { PickCountdownText } from "./PickCountdown";
 import { formatPickLabel, picksUntilMyTurn, projectNextPick } from "@/lib/draftPickMath";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 
 // Matches draft/[id]/page.tsx's Player interface exactly (structurally --
 // no index signature, since that would make this type incompatible with
@@ -123,6 +124,7 @@ function MobileDraftRoom({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showQueuePanel, setShowQueuePanel] = useState(false);
   const currentTeamRef = useRef<HTMLDivElement>(null);
+  const queueSheetRef = useFocusTrap<HTMLDivElement>(() => setShowQueuePanel(false), showQueuePanel);
 
   // Keep the on-the-clock avatar scrolled into view as the draft advances.
   useEffect(() => {
@@ -181,6 +183,17 @@ function MobileDraftRoom({
             </button>
           )}
         </div>
+
+        {/* Announces turn changes without the countdown itself (that would
+            announce every second) -- same reasoning as PlayerPool.tsx's
+            matching live region. */}
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {isCompleted
+            ? "Draft complete."
+            : isUserOnClock
+              ? "It's your turn to pick."
+              : `${teams[currentTeamId || ""]?.name || "A team"} is on the clock.`}
+        </span>
 
         {/* Round number + next-pick timing */}
         <div className="flex items-end justify-between px-4 mt-1">
@@ -274,6 +287,7 @@ function MobileDraftRoom({
           <input
             type="text"
             placeholder="Search players..."
+            aria-label="Search players by name, team, or position"
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
             className="w-full pl-10 pr-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
@@ -282,6 +296,7 @@ function MobileDraftRoom({
         <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
           <button
             onClick={() => onPositionFilterChange("ALL")}
+            aria-pressed={positionFilter === "ALL"}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
               positionFilter === "ALL"
                 ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
@@ -297,6 +312,7 @@ function MobileDraftRoom({
                 key={pos}
                 onClick={() => onPositionFilterChange(pos)}
                 disabled={count === 0}
+                aria-pressed={positionFilter === pos}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
                   positionFilter === pos
                     ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
@@ -326,6 +342,16 @@ function MobileDraftRoom({
                 <div
                   key={player.id}
                   onClick={() => handleRowTap(player)}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
+                  aria-label={`${player.full_name}, ${player.position}${selected ? ", selected" : ""}`}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleRowTap(player);
+                    }
+                  }}
                   className={`flex items-center gap-3 py-3 transition-colors ${
                     selected ? "bg-gold-400/10 -mx-4 px-4 rounded-xl" : ""
                   }`}
@@ -349,6 +375,8 @@ function MobileDraftRoom({
                       e.stopPropagation();
                       onToggleQueue(player);
                     }}
+                    title={isQueued(player.id) ? "Remove from queue" : "Add to queue"}
+                    aria-label={isQueued(player.id) ? "Remove from queue" : "Add to queue"}
                     className={`p-2 rounded-lg shrink-0 ${
                       isQueued(player.id) ? "bg-gold-400/20 text-gold-400" : "text-surface-500 bg-surface-800"
                     }`}
@@ -381,6 +409,7 @@ function MobileDraftRoom({
 
             <button
               onClick={onToggleAutoPickForMe}
+              aria-pressed={autoPickForMe}
               className={`flex items-center justify-center gap-1.5 px-3 py-3 rounded-xl border shrink-0 transition-all ${
                 autoPickForMe
                   ? "bg-blue-500/20 border-blue-500/40 text-blue-300"
@@ -422,10 +451,17 @@ function MobileDraftRoom({
       {showQueuePanel && (
         <div className="fixed inset-0 z-40 flex items-end">
           <div className="absolute inset-0 bg-black/60" onClick={() => setShowQueuePanel(false)} />
-          <div className="relative w-full max-h-[70vh] bg-surface-850 border-t border-surface-700 rounded-t-3xl flex flex-col">
+          <div
+            ref={queueSheetRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="queue-sheet-title"
+            tabIndex={-1}
+            className="relative w-full max-h-[70vh] bg-surface-850 border-t border-surface-700 rounded-t-3xl flex flex-col"
+          >
             <div className="flex items-center justify-between px-4 py-3 border-b border-surface-700">
-              <span className="text-sm font-bold text-white">Your Queue ({availableQueue.length})</span>
-              <button onClick={() => setShowQueuePanel(false)} className="p-1.5 text-surface-400">
+              <span id="queue-sheet-title" className="text-sm font-bold text-white">Your Queue ({availableQueue.length})</span>
+              <button onClick={() => setShowQueuePanel(false)} className="p-1.5 text-surface-400" aria-label="Close queue">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -446,7 +482,11 @@ function MobileDraftRoom({
                       </div>
                       <span className="text-xs text-surface-500">{player.team || "FA"}</span>
                     </div>
-                    <button onClick={() => onToggleQueue(player)} className="p-1.5 rounded-lg text-surface-500">
+                    <button
+                      onClick={() => onToggleQueue(player)}
+                      className="p-1.5 rounded-lg text-surface-500"
+                      aria-label={`Remove ${player.full_name} from queue`}
+                    >
                       <Plus className="w-4 h-4 rotate-45" />
                     </button>
                   </div>

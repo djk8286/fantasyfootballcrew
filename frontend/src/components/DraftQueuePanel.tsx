@@ -50,7 +50,7 @@ export default function DraftQueuePanel({
   return (
     <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-surface-700 flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
           <ListChecks className="w-3.5 h-3.5 text-gold-400" />
           Pick Queue
           {queue.length > 0 && (
@@ -58,9 +58,10 @@ export default function DraftQueuePanel({
               {queue.length}
             </span>
           )}
-        </h3>
+        </h2>
         <button
           onClick={onToggleAutoPickForMe}
+          aria-pressed={autoPickForMe}
           className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold border transition-all ${
             autoPickForMe
               ? "bg-blue-500/20 border-blue-500/40 text-blue-300"

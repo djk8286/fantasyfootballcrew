@@ -44,7 +44,7 @@ function ResetPasswordForm() {
   if (!token) {
     return (
       <div className="text-center">
-        <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm mb-6">
+        <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm mb-6" role="alert">
           This link is missing its reset token. Request a new one below.
         </div>
         <Link href="/forgot-password" className="text-gold-400 hover:text-gold-300 font-medium text-sm">
@@ -56,7 +56,7 @@ function ResetPasswordForm() {
 
   if (success) {
     return (
-      <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm text-center">
+      <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm text-center" role="status">
         Password updated. Redirecting you to sign in...
       </div>
     );
@@ -65,7 +65,7 @@ function ResetPasswordForm() {
   return (
     <>
       {error && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm" role="alert">
           {error}
         </div>
       )}
@@ -77,6 +77,7 @@ function ResetPasswordForm() {
           <input
             id="newPassword"
             type="password"
+            autoComplete="new-password"
             required
             minLength={8}
             placeholder="••••••••"
@@ -92,6 +93,7 @@ function ResetPasswordForm() {
           <input
             id="confirmPassword"
             type="password"
+            autoComplete="new-password"
             required
             minLength={8}
             placeholder="••••••••"

@@ -36,6 +36,16 @@ export default function NotificationBell() {
   const [loading, setLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Proactive "N new notifications" announcement for screen-reader users --
+  // the bell's aria-label already reports the current count, but that's
+  // only read when the bell itself is focused. Without this, someone
+  // reading elsewhere on the page while the 60s poll picks up a new
+  // notification has no way to know one arrived. Only fires on an actual
+  // *increase* (not the poll re-confirming an unchanged count, and not a
+  // mark-as-read decrease, which isn't news).
+  const prevUnreadRef = useRef(0);
+  const [announcement, setAnnouncement] = useState("");
+
   const refresh = useCallback(() => {
     notificationsApi
       .list()
@@ -43,6 +53,11 @@ export default function NotificationBell() {
         const d = data as { notifications: NotificationItem[]; unread_count: number };
         setNotifications(d.notifications);
         setUnreadCount(d.unread_count);
+        if (d.unread_count > prevUnreadRef.current) {
+          const delta = d.unread_count - prevUnreadRef.current;
+          setAnnouncement(`${delta} new notification${delta === 1 ? "" : "s"} — ${d.unread_count} unread total`);
+        }
+        prevUnreadRef.current = d.unread_count;
       })
       .catch(() => {});
   }, []);
@@ -94,6 +109,7 @@ export default function NotificationBell() {
 
   return (
     <div className="relative" ref={containerRef}>
+      <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
       <button
         type="button"
         onClick={toggleOpen}
@@ -111,7 +127,7 @@ export default function NotificationBell() {
       {open && (
         <div className="absolute right-0 mt-2 w-80 max-w-[90vw] bg-surface-800 border border-surface-700 rounded-2xl shadow-2xl overflow-hidden z-50">
           <div className="px-4 py-3 border-b border-surface-700 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white">Notifications</h3>
+            <h2 className="text-sm font-bold text-white">Notifications</h2>
             {unreadCount > 0 && (
               <button
                 onClick={handleMarkAllRead}

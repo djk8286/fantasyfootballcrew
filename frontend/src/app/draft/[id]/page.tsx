@@ -608,9 +608,9 @@ export default function DraftPage() {
     <div className="min-h-screen bg-surface-900">
       {/* Error banner */}
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 text-center">
+        <div className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 text-center" role="alert">
           <span className="text-red-400 text-sm">{error}</span>
-          <button onClick={() => setError("")} className="ml-2 text-red-300 hover:text-red-200">×</button>
+          <button onClick={() => setError("")} className="ml-2 text-red-300 hover:text-red-200" aria-label="Dismiss error">×</button>
         </div>
       )}
 

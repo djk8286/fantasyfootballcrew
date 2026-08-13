@@ -101,7 +101,11 @@ export default function DraftHeader({
             >
               <ChevronLeft className="w-5 h-5" />
             </Link>
-            <h1 className="text-lg font-bold text-white truncate hidden sm:block">
+            {/* sr-only below sm, not hidden -- MobileDraftRoom is what
+                actually renders there, and it has no h1 of its own, so
+                hiding this outright left the mobile draft room with no
+                page heading at all in the accessibility tree. */}
+            <h1 className="text-lg font-bold text-white truncate sr-only sm:not-sr-only sm:block">
               Draft Room
             </h1>
             <span
@@ -124,9 +128,11 @@ export default function DraftHeader({
           </div>
           <div className="flex items-center gap-3 text-sm shrink-0">
             {/* View toggle */}
-            <div className="hidden sm:flex bg-surface-800 rounded-lg p-0.5 border border-surface-700">
+            <div role="tablist" aria-label="Draft view" className="hidden sm:flex bg-surface-800 rounded-lg p-0.5 border border-surface-700">
               <button
                 onClick={() => onViewModeChange("draft")}
+                role="tab"
+                aria-selected={viewMode === "draft"}
                 className={`px-3 py-1.5 rounded text-xs font-semibold transition-all flex items-center gap-1 ${
                   viewMode === "draft"
                     ? "bg-surface-700 text-white"
@@ -137,6 +143,8 @@ export default function DraftHeader({
               </button>
               <button
                 onClick={() => onViewModeChange("board")}
+                role="tab"
+                aria-selected={viewMode === "board"}
                 className={`px-3 py-1.5 rounded text-xs font-semibold transition-all flex items-center gap-1 ${
                   viewMode === "board"
                     ? "bg-surface-700 text-white"
@@ -147,6 +155,8 @@ export default function DraftHeader({
               </button>
               <button
                 onClick={() => onViewModeChange("history")}
+                role="tab"
+                aria-selected={viewMode === "history"}
                 className={`px-3 py-1.5 rounded text-xs font-semibold transition-all items-center gap-1 hidden lg:flex ${
                   viewMode === "history"
                     ? "bg-surface-700 text-white"
@@ -179,6 +189,7 @@ export default function DraftHeader({
                         <button
                           key={s}
                           onClick={() => onSetTimer(s)}
+                          aria-pressed={timerSeconds === s}
                           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                             timerSeconds === s
                               ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
@@ -211,7 +222,14 @@ export default function DraftHeader({
         </div>
 
         {/* Progress bar */}
-        <div className="w-full bg-surface-800 rounded-full h-1 mt-2 overflow-hidden">
+        <div
+          className="w-full bg-surface-800 rounded-full h-1 mt-2 overflow-hidden"
+          role="progressbar"
+          aria-valuenow={completedPicks}
+          aria-valuemin={0}
+          aria-valuemax={totalPicks}
+          aria-label="Draft progress"
+        >
           <div
             className="h-full rounded-full bg-gradient-to-r from-gold-500 to-gold-300 transition-all duration-500"
             style={{

@@ -7,6 +7,7 @@ import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn } from "@/lib/a
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import {
   Trophy,
   Users,
@@ -389,13 +390,21 @@ export default function LeagueDetailPage() {
 
   function AvatarPicker({ teamId, currentUrl, onClose }: { teamId: string; currentUrl: string | null; onClose: () => void }) {
     const currentId = currentUrl?.replace(AVATAR_URL_PREFIX, "") || "";
+    const dialogRef = useFocusTrap<HTMLDivElement>(onClose);
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="avatar-picker-title"
+          tabIndex={-1}
+          className="bg-surface-800 border border-surface-700 rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl"
+        >
           <div className="flex items-center justify-between mb-5">
-            <h3 className="text-lg font-semibold text-white">Choose Team Avatar</h3>
-            <button onClick={onClose} className="text-surface-400 hover:text-white transition-colors">
+            <h3 id="avatar-picker-title" className="text-lg font-semibold text-white">Choose Team Avatar</h3>
+            <button onClick={onClose} className="text-surface-400 hover:text-white transition-colors" aria-label="Close">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -909,7 +918,21 @@ export default function LeagueDetailPage() {
                             onClick={() => {
                               if (isMyTeam || isLeagueManager) setEditingAvatarTeam(team.id);
                             }}
+                            // Only a real control when it actually does
+                            // something -- otherwise (someone else's team,
+                            // viewer isn't the commissioner) it stays a
+                            // plain, non-interactive div rather than a fake
+                            // keyboard stop that does nothing when pressed.
+                            role={isMyTeam || isLeagueManager ? "button" : undefined}
+                            tabIndex={isMyTeam || isLeagueManager ? 0 : undefined}
+                            onKeyDown={(e) => {
+                              if ((isMyTeam || isLeagueManager) && (e.key === "Enter" || e.key === " ")) {
+                                e.preventDefault();
+                                setEditingAvatarTeam(team.id);
+                              }
+                            }}
                             title={isMyTeam || isLeagueManager ? "Click to change avatar" : team.avatar_url ? team.avatar_url.replace(AVATAR_URL_PREFIX, "") : ""}
+                            aria-label={isMyTeam || isLeagueManager ? `Change avatar for ${team.name}` : undefined}
                           >
                             {avatar.icon}
                             {(isMyTeam || isLeagueManager) && (

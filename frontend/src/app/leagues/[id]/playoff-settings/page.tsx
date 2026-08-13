@@ -116,7 +116,7 @@ export default function PlayoffSettingsPage() {
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {error && (
-          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">{error}</div>
+          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">{error}</div>
         )}
 
         {settings && (
@@ -124,7 +124,7 @@ export default function PlayoffSettingsPage() {
             <div className="bg-surface-800/60 border border-surface-700 rounded-2xl p-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-white font-bold text-sm">Enable Playoffs</h3>
+                  <h3 id="enable-playoffs-label" className="text-white font-bold text-sm">Enable Playoffs</h3>
                   <p className="text-surface-400 text-xs mt-1">
                     Off by default. Once on, a bracket is generated and advanced automatically --
                     no manual step needed once the regular season ends.
@@ -132,6 +132,9 @@ export default function PlayoffSettingsPage() {
                 </div>
                 <button
                   onClick={() => update("enabled", !settings.enabled)}
+                  role="switch"
+                  aria-checked={settings.enabled}
+                  aria-labelledby="enable-playoffs-label"
                   className={`shrink-0 relative w-12 h-7 rounded-full transition-colors ${settings.enabled ? "bg-gold-400" : "bg-surface-700"}`}
                 >
                   <span
@@ -191,6 +194,7 @@ export default function PlayoffSettingsPage() {
                     <button
                       key={method}
                       onClick={() => update("seeding_method", method)}
+                      aria-pressed={settings.seeding_method === method}
                       className={`flex-1 text-left p-3 rounded-xl border transition-all ${
                         settings.seeding_method === method
                           ? "bg-gold-400/10 border-gold-400/40 text-gold-400"
@@ -216,6 +220,7 @@ export default function PlayoffSettingsPage() {
                       <button
                         key={mode}
                         onClick={() => update("conference_bracket_mode", mode)}
+                        aria-pressed={settings.conference_bracket_mode === mode}
                         className={`flex-1 text-left p-3 rounded-xl border transition-all ${
                           settings.conference_bracket_mode === mode
                             ? "bg-gold-400/10 border-gold-400/40 text-gold-400"

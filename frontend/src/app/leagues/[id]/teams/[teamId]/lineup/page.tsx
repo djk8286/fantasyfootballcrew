@@ -228,6 +228,8 @@ export default function LineupPage() {
               <button
                 onClick={() => setWeek((w) => Math.max(1, w - 1))}
                 disabled={week <= 1}
+                title="Previous week"
+                aria-label="Previous week"
                 className="p-1.5 rounded-lg text-surface-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -236,6 +238,8 @@ export default function LineupPage() {
               <button
                 onClick={() => setWeek((w) => Math.min(18, w + 1))}
                 disabled={week >= 18}
+                title="Next week"
+                aria-label="Next week"
                 className="p-1.5 rounded-lg text-surface-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -247,7 +251,7 @@ export default function LineupPage() {
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
             {error}
           </div>
         )}
