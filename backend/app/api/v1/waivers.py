@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -15,6 +16,8 @@ from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
+from app.models.contract import Contract
+from app.services.salary_cap_service import get_salary_cap_settings, compute_waiver_salary, team_cap_summary, release_player
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
 
@@ -254,6 +257,23 @@ async def process_waivers(
     skipped: list[dict] = []
     new_priority = list(order)
 
+    # Salary-Cap (Phase 5): batch-fetched once, same N+1-avoidance
+    # discipline the existing player_names lookup below already uses --
+    # not per-claim.
+    cap_settings = get_salary_cap_settings(league)
+    cap_enabled = cap_settings["enabled"]
+    all_add_ids = {c.details.get("add_player_id") for c in earliest_claim_by_team.values() if c.details}
+    players_by_id: dict[str, Player] = {}
+    if cap_enabled and all_add_ids:
+        players_result = await db.execute(select(Player).where(Player.id.in_(all_add_ids)))
+        players_by_id = {p.id: p for p in players_result.scalars().all()}
+    active_contract_by_team_and_player: dict[tuple[str, str], Contract] = {}
+    if cap_enabled:
+        contracts_result = await db.execute(
+            select(Contract).where(Contract.league_id == league_id, Contract.is_active == True)  # noqa: E712
+        )
+        active_contract_by_team_and_player = {(c.team_id, c.player_id): c for c in contracts_result.scalars().all()}
+
     for team_id in order:
         claim = earliest_claim_by_team.get(team_id)
         if not claim:
@@ -290,6 +310,35 @@ async def process_waivers(
             roster.discard(drop_id)
         roster.add(add_id)
 
+        # Salary-Cap (Phase 5): net the drop's salary release against the
+        # add's salary cost -- both happen in the same roster write, so
+        # they must be checked together, not as two independent deltas.
+        new_salary = 0.0
+        if cap_enabled:
+            add_player = players_by_id.get(add_id)
+            if not add_player:
+                claim.status = TransactionStatus.DENIED
+                denied.append({"team_id": team_id, "add_player_id": add_id, "reason": "player not found"})
+                continue
+            drop_salary = 0.0
+            if drop_id:
+                existing_contract = active_contract_by_team_and_player.get((team_id, drop_id))
+                drop_salary = existing_contract.salary if existing_contract else 0.0
+            new_salary = compute_waiver_salary(add_player, cap_settings)
+            current_summary = await team_cap_summary(team, league, db)
+            projected_cap = round(current_summary["cap_used"] - drop_salary + new_salary, 2)
+            if projected_cap > cap_settings["cap_total"]:
+                claim.status = TransactionStatus.DENIED
+                denied.append({
+                    "team_id": team_id, "add_player_id": add_id,
+                    "reason": f"would exceed salary cap (${round(projected_cap - cap_settings['cap_total'], 2)} over)",
+                })
+                continue
+            if len(roster) > cap_settings["max_roster_size"]:
+                claim.status = TransactionStatus.DENIED
+                denied.append({"team_id": team_id, "add_player_id": add_id, "reason": "would exceed max roster size"})
+                continue
+
         # Atomic, conditional roster write -- same roster_version
         # compare-and-swap commissioner.review_trade uses, and for the same
         # reason: this endpoint's roster read (teams_by_id, above) and this
@@ -314,6 +363,18 @@ async def process_waivers(
                 "reason": "roster changed concurrently (e.g. a trade was just approved) -- will retry on next processing run",
             })
             continue
+
+        # Salary-Cap (Phase 5): release the dropped player's contract
+        # (charging dead money if it had years remaining) and sign the
+        # new one, now that the roster write itself has actually landed.
+        if cap_enabled:
+            if drop_id:
+                await release_player(db, team, drop_id, league, reason="waiver drop")
+            db.add(Contract(
+                league_id=league_id, team_id=team.id, player_id=add_id,
+                salary=new_salary, contract_years=cap_settings["waiver_contract_years"],
+                signed_year=datetime.now(timezone.utc).year, source="waiver", is_active=True,
+            ))
 
         claim.status = TransactionStatus.APPROVED
         claim.reviewed_by = current_user.id

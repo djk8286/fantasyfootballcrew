@@ -142,23 +142,24 @@ async def test_non_cap_league_draft_creates_zero_contracts(db_session_factory):
 
 @pytest.mark.asyncio
 async def test_max_roster_size_blocks_next_pick_for_full_team(db_session_factory):
+    """create_draft shuffles team_ids internally before generating the
+    snake order, so which team picks first is non-deterministic -- track
+    each team's pick count generically (not assuming a fixed team goes
+    first) so this test is robust to that shuffle either way."""
     setup = await _make_cap_league(db_session_factory, num_teams=2, total_rounds=5, max_roster_size=2)
-    team_a, team_b = setup["team_ids"]
     team_order = setup["team_order"]
     player_iter = iter(setup["player_ids"])
+    picks_by_team: dict[str, int] = {}
 
     async with db_session_factory() as db:
-        # Make picks until team_a has hit its 2-player cap.
-        team_a_picks = 0
         for team_id in team_order:
-            if team_a_picks >= 2 and team_id == team_a:
-                # This is team_a's 3rd pick attempt -- should be blocked.
+            if picks_by_team.get(team_id, 0) >= 2:
+                # This team's 3rd pick attempt -- should be blocked.
                 with pytest.raises(ValueError, match="already at the 2-player limit"):
                     await make_pick(db, setup["draft_id"], team_id, next(player_iter))
                 break
             await make_pick(db, setup["draft_id"], team_id, next(player_iter))
-            if team_id == team_a:
-                team_a_picks += 1
+            picks_by_team[team_id] = picks_by_team.get(team_id, 0) + 1
 
 
 @pytest.mark.asyncio

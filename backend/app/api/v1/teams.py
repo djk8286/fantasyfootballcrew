@@ -7,6 +7,7 @@ from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league
+from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -98,6 +99,60 @@ async def update_team(
         if team.eliminated_week is None:
             raise HTTPException(status_code=400, detail="Only an eliminated team can leave last words")
         team.last_words = update_data.last_words
+
+    await db.commit()
+    await db.refresh(team)
+    return team
+
+
+class ReleaseRequest(BaseModel):
+    player_id: str
+
+
+@router.post("/{team_id}/release", response_model=TeamRead)
+async def release_player_route(
+    team_id: str,
+    data: ReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Unilateral drop -- no Transaction/claim record needed (no
+    competing claimants), always open. This is a plain roster drop even
+    for non-cap leagues too (a real, generically-useful gap this phase
+    happens to close, since there was previously no way to drop a
+    player without simultaneously adding one) -- release_player itself
+    internally no-ops (no active Contract to find) when the league has
+    no cap enabled, so this is safe and harmless everywhere. Owner/
+    co-owner only."""
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+
+    if current_user.id not in {team.owner_id, team.co_owner_id}:
+        raise HTTPException(status_code=403, detail="You do not own this team")
+    if team.eliminated_week is not None:
+        raise HTTPException(status_code=400, detail="This team has been eliminated and can no longer make roster moves")
+    if data.player_id not in (team.roster or []):
+        raise HTTPException(status_code=400, detail="Player is not on your roster")
+
+    new_roster = [p for p in team.roster if p != data.player_id]
+    cas_result = await db.execute(
+        update(Team)
+        .where(Team.id == team.id, Team.roster_version == team.roster_version)
+        .values(roster=new_roster, roster_version=Team.roster_version + 1)
+    )
+    if cas_result.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Your roster changed concurrently -- please retry")
+
+    settings = get_salary_cap_settings(league)
+    if settings["enabled"]:
+        await release_player(db, team, data.player_id, league)
 
     await db.commit()
     await db.refresh(team)
