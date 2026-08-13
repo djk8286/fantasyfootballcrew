@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 
@@ -15,6 +15,9 @@ class TeamUpdate(BaseModel):
     avatar_url: Optional[str] = None
     co_owner_id: Optional[str] = None
     conference: Optional[str] = None
+    # Guillotine (Phase 4) -- only settable once the team is actually
+    # eliminated, enforced in update_team, not here.
+    last_words: Optional[str] = Field(None, max_length=280)
 
 
 class TeamRead(BaseModel):
@@ -32,6 +35,8 @@ class TeamRead(BaseModel):
     ties: int
     points_for: float
     points_against: float
+    eliminated_week: Optional[int] = None
+    last_words: Optional[str] = None
     created_at: datetime
 
     class Config:

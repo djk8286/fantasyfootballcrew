@@ -33,6 +33,17 @@ class Team(Base):
     # type can't even do -- there's no `=` operator for it, only `jsonb`).
     # See commissioner.review_trade.
     roster_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Guillotine (Phase 4, "Guillotine + Custom Twist"). None = alive. A
+    # non-None value is BOTH the elimination flag and the week it
+    # happened -- no separate boolean, since one would just be a
+    # driftable duplicate of "eliminated_week is not None". See
+    # standings_service._effective_matchups for how this affects
+    # scoring/standings, and guillotine_service.py for how it gets set.
+    eliminated_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Optional flavor text an eliminated manager can submit once their
+    # team is out -- set via the existing generic update_team PATCH,
+    # gated there to only be settable post-elimination.
+    last_words: Mapped[str | None] = mapped_column(Text, nullable=True)
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     ties: Mapped[int] = mapped_column(Integer, default=0)
