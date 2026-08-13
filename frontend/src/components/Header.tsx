@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { Menu, X, Settings } from "lucide-react";
 import { isLoggedIn, logout } from "@/lib/api-client";
 import NotificationBell from "./NotificationBell";
 
@@ -74,6 +74,14 @@ export default function Header() {
             {loggedIn ? (
               <>
                 <NotificationBell />
+                <Link
+                  href="/settings"
+                  className="text-surface-300 hover:text-white transition-colors p-2"
+                  title="Account settings"
+                  aria-label="Account settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </Link>
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -139,13 +147,21 @@ export default function Header() {
             ))}
             <div className="h-px bg-surface-700 my-2" />
             {loggedIn ? (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="text-left text-surface-300 hover:text-white hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg"
-              >
-                Log Out
-              </button>
+              <>
+                <Link
+                  href="/settings"
+                  className="text-surface-300 hover:text-gold-400 hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg flex items-center gap-2"
+                >
+                  <Settings className="w-4 h-4" /> Account Settings
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="text-left text-surface-300 hover:text-white hover:bg-surface-800 transition-colors text-sm font-medium px-3 py-2.5 rounded-lg"
+                >
+                  Log Out
+                </button>
+              </>
             ) : (
               <>
                 <Link

@@ -24,6 +24,15 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class UserUpdate(BaseModel):
+    username: Optional[str] = Field(default=None, min_length=3, max_length=32)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
 class UserRead(BaseModel):
     id: str
     email: str

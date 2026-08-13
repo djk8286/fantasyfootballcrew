@@ -123,6 +123,18 @@ export const authApi = {
     }),
 };
 
+// Users
+export const usersApi = {
+  me: () => apiRequest("/api/v1/users/me"),
+  update: (username: string) =>
+    apiRequest("/api/v1/users/me", { method: "PUT", body: { username } }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    apiRequest("/api/v1/users/me/change-password", {
+      method: "POST",
+      body: { current_password: currentPassword, new_password: newPassword },
+    }),
+};
+
 // Leagues
 export const leaguesApi = {
   list: (mine?: boolean) =>
