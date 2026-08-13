@@ -190,6 +190,15 @@ export const leaguesApi = {
       method: "PUT",
       body: { rivalry_week_settings: rivalryWeekSettings },
     }),
+  getSalaryCapSettings: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/salary-cap-settings`),
+  updateSalaryCapSettings: (id: string, salaryCapSettings: Record<string, unknown>) =>
+    apiRequest(`/api/v1/leagues/${id}/salary-cap-settings`, {
+      method: "PUT",
+      body: { salary_cap_settings: salaryCapSettings },
+    }),
+  previewSigning: (id: string, playerId: string) =>
+    apiRequest(`/api/v1/leagues/${id}/salary-cap/preview-signing?player_id=${encodeURIComponent(playerId)}`),
 };
 
 // Teams
@@ -216,6 +225,13 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/bulk-add/${leagueId}`, {
       method: "POST",
       body: { count, name_prefix: namePrefix },
+    }),
+  getCap: (teamId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/cap`),
+  release: (teamId: string, playerId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/release`, {
+      method: "POST",
+      body: { player_id: playerId },
     }),
 };
 
