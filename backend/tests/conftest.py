@@ -226,3 +226,42 @@ async def seed(db_session_factory):
             "players": player_ids,  # [a0, a1, b0, b1, c0, c1]
             "db_session_factory": db_session_factory,
         }
+
+
+@pytest_asyncio.fixture
+async def guillotine_seed(db_session_factory):
+    """4-team GUILLOTINE league (t1..t4), all empty rosters -- score is
+    entirely controlled per-test via flat_weekly Coach bonuses (see
+    test_guillotine_elimination.py's _add_coach helper). Not the shared
+    3-team `seed` fixture above, since exercising "keeps eliminating
+    while >2 remain, then locks the finale" needs at least 4 teams.
+    Shared across every Phase 4 ("Guillotine + Custom Twist") test file."""
+    async with db_session_factory() as db:
+        commissioner = User(id=str(uuid.uuid4()), email="gcommish@test.local",
+                             username="gcommish", hashed_password="x")
+        db.add(commissioner)
+        await db.flush()
+
+        league = League(id=str(uuid.uuid4()), name="Guillotine Test League",
+                         commissioner_id=commissioner.id, league_type=LeagueType.GUILLOTINE,
+                         draft_status=DraftStatus.COMPLETED, scoring_config={}, roster_slots={})
+        db.add(league)
+        await db.flush()
+
+        teams = [
+            Team(id=str(uuid.uuid4()), name=f"Team {i + 1}", league_id=league.id,
+                 owner_id=commissioner.id, roster=[], roster_version=0)
+            for i in range(4)
+        ]
+        db.add_all(teams)
+        await db.commit()
+
+        token = create_access_token({"sub": commissioner.id, "email": commissioner.email})
+
+        return {
+            "token": token,
+            "commissioner_id": commissioner.id,
+            "league_id": league.id,
+            "team_ids": [t.id for t in teams],
+            "db_session_factory": db_session_factory,
+        }

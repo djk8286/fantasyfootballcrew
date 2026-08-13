@@ -22,17 +22,15 @@ a flat_weekly Coach bonus (same trick test_rivalry_week.py/
 test_standings_coach_bonus.py use), not real players/stats.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 from app.models.coach import Coach, CoachPosition
-from app.models.league import League, LeagueType, DraftStatus
+from app.models.league import League, LeagueType
 from app.models.player import Player
 from app.models.team import Team
 from app.models.user import User
 from app.models.weekly_score import WeeklyScore
-from app.services.auth_service import create_access_token
 from app.services.standings_service import _effective_matchups, calculate_week, get_standings
 from app.services.guillotine_service import process_league_guillotine
 from app.models.notification import Notification, NotificationType
@@ -104,41 +102,8 @@ def test_effective_matchups_noop_when_nobody_eliminated():
 
 
 # ─── Step 2: DB-integration check (get_standings) ──────────────────────
-
-@pytest_asyncio.fixture
-async def guillotine_seed(db_session_factory):
-    """4-team GUILLOTINE league (t1..t4), all empty rosters -- score is
-    entirely controlled per-test via flat_weekly Coach bonuses."""
-    async with db_session_factory() as db:
-        commissioner = User(id=str(uuid.uuid4()), email="gcommish@test.local",
-                             username="gcommish", hashed_password="x")
-        db.add(commissioner)
-        await db.flush()
-
-        league = League(id=str(uuid.uuid4()), name="Guillotine Test League",
-                         commissioner_id=commissioner.id, league_type=LeagueType.GUILLOTINE,
-                         draft_status=DraftStatus.COMPLETED, scoring_config={}, roster_slots={})
-        db.add(league)
-        await db.flush()
-
-        teams = [
-            Team(id=str(uuid.uuid4()), name=f"Team {i + 1}", league_id=league.id,
-                 owner_id=commissioner.id, roster=[], roster_version=0)
-            for i in range(4)
-        ]
-        db.add_all(teams)
-        await db.commit()
-
-        token = create_access_token({"sub": commissioner.id, "email": commissioner.email})
-
-        return {
-            "token": token,
-            "commissioner_id": commissioner.id,
-            "league_id": league.id,
-            "team_ids": [t.id for t in teams],
-            "db_session_factory": db_session_factory,
-        }
-
+# guillotine_seed now lives in conftest.py, shared across every Phase 4
+# test file.
 
 async def _add_coach(db_session_factory, team_id, bonus_type, bonus_value, position=CoachPosition.HC):
     async with db_session_factory() as db:

@@ -130,6 +130,9 @@ async def submit_claim(
     if current_user.id not in {team.owner_id, team.co_owner_id}:
         raise HTTPException(status_code=403, detail="You do not own this team")
 
+    if team.eliminated_week is not None:
+        raise HTTPException(status_code=400, detail="This team has been eliminated and can no longer make waiver claims")
+
     if data.drop_player_id and data.drop_player_id not in (team.roster or []):
         raise HTTPException(status_code=400, detail="Drop player is not on your roster")
 
@@ -260,6 +263,17 @@ async def process_waivers(
         add_id = details.get("add_player_id")
         drop_id = details.get("drop_player_id")
         team = teams_by_id.get(team_id)
+
+        if team and team.eliminated_week is not None:
+            # Guillotine "haunt" twist (Phase 4): a ghost team stays in
+            # League.waiver_priority forever (never removed below), so
+            # its presence still affects the position of teams behind
+            # it -- but it can never actually be GRANTED a claim. Denying
+            # here (not skipping) means this claim is a final outcome,
+            # not something that retries next run.
+            claim.status = TransactionStatus.DENIED
+            denied.append({"team_id": team_id, "add_player_id": add_id, "reason": "team is eliminated"})
+            continue
 
         if not team or not add_id or add_id in granted_players:
             claim.status = TransactionStatus.DENIED
