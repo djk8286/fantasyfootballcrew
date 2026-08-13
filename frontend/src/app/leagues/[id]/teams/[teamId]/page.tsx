@@ -18,6 +18,7 @@ import {
   Calendar,
   ListChecks,
   Shield,
+  Skull,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -37,6 +38,8 @@ interface Team {
   points_for: number;
   points_against: number;
   roster: string[] | null;
+  eliminated_week: number | null;
+  last_words: string | null;
 }
 
 interface LeagueData {
@@ -91,6 +94,8 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [claimingCoOwner, setClaimingCoOwner] = useState(false);
+  const [lastWordsInput, setLastWordsInput] = useState("");
+  const [savingLastWords, setSavingLastWords] = useState(false);
 
   const currentUserId = getCurrentUserId();
 
@@ -103,6 +108,19 @@ export default function TeamPage() {
       setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
     }
     setClaimingCoOwner(false);
+  };
+
+  const handleSubmitLastWords = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lastWordsInput.trim()) return;
+    setSavingLastWords(true);
+    try {
+      const updated = await teamsApi.update(teamId, { last_words: lastWordsInput.trim() });
+      setTeam(updated as Team);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save last words");
+    }
+    setSavingLastWords(false);
   };
 
   useEffect(() => {
@@ -211,6 +229,39 @@ export default function TeamPage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        {/* Guillotine (Phase 4): elimination banner + optional "last
+            words" -- an eliminated manager can leave a short farewell
+            message once, shown here and on the standings page's
+            Elimination History section. */}
+        {team.eliminated_week != null && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5">
+            <div className="flex items-center gap-2 text-red-400 font-semibold text-sm">
+              <Skull className="w-4 h-4" />
+              Eliminated in Week {team.eliminated_week}
+            </div>
+            {team.last_words ? (
+              <p className="text-surface-300 text-sm mt-2 italic">&ldquo;{team.last_words}&rdquo;</p>
+            ) : team.owner_id === currentUserId || team.co_owner_id === currentUserId ? (
+              <form onSubmit={handleSubmitLastWords} className="mt-3 flex gap-2">
+                <input
+                  value={lastWordsInput}
+                  onChange={(e) => setLastWordsInput(e.target.value)}
+                  maxLength={280}
+                  placeholder="Any last words?"
+                  className="flex-1 bg-surface-900 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-surface-600"
+                />
+                <button
+                  type="submit"
+                  disabled={savingLastWords || !lastWordsInput.trim()}
+                  className="text-sm text-gold-400 hover:text-gold-300 font-medium disabled:opacity-50 shrink-0"
+                >
+                  {savingLastWords ? "Saving…" : "Submit"}
+                </button>
+              </form>
+            ) : null}
+          </div>
+        )}
+
         {/* Team header */}
         <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 flex items-center gap-4">
           <div
@@ -242,7 +293,7 @@ export default function TeamPage() {
                       &middot; {team.co_owner_id === currentUserId ? "you're co-owner" : "has a co-owner"}
                     </span>
                   )}
-                  {!team.co_owner_id && team.owner_id !== currentUserId && isLoggedIn() && (
+                  {!team.co_owner_id && team.owner_id !== currentUserId && team.eliminated_week == null && isLoggedIn() && (
                     <button
                       onClick={handleClaimCoOwner}
                       disabled={claimingCoOwner}
@@ -271,7 +322,7 @@ export default function TeamPage() {
               <div className="text-[10px] text-surface-500 uppercase tracking-wider">Points Against</div>
             </div>
           </div>
-          {(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && (
+          {(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && team.eliminated_week == null && (
             <Link
               href={`/leagues/${leagueId}/teams/${teamId}/lineup`}
               className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all shrink-0"
@@ -328,7 +379,7 @@ export default function TeamPage() {
           </h3>
           <CoachStaffPanel
             teamId={teamId}
-            canManage={team.owner_id === currentUserId || team.co_owner_id === currentUserId}
+            canManage={(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && team.eliminated_week == null}
           />
         </div>
 
