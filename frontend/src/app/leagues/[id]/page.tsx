@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
-import { VisibilityBadge, ConferenceBadge } from "@/components/LeagueBadges";
+import { VisibilityBadge, ConferenceBadge, conferenceShortLabel } from "@/components/LeagueBadges";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -85,6 +85,8 @@ interface LeagueData {
   created_at: string;
   visibility: "private" | "invite_only" | "open";
   wanted_board_hidden: boolean;
+  conference_a_name: string | null;
+  conference_b_name: string | null;
   // "commissioner"|"member"|"eligible"|"requested"|"invited"|"blocked",
   // null only when logged out (backend doesn't compute it without a
   // viewer). See get_league's _compute_viewer_join_status.
@@ -1019,7 +1021,10 @@ export default function LeagueDetailPage() {
                             <span className="font-medium text-white">{team.name}</span>
                             {league.league_type === "conference" && (
                               <span className="ml-2 inline-block align-middle">
-                                <ConferenceBadge conference={team.conference} />
+                                <ConferenceBadge
+                                  conference={team.conference}
+                                  displayName={conferenceShortLabel(team.conference, league.conference_a_name, league.conference_b_name)}
+                                />
                               </span>
                             )}
                             {isMyTeam && (

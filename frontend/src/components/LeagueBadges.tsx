@@ -76,11 +76,37 @@ export function OpenSpotsBadge({ teamCount, maxTeams }: { teamCount: number | nu
   );
 }
 
-export function ConferenceBadge({ conference }: { conference?: string | null }) {
+export function ConferenceBadge({ conference, displayName }: { conference?: string | null; displayName?: string | null }) {
   if (!conference) return null;
   return (
     <span className="text-[10px] text-surface-400 font-semibold uppercase tracking-wider bg-surface-700/60 px-1.5 py-0.5 rounded shrink-0">
-      Conf {conference}
+      {displayName || `Conf ${conference}`}
     </span>
   );
+}
+
+// Enhanced Conference/Rivalry (Phase 3) -- a commissioner can name their
+// two conferences (League.conference_a_name/conference_b_name, both
+// nullable). These resolve "A"/"B" to the custom name if set, falling
+// back to the short badge form ("Conf A") or the full heading form
+// ("Conference A") otherwise. Kept as plain functions (not components)
+// since callers need the resolved string, not JSX -- e.g. to build a
+// button's title attribute, not just to render text.
+export function conferenceShortLabel(
+  conference: string | null | undefined,
+  aName?: string | null,
+  bName?: string | null,
+): string | undefined {
+  if (!conference) return undefined;
+  const custom = conference === "A" ? aName : conference === "B" ? bName : null;
+  return custom || `Conf ${conference}`;
+}
+
+export function conferenceFullLabel(
+  conference: string | null | undefined,
+  aName?: string | null,
+  bName?: string | null,
+): string {
+  const custom = conference === "A" ? aName : conference === "B" ? bName : null;
+  return custom || `Conference ${conference}`;
 }

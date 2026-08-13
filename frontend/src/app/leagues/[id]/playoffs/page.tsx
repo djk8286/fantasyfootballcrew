@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
+import { conferenceFullLabel } from "@/components/LeagueBadges";
 import { ArrowLeft, Trophy, Crown } from "lucide-react";
 
 interface TeamRef {
@@ -105,7 +106,7 @@ export default function PlayoffsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [league, setLeague] = useState<{ name: string } | null>(null);
+  const [league, setLeague] = useState<{ name: string; conference_a_name?: string | null; conference_b_name?: string | null } | null>(null);
   const [data, setData] = useState<PlayoffData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -194,7 +195,9 @@ export default function PlayoffsPage() {
             {brackets.map((bracketLabel) => (
               <div key={bracketLabel}>
                 {brackets.length > 1 && (
-                  <h3 className="text-sm font-bold text-white mb-4">Conference {bracketLabel}</h3>
+                  <h3 className="text-sm font-bold text-white mb-4">
+                    {conferenceFullLabel(bracketLabel, league?.conference_a_name, league?.conference_b_name)}
+                  </h3>
                 )}
                 <BracketColumns
                   matchups={(data.matchups || []).filter((m) => m.bracket === bracketLabel)}

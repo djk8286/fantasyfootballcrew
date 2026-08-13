@@ -8,6 +8,7 @@ import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
+import { ConferenceBadge, conferenceShortLabel } from "@/components/LeagueBadges";
 import {
   ChevronLeft,
   Bot,
@@ -41,6 +42,8 @@ interface Team {
 interface LeagueData {
   id: string;
   name: string;
+  conference_a_name?: string | null;
+  conference_b_name?: string | null;
 }
 
 interface RosterPlayer {
@@ -219,11 +222,10 @@ export default function TeamPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-2xl font-bold text-white truncate">{team.name}</h2>
-              {team.conference && (
-                <span className="text-[10px] text-surface-400 font-semibold uppercase tracking-wider bg-surface-700/60 px-1.5 py-0.5 rounded shrink-0">
-                  Conf {team.conference}
-                </span>
-              )}
+              <ConferenceBadge
+                conference={team.conference}
+                displayName={conferenceShortLabel(team.conference, league?.conference_a_name, league?.conference_b_name)}
+              />
             </div>
             <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
               {team.is_cpu ? (

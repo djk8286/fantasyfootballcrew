@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi, teamsApi } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
+import { conferenceFullLabel } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
 import {
   ChevronRight,
@@ -98,6 +99,8 @@ interface LeagueData {
   team_count: number | null;
   draft_status: string;
   description: string | null;
+  conference_a_name?: string | null;
+  conference_b_name?: string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -575,8 +578,14 @@ export default function StandingsPage() {
             <div className="xl:col-span-3 space-y-6">
               {league?.league_type === "conference" ? (
                 <>
-                  {renderStandingsTable(sortedStandings.filter((t) => t.conference === "A"), "Conference A")}
-                  {renderStandingsTable(sortedStandings.filter((t) => t.conference === "B"), "Conference B")}
+                  {renderStandingsTable(
+                    sortedStandings.filter((t) => t.conference === "A"),
+                    conferenceFullLabel("A", league.conference_a_name, league.conference_b_name),
+                  )}
+                  {renderStandingsTable(
+                    sortedStandings.filter((t) => t.conference === "B"),
+                    conferenceFullLabel("B", league.conference_a_name, league.conference_b_name),
+                  )}
                 </>
               ) : (
                 renderStandingsTable(sortedStandings)
