@@ -14,6 +14,8 @@ from app.schemas.commissioner import (
 from app.api.deps import get_current_user, require_commissioner
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
+from app.models.contract import Contract
+from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -206,6 +208,50 @@ async def review_trade(
         new_proposer_roster = list((proposer_roster - offered_ids) | requested_ids)
         new_target_roster = list((target_roster - requested_ids) | offered_ids)
 
+        # Salary-Cap (Phase 5): checked against the same freshly-locked
+        # rosters re-validated just above, before either CAS write lands.
+        # offered_contracts/requested_contracts are captured here (not
+        # re-queried after the CAS writes) so the contract-transfer step
+        # below operates on exactly the rows this check just reasoned
+        # about -- no window for them to drift in between.
+        cap_settings = get_salary_cap_settings(league)
+        offered_contracts: dict[str, Contract] = {}
+        requested_contracts: dict[str, Contract] = {}
+        if cap_settings["enabled"]:
+            proposer_summary = await team_cap_summary(proposer, league, db)
+            target_summary = await team_cap_summary(target, league, db)
+            if offered_ids:
+                result = await db.execute(select(Contract).where(
+                    Contract.team_id == proposer.id, Contract.player_id.in_(offered_ids), Contract.is_active == True  # noqa: E712
+                ))
+                offered_contracts = {c.player_id: c for c in result.scalars().all()}
+            if requested_ids:
+                result = await db.execute(select(Contract).where(
+                    Contract.team_id == target.id, Contract.player_id.in_(requested_ids), Contract.is_active == True  # noqa: E712
+                ))
+                requested_contracts = {c.player_id: c for c in result.scalars().all()}
+            # Grandfather gap: a player rostered before salary_cap_settings
+            # was ever enabled has no Contract row -- treated as $0 toward
+            # cap until traded/dropped-and-resigned, same "not solved this
+            # phase" limitation roster_slots changes already have (never
+            # retroactive).
+            offered_salary = sum(c.salary for c in offered_contracts.values())
+            requested_salary = sum(c.salary for c in requested_contracts.values())
+            new_proposer_total = round(proposer_summary["cap_used"] - offered_salary + requested_salary, 2)
+            new_target_total = round(target_summary["cap_used"] - requested_salary + offered_salary, 2)
+            if new_proposer_total > cap_settings["cap_total"]:
+                raise HTTPException(status_code=400, detail=(
+                    f"{proposer.name} would exceed the salary cap by this trade "
+                    f"(${round(new_proposer_total - cap_settings['cap_total'], 2)} over)"
+                ))
+            if new_target_total > cap_settings["cap_total"]:
+                raise HTTPException(status_code=400, detail=(
+                    f"{target.name} would exceed the salary cap by this trade "
+                    f"(${round(new_target_total - cap_settings['cap_total'], 2)} over)"
+                ))
+            if len(new_proposer_roster) > cap_settings["max_roster_size"] or len(new_target_roster) > cap_settings["max_roster_size"]:
+                raise HTTPException(status_code=400, detail="This trade would put a roster over its size limit")
+
         # Atomic, conditional roster swap -- only succeeds if each team's
         # roster_version still matches what was just observed above (i.e.
         # nothing else committed a roster change to it in between). Without
@@ -234,6 +280,16 @@ async def review_trade(
                 detail="One of the trading teams' rosters changed since this review started "
                        "(likely another trade for the same team was just approved). Please retry.",
             )
+
+        # Salary-Cap (Phase 5): contracts travel with the trade -- salary/
+        # contract_years/signed_year are preserved exactly as signed, only
+        # team_id moves. No dead money on a trade (that's specifically an
+        # early-*release* penalty; trading a player transfers the
+        # league's cap obligation for them, it doesn't shed it).
+        for contract in offered_contracts.values():
+            contract.team_id = target.id
+        for contract in requested_contracts.values():
+            contract.team_id = proposer.id
 
         trade.status = TransactionStatus.APPROVED
         trade_link = f"/leagues/{league_id}/trades"
