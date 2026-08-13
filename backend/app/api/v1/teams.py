@@ -90,6 +90,14 @@ async def update_team(
         if update_data.conference not in ("A", "B"):
             raise HTTPException(status_code=400, detail="conference must be 'A' or 'B'")
         team.conference = update_data.conference
+    if update_data.last_words is not None:
+        # Guillotine (Phase 4) -- only an already-eliminated team can
+        # leave "last words". require_team_or_league_access above
+        # already covers "must be owner/co-owner/commissioner"; this is
+        # the only extra gate this field needs.
+        if team.eliminated_week is None:
+            raise HTTPException(status_code=400, detail="Only an eliminated team can leave last words")
+        team.last_words = update_data.last_words
 
     await db.commit()
     await db.refresh(team)
@@ -123,6 +131,8 @@ async def claim_co_owner(
 
     if team.is_cpu:
         raise HTTPException(status_code=400, detail="Claim this team as owner first, not co-owner")
+    if team.eliminated_week is not None:
+        raise HTTPException(status_code=400, detail="This team has been eliminated and can no longer take a co-owner")
     if team.co_owner_id:
         raise HTTPException(status_code=400, detail="This team already has a co-owner")
     if current_user.id == team.owner_id:
