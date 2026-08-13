@@ -82,6 +82,28 @@ class League(Base):
     # from the highlighted "needs managers" section. A league stays
     # findable either way; this just stops it being pushed as "join now."
     wanted_board_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Enhanced Conference/Rivalry (Phase 3). Pure display-layer naming --
+    # NULL means "not customized", every display site falls back to
+    # "Conference A"/"Conference B" (or the short "Conf A"/"Conf B" badge
+    # form). Internal conference identity (Team.conference values "A"/"B")
+    # is completely unaffected by these; only meaningful/rendered for
+    # league_type == CONFERENCE, but harmless (never shown) if set on any
+    # other league type -- same "meaningless but harmless" precedent
+    # Team.conference itself already follows.
+    conference_a_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    conference_b_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Rivalry Week: a commissioner-designated week where every team that
+    # wins its normal (same-conference) matchup that week gets a flat
+    # bonus, on top of any Coach win_bonus -- see
+    # standings_service.DEFAULT_RIVALRY_WEEK_SETTINGS/calculate_week for
+    # where this is actually consumed. Same JSON-blob-with-defaults
+    # pattern as playoff_settings. Shape: {enabled, week, bonus_value}.
+    # Entirely opt-in (enabled defaults False) and only meaningful for
+    # CONFERENCE leagues -- calculate_week gates on league_type too, not
+    # just this flag, so enabling it on a non-conference league (blocked
+    # at the API layer, see update_league_rivalry_week_settings) could
+    # never silently pay out even if the stored value were somehow wrong.
+    rivalry_week_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
