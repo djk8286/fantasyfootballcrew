@@ -105,6 +105,14 @@ class League(Base):
     # at the API layer, see update_league_rivalry_week_settings) could
     # never silently pay out even if the stored value were somehow wrong.
     rivalry_week_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
+    # Salary-Cap + Contract Leagues (Phase 5). Bolt-on to ANY league_type
+    # (not a new LeagueType value) -- cap is purely a roster-construction-
+    # time gate, calculate_week/get_standings never touch it. Entirely
+    # opt-in (enabled defaults False). Shape: {enabled, cap_total,
+    # max_roster_size, top_salary, bottom_salary, waiver_salary_pct,
+    # dead_money_pct, default_contract_years, waiver_contract_years} --
+    # see DEFAULT_SALARY_CAP_SETTINGS in salary_cap_service.py.
+    salary_cap_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

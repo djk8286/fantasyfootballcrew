@@ -16,6 +16,7 @@ from app.models.notification import Notification, NotificationType
 from app.models.playoff import Playoff, PlayoffMatchup, PlayoffStatus
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
+from app.models.contract import Contract, DeadMoney
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -26,4 +27,5 @@ __all__ = [
     "Playoff", "PlayoffMatchup", "PlayoffStatus",
     "LeagueInvite", "InviteStatus",
     "LeagueJoinRequest", "JoinRequestStatus",
+    "Contract", "DeadMoney",
 ]
