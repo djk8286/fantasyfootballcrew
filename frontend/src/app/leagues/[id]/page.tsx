@@ -83,6 +83,7 @@ interface LeagueData {
   co_commissioner_ids: string[] | null;
   created_at: string;
   visibility: "private" | "invite_only" | "open";
+  wanted_board_hidden: boolean;
   // "commissioner"|"member"|"eligible"|"requested"|"invited"|"blocked",
   // null only when logged out (backend doesn't compute it without a
   // viewer). See get_league's _compute_viewer_join_status.
@@ -147,7 +148,12 @@ export default function LeagueDetailPage() {
 
   // League edit state
   const [editingLeague, setEditingLeague] = useState(false);
-  const [leagueEditForm, setLeagueEditForm] = useState({ name: "", description: "" });
+  const [leagueEditForm, setLeagueEditForm] = useState({
+    name: "",
+    description: "",
+    visibility: "open" as "open" | "invite_only" | "private",
+    wanted_board_hidden: false,
+  });
 
   // Co-commissioner input
   const [coCommishUserId, setCoCommishUserId] = useState("");
@@ -378,6 +384,8 @@ export default function LeagueDetailPage() {
       await leaguesApi.update(league.id, {
         name: leagueEditForm.name,
         description: leagueEditForm.description || null,
+        visibility: leagueEditForm.visibility,
+        wanted_board_hidden: leagueEditForm.wanted_board_hidden,
       });
       await refreshLeague();
       setEditingLeague(false);
@@ -601,6 +609,31 @@ export default function LeagueDetailPage() {
                     rows={2}
                     placeholder="Description (optional)"
                   />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div>
+                      <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Visibility</label>
+                      <select
+                        value={leagueEditForm.visibility}
+                        onChange={(e) => setLeagueEditForm((f) => ({ ...f, visibility: e.target.value as typeof f.visibility }))}
+                        className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white focus:outline-none focus:ring-2 focus:ring-gold-400"
+                      >
+                        <option value="open">Open</option>
+                        <option value="invite_only">Invite Only</option>
+                        <option value="private">Private</option>
+                      </select>
+                    </div>
+                    {leagueEditForm.visibility !== "private" && (
+                      <label className="flex items-center gap-2 text-xs text-surface-400 cursor-pointer mt-4">
+                        <input
+                          type="checkbox"
+                          checked={leagueEditForm.wanted_board_hidden}
+                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, wanted_board_hidden: e.target.checked }))}
+                          className="rounded border-surface-600 bg-surface-900 text-gold-400 focus:ring-gold-400"
+                        />
+                        Pause Wanted Board listing
+                      </label>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <button
                       onClick={handleSaveLeagueSettings}
@@ -627,7 +660,12 @@ export default function LeagueDetailPage() {
                     {isLeagueManager && (
                       <button
                         onClick={() => {
-                          setLeagueEditForm({ name: league.name, description: league.description || "" });
+                          setLeagueEditForm({
+                            name: league.name,
+                            description: league.description || "",
+                            visibility: league.visibility,
+                            wanted_board_hidden: league.wanted_board_hidden,
+                          });
                           setEditingLeague(true);
                         }}
                         className="text-surface-500 hover:text-gold-400 transition-colors"

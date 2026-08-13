@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { leaguesApi, LeagueListFilters } from "@/lib/api-client";
-import { Trophy, Search, Plus } from "lucide-react";
+import { leaguesApi, LeagueListFilters, isLoggedIn } from "@/lib/api-client";
+import { Trophy, Search, Plus, Megaphone, ArrowRight, Users } from "lucide-react";
 import { LeagueTypeBadge, VisibilityBadge, OpenSpotsBadge } from "@/components/LeagueBadges";
 
 interface League {
@@ -30,6 +30,28 @@ export default function LeaguesBrowsePage() {
   const [leagueType, setLeagueType] = useState<LeagueTypeFilter>("all");
   const [visibility, setVisibility] = useState<VisibilityFilter>("all");
   const [sort, setSort] = useState<SortOption>("newest");
+
+  // My Leagues + Wanted Board -- loaded independently of the filtered
+  // discovery grid below (Step 8). Both reuse leaguesApi.list with
+  // different filter shapes rather than new endpoints.
+  const [myLeagues, setMyLeagues] = useState<League[]>([]);
+  const [wantedBoard, setWantedBoard] = useState<League[]>([]);
+  const loggedIn = isLoggedIn();
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    leaguesApi
+      .list({ mine: true, sort: "newest" })
+      .then((data) => setMyLeagues(Array.isArray(data) ? (data as League[]) : []))
+      .catch(() => {});
+  }, [loggedIn]);
+
+  useEffect(() => {
+    leaguesApi
+      .list({ wanted_board_only: true, sort: "open_spots" })
+      .then((data) => setWantedBoard(Array.isArray(data) ? (data as League[]) : []))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -81,7 +103,93 @@ export default function LeaguesBrowsePage() {
         </div>
       </section>
 
+      {/* My Leagues -- only for logged-in users with at least one league.
+          Skipped entirely otherwise rather than showing an empty section. */}
+      {loggedIn && myLeagues.length > 0 && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+          <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <Users className="w-4.5 h-4.5 text-gold-400" />
+            My Leagues
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {myLeagues.map((league) => (
+              <Link
+                key={league.id}
+                href={`/leagues/${league.id}`}
+                className="group bg-surface-800/60 border border-surface-700 rounded-xl p-4 hover:border-gold-400/30 transition-all flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-white group-hover:text-gold-400 transition-colors truncate">
+                    {league.name}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <LeagueTypeBadge leagueType={league.league_type} />
+                    <span className="text-surface-600">·</span>
+                    <span className="text-xs text-surface-500">{league.team_count ?? 0}/{league.max_teams}</span>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-surface-600 group-hover:text-gold-400 transition-colors shrink-0" />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Wanted Board -- auto-listed Open/Invite-only leagues with empty
+          slots (Step 5's flagship differentiator). Visually distinct
+          treatment from the plain discovery grid below: highlighted
+          border/gradient, not just another card. Commissioners can pause
+          a league's listing here via wanted_board_hidden (see the
+          Visibility settings on their own league's create/edit form). */}
+      {wantedBoard.length > 0 && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+          <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+            <Megaphone className="w-4.5 h-4.5 text-gold-400" />
+            Wanted Board
+          </h2>
+          <p className="text-surface-500 text-sm mb-4">Leagues actively looking for managers.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {wantedBoard.map((league) => (
+              <Link
+                key={league.id}
+                href={`/leagues/${league.id}`}
+                className="group relative bg-gradient-to-br from-gold-400/10 via-surface-800 to-surface-800 border border-gold-400/30 rounded-2xl p-6 hover:border-gold-400/60 transition-all hover:-translate-y-1 hover:shadow-xl hover:shadow-gold-400/10"
+              >
+                <div className="flex items-start justify-between gap-2 mb-4">
+                  <h3 className="text-lg font-bold text-white group-hover:text-gold-400 transition-colors truncate">
+                    {league.name}
+                  </h3>
+                  <VisibilityBadge visibility={league.visibility} />
+                </div>
+
+                <div className="flex items-center gap-4 mb-3">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xl font-bold font-mono tabular-nums text-white">
+                      {league.team_count ?? 0}
+                    </span>
+                    <span className="text-surface-500 text-sm font-mono">/{league.max_teams}</span>
+                  </div>
+                  <OpenSpotsBadge teamCount={league.team_count} maxTeams={league.max_teams} />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <LeagueTypeBadge leagueType={league.league_type} />
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-gold-400">
+                    Join <ArrowRight className="w-3 h-3" />
+                  </span>
+                </div>
+
+                {league.description && (
+                  <p className="text-surface-500 text-xs mt-3 line-clamp-2">{league.description}</p>
+                )}
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <h2 className="text-lg font-bold text-white mb-4">All Leagues</h2>
         {/* Filters */}
         <div className="flex flex-col sm:flex-row flex-wrap gap-3 mb-8">
           <div className="relative flex-1 min-w-50 max-w-sm">
