@@ -37,20 +37,24 @@ async def _weekly_adjustment_total(team_id: str, week: int, year: int, db: Async
     return sum(a.amount for a in result.scalars().all())
 
 
-async def _flat_weekly_coach_bonus(team_id: str, db: AsyncSession) -> float:
+async def _coach_bonus_sum(team_id: str, bonus_type: str, db: AsyncSession) -> float:
     """
-    Sum flat per-week bonuses from a team's active coaching staff.
+    Sum bonus_value from a team's active coaching staff at a given
+    bonus_type. Generalized from the original flat_weekly-only version
+    (Phase 2 Step 2, "Front-Office finish-out") so "win_bonus" -- and any
+    future bonus_type -- can share this same query instead of a
+    copy-pasted near-duplicate.
 
-    Only bonus_type == "flat_weekly" is applied here — other bonus_type values
-    (e.g. "points_per_win") depend on a week's win/loss outcome, which isn't
-    known until get_standings() compares matchups, so they're stored but not
-    yet scored.
+    "flat_weekly" is unconditional (see calculate_week's first pass).
+    "win_bonus" depends on a week's win/loss outcome, which calculate_week
+    now determines itself via a second pass before this ever gets called
+    for that bonus_type -- see calculate_week's docstring.
     """
     result = await db.execute(
         select(Coach).where(
             Coach.team_id == team_id,
             Coach.is_active == True,  # noqa: E712
-            Coach.bonus_type == "flat_weekly",
+            Coach.bonus_type == bonus_type,
         )
     )
     coaches = result.scalars().all()
@@ -150,7 +154,17 @@ async def calculate_week(
     2. Looks up player positions from the Player model
     3. Gets weekly stats (Sleeper API or Player.week_stats)
     4. Uses scoring_engine.calculate_player_score() for each player
-    5. Stores a WeeklyScore record
+    5. Applies flat_weekly coach bonuses and commissioner adjustments (this
+       is "pass 1" -- see below) to get each team's BASE total
+    6. Determines this week's matchup winners from those BASE totals (the
+       same conference-aware round robin get_standings uses), then applies
+       win_bonus coach bonuses only to the actual winners ("pass 2") --
+       winner determination happens before any win_bonus is added, so a
+       team's own win_bonus can never retroactively flip who won that same
+       comparison. A team with no win_bonus coach, or with a bye week that
+       round (odd team count), is completely unaffected -- byte-for-byte
+       the same total it would have gotten before win_bonus existed.
+    7. Stores a WeeklyScore record with the final total
 
     Args:
         league_id: League identifier
@@ -219,7 +233,13 @@ async def calculate_week(
             use_sleeper = False
             sleeper_stats = {}
 
-    results = []
+    # PASS 1 -- base score for every team (roster + flat_weekly bonus +
+    # commissioner adjustment), exactly as this function computed a team's
+    # *entire* score before win_bonus existed. Deliberately NOT upserted
+    # yet -- win/loss for the week isn't known until every team's base
+    # total is in hand.
+    base_totals: Dict[str, float] = {}
+    lineup_data_by_team: Dict[str, Dict[str, Any]] = {}
 
     for team in teams:
         full_roster = set(team.roster or [])
@@ -279,7 +299,7 @@ async def calculate_week(
             total_score = round(total_score, 2)
             lineup_data = {"total": total_score, "breakdown": breakdown}
 
-        coach_bonus = await _flat_weekly_coach_bonus(team.id, db)
+        coach_bonus = await _coach_bonus_sum(team.id, "flat_weekly", db)
         if coach_bonus:
             total_score = round(total_score + coach_bonus, 2)
             lineup_data["total"] = total_score
@@ -290,6 +310,41 @@ async def calculate_week(
             total_score = round(total_score + adjustment_total, 2)
             lineup_data["total"] = total_score
             lineup_data["commissioner_adjustment"] = adjustment_total
+
+        base_totals[team.id] = total_score
+        lineup_data_by_team[team.id] = lineup_data
+
+    # Determine this week's matchup winners from BASE totals only -- the
+    # exact same comparison get_standings uses (score_a > score_b / tie),
+    # just computed here instead of re-derived later, so win_bonus can be
+    # applied before the upsert. A tie gets no bonus on either side, same
+    # as get_standings never credits a win for one.
+    matchups = _build_league_schedule(teams, week)
+    winners: set = set()
+    for team_a, team_b in matchups:
+        score_a = base_totals.get(team_a, 0.0)
+        score_b = base_totals.get(team_b, 0.0)
+        if score_a > score_b:
+            winners.add(team_a)
+        elif score_b > score_a:
+            winners.add(team_b)
+
+    # PASS 2 -- apply win_bonus to this week's actual winners (determined
+    # above from base scores, so a team's own win_bonus can never affect
+    # who won), then upsert. A team with no win_bonus coach, or a bye team
+    # this week (not in `matchups` at all -- odd team count), just carries
+    # its base total through unchanged.
+    results = []
+    for team in teams:
+        total_score = base_totals[team.id]
+        lineup_data = lineup_data_by_team[team.id]
+
+        if team.id in winners:
+            win_bonus = await _coach_bonus_sum(team.id, "win_bonus", db)
+            if win_bonus:
+                total_score = round(total_score + win_bonus, 2)
+                lineup_data["total"] = total_score
+                lineup_data["win_bonus"] = win_bonus
 
         # Upsert WeeklyScore record
         existing_result = await db.execute(
