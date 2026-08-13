@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, Swords, Lock, Unlock, ShieldCheck } from "lucide-react";
+import { Users, Swords, Lock, Unlock, ShieldCheck, Skull } from "lucide-react";
 
 // Shared definitions used everywhere a league's type/visibility/open-spot
 // count needs to render -- the leagues grid, the Wanted Board, and the
@@ -12,12 +12,14 @@ export const LEAGUE_TYPE_LABELS: Record<string, string> = {
   standard: "Standard",
   two_man: "2-Man",
   conference: "Conference",
+  guillotine: "Guillotine",
 };
 
 const LEAGUE_TYPE_ICONS: Record<string, typeof Users> = {
   standard: Users,
   two_man: Users,
   conference: Swords,
+  guillotine: Skull,
 };
 
 export function LeagueTypeBadge({ leagueType }: { leagueType: string }) {
@@ -72,6 +74,18 @@ export function OpenSpotsBadge({ teamCount, maxTeams }: { teamCount: number | nu
   ) : (
     <span className="text-xs text-gold-400 font-semibold shrink-0">
       {slotsOpen} slot{slotsOpen !== 1 ? "s" : ""} open
+    </span>
+  );
+}
+
+// Guillotine (Phase 4) -- Team.eliminated_week is null (alive) or the
+// week a team was eliminated. Styled like ConferenceBadge's small pill,
+// but red-toned since elimination is a stronger status signal than
+// conference membership.
+export function EliminatedBadge({ week }: { week: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-red-400 font-semibold uppercase tracking-wider bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded shrink-0">
+      Eliminated Wk {week}
     </span>
   );
 }

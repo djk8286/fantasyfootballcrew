@@ -9,6 +9,7 @@ const leagueTypes = [
   { value: "standard", label: "Standard", desc: "Classic 1-vs-1 head-to-head" },
   { value: "two_man", label: "2-Man Teams", desc: "Co-managed franchises" },
   { value: "conference", label: "Conference", desc: "6v6 conference battle" },
+  { value: "guillotine", label: "Guillotine", desc: "Lowest score eliminated weekly" },
 ] as const;
 
 const draftTypes = [
@@ -189,7 +190,7 @@ export default function CreateLeaguePage() {
               <label className="block text-sm font-medium text-surface-300 mb-3">
                 League Type <span className="text-red-400">*</span>
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {leagueTypes.map((lt) => (
                   <button
                     key={lt.value}
