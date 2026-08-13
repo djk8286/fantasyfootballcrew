@@ -53,6 +53,7 @@ interface TeamWeeklyScore {
   lineup_data: {
     coach_bonus?: number;
     win_bonus?: number;
+    rivalry_bonus?: number;
     [key: string]: unknown;
   } | null;
 }
@@ -144,21 +145,23 @@ export default function StandingsPage() {
 
   const myTeamId = getMyTeamId(leagueId);
   const currentUserId = getCurrentUserId();
-  // team_id -> that team's coach_bonus/win_bonus contribution this week,
-  // for the small badge next to each team's score in the matchup card
-  // below (Phase 2 Step 6).
+  // team_id -> that team's coach_bonus/win_bonus/rivalry_bonus
+  // contribution this week, for the small badge next to each team's
+  // score in the matchup card below (Phase 2 Step 6, extended for
+  // rivalry_bonus in Phase 3 Step 9).
   const coachBonusByTeam = new Map(
     (weeklyData?.team_scores || [])
-      .filter((ts) => ts.lineup_data?.coach_bonus || ts.lineup_data?.win_bonus)
+      .filter((ts) => ts.lineup_data?.coach_bonus || ts.lineup_data?.win_bonus || ts.lineup_data?.rivalry_bonus)
       .map((ts) => [ts.team_id, ts.lineup_data as NonNullable<TeamWeeklyScore["lineup_data"]>]),
   );
-  // A team can have both a flat_weekly and a win_bonus coach at once --
-  // show each present bonus separately rather than picking one value
-  // with a label that might not match it.
+  // A team can have a flat_weekly coach, a win_bonus coach, AND an active
+  // Rivalry Week bonus all at once -- show each present bonus separately
+  // rather than picking one value with a label that might not match it.
   function formatCoachBonus(bonus: NonNullable<TeamWeeklyScore["lineup_data"]>): string {
     const parts: string[] = [];
     if (bonus.coach_bonus) parts.push(`+${bonus.coach_bonus} coach bonus`);
     if (bonus.win_bonus) parts.push(`+${bonus.win_bonus} win bonus`);
+    if (bonus.rivalry_bonus) parts.push(`+${bonus.rivalry_bonus} rivalry bonus`);
     return parts.join(", ");
   }
   const isCommissioner =
