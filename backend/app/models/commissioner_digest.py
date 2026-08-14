@@ -22,7 +22,10 @@ class CommissionerDigest(Base):
     week: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    generated_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    # Nullable: an account can be hard-deleted (self-service account
+    # deletion) after generating digests other people still rely on --
+    # the digest content survives, only the attribution is cleared.
+    generated_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     # AI Co-Commissioner v1: the tone/length actually used to generate
     # this digest -- per-generation params, not a persisted league
     # default (see ai_service.py's TONE_INSTRUCTIONS/LENGTH_INSTRUCTIONS).

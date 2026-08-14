@@ -138,6 +138,13 @@ export const usersApi = {
       method: "POST",
       body: { current_password: currentPassword, new_password: newPassword },
     }),
+  // password is omitted entirely (not just empty-string) for Google-OAuth
+  // accounts -- there's nothing to confirm, see backend delete_me.
+  deleteAccount: (password?: string) =>
+    apiRequest("/api/v1/users/me", {
+      method: "DELETE",
+      body: password ? { password } : {},
+    }),
 };
 
 export interface LeagueListFilters {

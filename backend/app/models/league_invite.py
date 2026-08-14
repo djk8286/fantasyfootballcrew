@@ -36,7 +36,10 @@ class LeagueInvite(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
     invited_email: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    invited_by_user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    # Nullable: the inviting account can be hard-deleted (self-service
+    # account deletion) after sending this invite -- the invite itself
+    # (and the league it's for) survives, only the attribution is cleared.
+    invited_by_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     personal_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     status: Mapped[InviteStatus] = mapped_column(Enum(InviteStatus), default=InviteStatus.PENDING, nullable=False)

@@ -37,6 +37,13 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class DeleteAccountRequest(BaseModel):
+    # Required for password-based accounts (verified server-side, same
+    # split as change_password); Google-OAuth accounts have no password
+    # to check, so this is left unset for them -- see delete_me.
+    password: Optional[str] = None
+
+
 class UserRead(BaseModel):
     id: str
     email: str

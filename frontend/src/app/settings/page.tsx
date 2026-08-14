@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { usersApi } from "@/lib/api-client";
-import { ArrowLeft, Save, Loader2, Check, User as UserIcon, KeyRound, Mail, Calendar } from "lucide-react";
+import { usersApi, logout } from "@/lib/api-client";
+import { useFocusTrap } from "@/lib/useFocusTrap";
+import { ArrowLeft, Save, Loader2, Check, User as UserIcon, KeyRound, Mail, Calendar, AlertTriangle, X, Trash2 } from "lucide-react";
 
 interface Me {
   id: string;
@@ -15,6 +17,7 @@ interface Me {
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -29,6 +32,8 @@ export default function SettingsPage() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordSaved, setPasswordSaved] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   useEffect(() => {
     usersApi.me()
@@ -82,6 +87,105 @@ export default function SettingsPage() {
       setSavingPassword(false);
     }
   };
+
+  function DeleteAccountModal({ requiresPassword, onClose }: { requiresPassword: boolean; onClose: () => void }) {
+    const dialogRef = useFocusTrap<HTMLDivElement>(onClose);
+    const [password, setPassword] = useState("");
+    const [confirmText, setConfirmText] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    const canSubmit = confirmText === "DELETE" && (!requiresPassword || password.length > 0) && !busy;
+
+    const handleDelete = async () => {
+      if (!canSubmit) return;
+      setBusy(true);
+      setError("");
+      try {
+        await usersApi.deleteAccount(requiresPassword ? password : undefined);
+        logout();
+        router.push("/");
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message.replace(/^API error: \d+ ?\w* ?—? ?/, "") : "Failed to delete account");
+        setBusy(false);
+      }
+    };
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-account-title"
+          tabIndex={-1}
+          className="bg-surface-800 border border-red-500/30 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h3 id="delete-account-title" className="text-lg font-semibold text-white flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-400" /> Delete Account
+            </h3>
+            <button onClick={onClose} className="text-surface-400 hover:text-white transition-colors" aria-label="Close">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <p className="text-surface-300 text-sm mb-4">
+            This permanently deletes your account. Leagues you commissioned are transferred to
+            another real member (or you'll be asked to handle that first if you're the only one
+            left); your teams become CPU-controlled so those leagues keep working for everyone
+            else. This can't be undone.
+          </p>
+
+          {requiresPassword && (
+            <div className="mb-4">
+              <label className="text-xs text-surface-400 font-medium">Confirm your password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                className="mt-1.5 w-full px-3.5 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
+              />
+            </div>
+          )}
+
+          <div className="mb-4">
+            <label className="text-xs text-surface-400 font-medium">
+              Type <span className="font-mono text-red-400">DELETE</span> to confirm
+            </label>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              className="mt-1.5 w-full px-3.5 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
+            />
+          </div>
+
+          {error && (
+            <div className="p-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs mb-4">{error}</div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              disabled={busy}
+              className="px-4 py-2 rounded-lg text-xs font-bold text-surface-300 hover:text-white transition-colors disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={!canSubmit}
+              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold bg-red-500 hover:bg-red-400 text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {busy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deleting...</> : <><Trash2 className="w-3.5 h-3.5" /> Delete My Account</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -250,7 +354,31 @@ export default function SettingsPage() {
             </p>
           </div>
         )}
+
+        {/* Danger Zone */}
+        <div className="bg-surface-800/60 border border-red-500/20 rounded-2xl overflow-hidden">
+          <div className="px-5 py-3.5 bg-red-500/5 border-b border-red-500/20 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400" />
+            <h3 className="text-white font-bold text-sm">Danger Zone</h3>
+          </div>
+          <div className="p-5 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-white text-sm font-semibold">Delete Account</p>
+              <p className="text-surface-400 text-xs mt-0.5">Permanently delete your account and all associated data. This cannot be undone.</p>
+            </div>
+            <button
+              onClick={() => setShowDeleteModal(true)}
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete Account
+            </button>
+          </div>
+        </div>
       </div>
+
+      {showDeleteModal && (
+        <DeleteAccountModal requiresPassword={me.provider === "email"} onClose={() => setShowDeleteModal(false)} />
+      )}
     </div>
   );
 }

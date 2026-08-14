@@ -136,16 +136,25 @@ async def get_invite_by_token(token: str, db: AsyncSession = Depends(get_db)):
 
     league_result = await db.execute(select(League).where(League.id == invite.league_id))
     league = league_result.scalar_one_or_none()
-    inviter_result = await db.execute(select(User).where(User.id == invite.invited_by_user_id))
-    inviter = inviter_result.scalar_one_or_none()
-    if not league or not inviter:
+    if not league:
         raise HTTPException(status_code=404, detail="Invite not found")
+
+    # invited_by_user_id can be None -- the inviter's account may have
+    # been hard-deleted (self-service account deletion) since this
+    # invite was sent. The invite itself is still perfectly usable, so
+    # fall back to a generic label rather than 404ing a valid invite.
+    inviter_username = "A former member"
+    if invite.invited_by_user_id:
+        inviter_result = await db.execute(select(User).where(User.id == invite.invited_by_user_id))
+        inviter = inviter_result.scalar_one_or_none()
+        if inviter:
+            inviter_username = inviter.username
 
     return InviteLandingRead(
         league_id=league.id,
         league_name=league.name,
         league_description=league.description,
-        inviter_username=inviter.username,
+        inviter_username=inviter_username,
         personal_message=invite.personal_message,
         usable=_display_status(invite) == "pending",
     )
@@ -176,12 +185,15 @@ async def accept_invite(
 
     league = await _get_league_or_404(invite.league_id, db)
     # Notify whoever specifically sent this invite, not every commissioner
-    # -- they're the one with context on who they invited and why.
-    await create_notification(
-        db, invite.invited_by_user_id, NotificationType.LEAGUE_INVITE_ACCEPTED,
-        f"{current_user.username} accepted your invite to {league.name}.",
-        league_id=league.id, link=f"/leagues/{league.id}/commissioner",
-    )
+    # -- they're the one with context on who they invited and why. Skip
+    # if that account's since been deleted (invited_by_user_id nulled) --
+    # Notification.user_id is NOT NULL, there's no one left to notify.
+    if invite.invited_by_user_id:
+        await create_notification(
+            db, invite.invited_by_user_id, NotificationType.LEAGUE_INVITE_ACCEPTED,
+            f"{current_user.username} accepted your invite to {league.name}.",
+            league_id=league.id, link=f"/leagues/{league.id}/commissioner",
+        )
 
     await db.commit()
     return {"status": "ok", "league_id": invite.league_id}
