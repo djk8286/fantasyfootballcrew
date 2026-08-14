@@ -120,6 +120,14 @@ class League(Base):
     # a weekly recurring management-window lock, UTC, weekday 0=Mon..6=Sun.
     # See DEFAULT_BEST_BALL_SETTINGS in best_ball_service.py.
     best_ball_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
+    # AI Co-Commissioner v1. Bolt-on to ANY league_type. Defaults to
+    # ENABLED (not opt-in like every other settings blob above) --
+    # every AI Co-Commissioner tab has already been live and visible
+    # in every league's commissioner panel with no toggle at all up to
+    # this point, so a new column defaulting to False would silently
+    # yank a feature commissioners already had. Shape: {enabled}. See
+    # DEFAULT_AI_COMMISSIONER_SETTINGS in ai_commissioner_settings_service.py.
+    ai_commissioner_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

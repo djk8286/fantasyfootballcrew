@@ -12,6 +12,7 @@ from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_s
 from app.services.standings_service import DEFAULT_RIVALRY_WEEK_SETTINGS, get_rivalry_week_settings
 from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_salary_cap_settings, compute_waiver_salary
 from app.services.best_ball_service import DEFAULT_BEST_BALL_SETTINGS, get_best_ball_settings, is_window_open, describe_window
+from app.services.ai_commissioner_settings_service import DEFAULT_AI_COMMISSIONER_SETTINGS, get_ai_commissioner_settings
 from app.models.player import Player
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
@@ -468,6 +469,51 @@ async def update_league_best_ball_settings(
     league.best_ball_settings = merged
     await db.commit()
     return {"status": "ok", "best_ball_settings": league.best_ball_settings}
+
+
+@router.get("/{league_id}/ai-settings")
+async def get_league_ai_settings(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the AI Co-Commissioner toggle for a league, or the default
+    (enabled). Ungated -- same house style as GET best-ball-settings/
+    salary-cap-settings."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return get_ai_commissioner_settings(league)
+
+
+class AICommissionerSettingsUpdate(BaseModel):
+    ai_commissioner_settings: dict
+
+
+@router.put("/{league_id}/ai-settings")
+async def update_league_ai_settings(
+    league_id: str,
+    data: AICommissionerSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the AI Co-Commissioner toggle for a league (commissioner
+    only). One on/off switch covering the whole AI Co-Commissioner
+    surface (digest, trade review, health, insights, schedule
+    insights, communication helpers, chat) -- see
+    ai_commissioner_settings_service.py."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
+    merged = dict(DEFAULT_AI_COMMISSIONER_SETTINGS)
+    merged.update(data.ai_commissioner_settings)
+
+    if not isinstance(merged.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="ai_commissioner_settings.enabled must be a boolean")
+
+    league.ai_commissioner_settings = merged
+    await db.commit()
+    return {"status": "ok", "ai_commissioner_settings": league.ai_commissioner_settings}
 
 
 @router.get("/{league_id}/management-window")

@@ -28,6 +28,7 @@ from app.services.insights_service import compute_scoring_insights
 from app.services.schedule_insights_service import compute_strength_of_schedule
 from app.services.message_service import MESSAGE_TYPES, draft_message, send_message
 from app.services.chat_service import get_chat_history, send_chat_message, clear_chat_history
+from app.services.ai_commissioner_settings_service import get_ai_commissioner_settings
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -40,6 +41,16 @@ async def _get_league(league_id: str, db: AsyncSession) -> League:
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
     return league
+
+
+def _require_ai_enabled(league: League) -> None:
+    """Gate for every endpoint under the AI Co-Commissioner umbrella
+    (digest, trade review, health, insights, schedule insights,
+    communication helpers, chat) -- see
+    ai_commissioner_settings_service.py. Call AFTER require_commissioner
+    (this is a feature gate, not an authorization check)."""
+    if not get_ai_commissioner_settings(league)["enabled"]:
+        raise HTTPException(status_code=403, detail="AI Co-Commissioner features are disabled for this league")
 
 
 # ═══════════════════════════════════════════════
@@ -362,6 +373,7 @@ async def analyze_trade_for_review(
     ever called."""
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
 
     result = await db.execute(
         select(Transaction).where(
@@ -501,6 +513,7 @@ async def generate_digest(
 
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     digest = await generate_and_save_digest(league, week, year, current_user.id, db, tone=tone, length=length)
     return {
         "week": digest.week, "year": digest.year, "content": digest.content,
@@ -518,6 +531,7 @@ async def get_digest_route(
 ):
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     digest = await get_digest(league_id, week, year, db)
     if not digest:
         raise HTTPException(status_code=404, detail="No digest generated for this week yet")
@@ -542,6 +556,7 @@ async def get_league_health(
 ):
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     return await compute_league_health(league, db)
 
 
@@ -560,6 +575,7 @@ async def get_scoring_insights(
 ):
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     return await compute_scoring_insights(league, db)
 
 
@@ -577,6 +593,7 @@ async def get_schedule_insights(
 ):
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     return await compute_strength_of_schedule(league, db)
 
 
@@ -608,6 +625,7 @@ async def draft_commissioner_message(
 
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     content = await draft_message(league, body.message_type, body.tone, body.custom_context, db)
     return {"content": content}
 
@@ -628,6 +646,7 @@ async def send_commissioner_message(
 
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     recipients = await send_message(league, body.content, db)
     return {"recipients": recipients}
 
@@ -654,6 +673,7 @@ async def get_chat(
 ):
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     history = await get_chat_history(league_id, db)
     return {"messages": [_chat_message_dict(m) for m in history]}
 
@@ -672,6 +692,7 @@ async def post_chat(
 
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    _require_ai_enabled(league)
     reply = await send_chat_message(league, body.message, db)
     return _chat_message_dict(reply)
 
