@@ -21,6 +21,9 @@ from app.services.chat_service import (
     get_chat_history,
     clear_chat_history,
     MAX_HISTORY_MESSAGES,
+    CHAT_RECENT_TRANSACTIONS_LIMIT,
+    _compact_health,
+    _compact_schedule_insights,
 )
 
 YEAR = 2026
@@ -53,10 +56,65 @@ async def test_build_chat_context_includes_real_data(db_session_factory):
 
     assert "standings" in context
     assert context["standings"][0]["team_name"] == "Only Team"
-    assert "league_health" in context and "teams" in context["league_health"]
+    # league_health is compacted for chat -- summary stats + at-risk
+    # teams only, not the full per-team breakdown (see _compact_health).
+    assert "league_health" in context and "at_risk_teams" in context["league_health"]
+    assert "total_teams" in context["league_health"]
     assert "scoring_insights" in context
     assert "schedule_insights" in context
     assert context["recent_transactions"] == []
+
+
+def test_compact_health_keeps_only_at_risk_teams():
+    health = {
+        "parity_spread": 1.0, "at_risk_count": 1, "total_teams": 2, "is_best_ball": False,
+        "teams": [
+            {"team_id": "a", "team_name": "Healthy Team", "at_risk": False, "reason": "fine"},
+            {"team_id": "b", "team_name": "Ghost Team", "at_risk": True, "reason": "inactive"},
+        ],
+    }
+    compact = _compact_health(health)
+    assert "teams" not in compact  # the full per-team list is dropped
+    assert compact["at_risk_teams"] == [{"team_id": "b", "team_name": "Ghost Team", "at_risk": True, "reason": "inactive"}]
+    assert compact["total_teams"] == 2
+
+
+def test_compact_schedule_insights_keeps_only_flagged_teams():
+    sos = {
+        "available": True, "finale": False, "remaining_weeks": [5, 6, 7],
+        "teams": [
+            {"team_id": "a", "team_name": "No News", "sos_score": 100.0, "flag": None},
+            {"team_id": "b", "team_name": "Hard Stretch", "sos_score": 130.0, "flag": "hard_stretch"},
+        ],
+    }
+    compact = _compact_schedule_insights(sos)
+    assert "teams" not in compact
+    assert compact["flagged_teams"] == [{"team_id": "b", "team_name": "Hard Stretch", "sos_score": 130.0, "flag": "hard_stretch"}]
+    assert compact["remaining_weeks"] == [5, 6, 7]
+
+
+def test_compact_schedule_insights_passes_through_finale_case_unchanged():
+    sos = {"available": True, "finale": True, "summary": "final two", "teams": []}
+    assert _compact_schedule_insights(sos) == sos
+
+
+@pytest.mark.asyncio
+async def test_recent_transactions_capped_at_chat_specific_limit(db_session_factory):
+    from app.models.transaction import Transaction, TransactionType, TransactionStatus
+    setup = await _make_league(db_session_factory)
+    async with db_session_factory() as db:
+        team_id = (await db.execute(select(Team).where(Team.league_id == setup["league_id"]))).scalar_one().id
+    async with db_session_factory() as db:
+        for _ in range(CHAT_RECENT_TRANSACTIONS_LIMIT + 5):
+            db.add(Transaction(league_id=setup["league_id"], team_id=team_id, type=TransactionType.ADD,
+                                status=TransactionStatus.APPROVED, details={}))
+        await db.commit()
+
+    async with db_session_factory() as db:
+        league = (await db.execute(select(League).where(League.id == setup["league_id"]))).scalar_one()
+        context = await build_chat_context(league, db)
+
+    assert len(context["recent_transactions"]) == CHAT_RECENT_TRANSACTIONS_LIMIT
 
 
 @pytest.mark.asyncio

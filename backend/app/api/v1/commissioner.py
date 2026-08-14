@@ -29,6 +29,7 @@ from app.services.schedule_insights_service import compute_strength_of_schedule
 from app.services.message_service import MESSAGE_TYPES, draft_message, send_message
 from app.services.chat_service import get_chat_history, send_chat_message, clear_chat_history
 from app.services.ai_commissioner_settings_service import get_ai_commissioner_settings
+from app.services.ai_usage_service import check_and_record_ai_usage
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -374,6 +375,7 @@ async def analyze_trade_for_review(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
+    await check_and_record_ai_usage(league_id, "trade_review_analyze", db)
 
     result = await db.execute(
         select(Transaction).where(
@@ -514,6 +516,7 @@ async def generate_digest(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
+    await check_and_record_ai_usage(league_id, "digest_generate", db)
     digest = await generate_and_save_digest(league, week, year, current_user.id, db, tone=tone, length=length)
     return {
         "week": digest.week, "year": digest.year, "content": digest.content,
@@ -626,6 +629,12 @@ async def draft_commissioner_message(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
+    await check_and_record_ai_usage(league_id, "message_draft", db)
+    # draft_message never persists anything itself (no draft is
+    # stored -- only send_message writes/commits) -- commit here so
+    # the usage-cap row above doesn't silently vanish when this
+    # request's session closes uncommitted.
+    await db.commit()
     content = await draft_message(league, body.message_type, body.tone, body.custom_context, db)
     return {"content": content}
 
@@ -693,6 +702,7 @@ async def post_chat(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
+    await check_and_record_ai_usage(league_id, "chat", db)
     reply = await send_chat_message(league, body.message, db)
     return _chat_message_dict(reply)
 

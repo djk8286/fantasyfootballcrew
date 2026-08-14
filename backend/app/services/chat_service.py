@@ -31,7 +31,18 @@ from app.services.schedule_insights_service import compute_strength_of_schedule
 # How many past turns get fed back to the LLM on every call -- keeps
 # cost/context bounded as a conversation grows. Starting point, easy
 # to tune once this has been used against a real long-running chat.
-MAX_HISTORY_MESSAGES = 20
+# Chat is the priciest AI Co-Commissioner call precisely because this
+# gets resent in full on every single turn, on top of a fresh
+# build_chat_context() snapshot -- kept deliberately smaller than a
+# generous "remember everything" number would be.
+MAX_HISTORY_MESSAGES = 10
+
+# recent_transactions window for chat specifically -- smaller than
+# commissioner_digest_service's own 25 (a once-a-week generation, not
+# resent every turn of a back-and-forth). Most chat questions ("is
+# this trade weird?", "summarize the last two weeks") don't need
+# anywhere close to 25 old transactions to answer well.
+CHAT_RECENT_TRANSACTIONS_LIMIT = 10
 
 
 def _get_ai_service() -> AIService:
@@ -45,17 +56,48 @@ def _get_ai_service() -> AIService:
     return AIService(api_key=None)
 
 
+def _compact_health(health: dict[str, Any]) -> dict[str, Any]:
+    """Chat-specific trim -- keeps the summary stats plus only the
+    at-risk teams. A healthy team's full row costs tokens with nothing
+    chat-worthy to say about it ("Team X is fine" isn't useful
+    grounding). The dedicated Health tab still shows every team in
+    full; this only shrinks what gets sent to the LLM every turn."""
+    teams = health.get("teams") or []
+    return {
+        "parity_spread": health.get("parity_spread"),
+        "at_risk_count": health.get("at_risk_count"),
+        "total_teams": health.get("total_teams"),
+        "is_best_ball": health.get("is_best_ball"),
+        "at_risk_teams": [t for t in teams if t.get("at_risk")],
+    }
+
+
+def _compact_schedule_insights(sos: dict[str, Any]) -> dict[str, Any]:
+    """Chat-specific trim -- only teams with a real hard/easy-stretch
+    flag. A "nothing unusual ahead" row per team costs tokens with
+    nothing chat-worthy to say. The dedicated Schedule Insights tab
+    still shows every team; this only shrinks the chat snapshot."""
+    if not sos.get("available") or sos.get("finale"):
+        return sos
+    flagged = [t for t in (sos.get("teams") or []) if t.get("flag")]
+    return {k: v for k, v in sos.items() if k != "teams"} | {"flagged_teams": flagged}
+
+
 async def build_chat_context(league: League, db: AsyncSession) -> dict[str, Any]:
     """Everything the chat needs to ground its answers, assembled
     fresh on every turn -- pure reuse of the exact same functions
     already powering the League Health/Scoring Insights/Schedule
     Insights tabs, plus the same recent-transactions query
-    commissioner_digest_service.build_digest_context already uses."""
+    commissioner_digest_service.build_digest_context already uses.
+    Health/Schedule-Insights are compacted (see above) specifically
+    because this whole snapshot gets rebuilt and resent on every chat
+    turn -- unlike those tabs' own one-shot GET endpoints, which return
+    the full data."""
     tx_result = await db.execute(
         select(Transaction).where(
             Transaction.league_id == league.id,
             Transaction.status.in_([TransactionStatus.APPROVED, TransactionStatus.DENIED]),
-        ).order_by(Transaction.processed_at.desc()).limit(25)
+        ).order_by(Transaction.processed_at.desc()).limit(CHAT_RECENT_TRANSACTIONS_LIMIT)
     )
     recent_transactions = [
         {"type": t.type.value, "status": t.status.value, "details": t.details, "team_id": t.team_id}
@@ -64,9 +106,9 @@ async def build_chat_context(league: League, db: AsyncSession) -> dict[str, Any]
 
     return {
         "standings": await get_standings(league.id, db),
-        "league_health": await compute_league_health(league, db),
+        "league_health": _compact_health(await compute_league_health(league, db)),
         "scoring_insights": await compute_scoring_insights(league, db),
-        "schedule_insights": await compute_strength_of_schedule(league, db),
+        "schedule_insights": _compact_schedule_insights(await compute_strength_of_schedule(league, db)),
         "recent_transactions": recent_transactions,
     }
 
