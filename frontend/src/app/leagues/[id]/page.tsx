@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
-import { VisibilityBadge, ConferenceBadge, conferenceShortLabel } from "@/components/LeagueBadges";
+import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge } from "@/components/LeagueBadges";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -203,6 +203,11 @@ export default function LeagueDetailPage() {
   const [submittingJoinRequest, setSubmittingJoinRequest] = useState(false);
   const [joinRequestError, setJoinRequestError] = useState("");
 
+  // Salary-Cap + Contract Leagues (Phase 5) -- a bolt-on flag, fetched
+  // separately since it's its own API resource (like playoff/rivalry
+  // settings), purely to decide whether the SalaryCapBadge renders.
+  const [capEnabled, setCapEnabled] = useState(false);
+
   // ─── Data fetching ─────────────────────────────────────
 
   useEffect(() => {
@@ -232,6 +237,11 @@ export default function LeagueDetailPage() {
         setError(err instanceof Error ? err.message : "Failed to load league");
       })
       .finally(() => setLoading(false));
+
+    leaguesApi
+      .getSalaryCapSettings(id)
+      .then((data) => setCapEnabled(!!(data as { enabled?: boolean })?.enabled))
+      .catch(() => {});
   }, [id]);
 
   // Resolve roster player IDs into actual player data. Team Roster used to
@@ -710,6 +720,7 @@ export default function LeagueDetailPage() {
                       {league.name}
                     </h1>
                     <VisibilityBadge visibility={league.visibility} />
+                    {capEnabled && <SalaryCapBadge />}
                     {isLeagueManager && (
                       <button
                         onClick={() => {

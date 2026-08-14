@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, Swords, Lock, Unlock, ShieldCheck, Skull } from "lucide-react";
+import { Users, Swords, Lock, Unlock, ShieldCheck, Skull, DollarSign } from "lucide-react";
 
 // Shared definitions used everywhere a league's type/visibility/open-spot
 // count needs to render -- the leagues grid, the Wanted Board, and the
@@ -86,6 +86,22 @@ export function EliminatedBadge({ week }: { week: number }) {
   return (
     <span className="inline-flex items-center gap-1 text-[10px] text-red-400 font-semibold uppercase tracking-wider bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded shrink-0">
       Eliminated Wk {week}
+    </span>
+  );
+}
+
+// Salary-Cap + Contract Leagues (Phase 5) -- a bolt-on flag
+// (League.salary_cap_settings.enabled), not a league_type, so this isn't
+// added to the general /leagues discovery list (no precedent exists
+// there for playoff_settings/rivalry_week_settings either -- avoiding an
+// N+1 settings-fetch per league card). Rendered only where the dedicated
+// settings resource is already fetched directly (league detail page,
+// team detail page).
+export function SalaryCapBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-green-400 font-semibold uppercase tracking-wider bg-green-400/10 border border-green-400/20 px-1.5 py-0.5 rounded shrink-0">
+      <DollarSign className="w-2.5 h-2.5" />
+      Salary Cap
     </span>
   );
 }

@@ -8,7 +8,7 @@ import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
-import { ConferenceBadge, conferenceShortLabel } from "@/components/LeagueBadges";
+import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge } from "@/components/LeagueBadges";
 import {
   ChevronLeft,
   Bot,
@@ -307,6 +307,7 @@ export default function TeamPage() {
                 conference={team.conference}
                 displayName={conferenceShortLabel(team.conference, league?.conference_a_name, league?.conference_b_name)}
               />
+              {capEnabled && <SalaryCapBadge />}
             </div>
             <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
               {team.is_cpu ? (
