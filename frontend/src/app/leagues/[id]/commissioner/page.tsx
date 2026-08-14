@@ -23,6 +23,8 @@ import {
   Send,
   Clock,
   UserPlus,
+  Bot,
+  Loader2,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -71,7 +73,7 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest";
 
 interface Invite {
   id: string;
@@ -172,6 +174,7 @@ export default function CommissionerPage() {
             { id: "draft-order" as Tab, label: "Draft Order", icon: ArrowUpDown },
             { id: "coaches" as Tab, label: "Coaches", icon: Users },
             { id: "invites" as Tab, label: "Invites", icon: Mail },
+            { id: "digest" as Tab, label: "AI Digest", icon: Bot },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -207,6 +210,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "invites" && (
           <InvitesPanel leagueId={leagueId} />
+        )}
+        {activeTab === "digest" && (
+          <DigestPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1126,6 +1132,106 @@ function JoinRequestsSection({ leagueId }: { leagueId: string }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 6: AI COMMISSIONER DIGEST (Phase 8)
+// ═══════════════════════════════════════════
+// Commissioner-triggered on demand only -- no auto-generation. Mirrors
+// ai-analysis/page.tsx's AnalysisResult rendering convention exactly
+// (whitespace-pre-wrap plain text, no markdown parser anywhere in this
+// codebase) and its "not configured" fallback-string detection.
+
+function DigestPanel({ leagueId }: { leagueId: string }) {
+  const [week, setWeek] = useState(1);
+  const [digest, setDigest] = useState<{ content: string; created_at: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    commissionerApi
+      .getDigest(leagueId, week, CURRENT_YEAR)
+      .then((data) => setDigest(data as { content: string; created_at: string }))
+      .catch(() => setDigest(null)) // 404 just means "nothing generated yet" -- not an error banner
+      .finally(() => setLoading(false));
+  }, [leagueId, week]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setError("");
+    try {
+      const result = await commissionerApi.generateDigest(leagueId, week, CURRENT_YEAR);
+      setDigest(result as { content: string; created_at: string });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to generate digest");
+    }
+    setGenerating(false);
+  };
+
+  const notConfigured = digest?.content.startsWith("AI Analysis: LLM API not configured");
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-surface-500">Week:</span>
+          <select
+            value={week}
+            onChange={(e) => setWeek(parseInt(e.target.value, 10))}
+            className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+          >
+            {Array.from({ length: 18 }, (_, i) => i + 1).map((w) => (
+              <option key={w} value={w}>Week {w}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-50 transition-all"
+        >
+          {generating ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</>
+          ) : digest ? (
+            <><Bot className="w-3.5 h-3.5" /> Regenerate Digest</>
+          ) : (
+            <><Bot className="w-3.5 h-3.5" /> Generate This Week's Digest</>
+          )}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>
+      ) : digest ? (
+        <div
+          className={`p-5 rounded-2xl border whitespace-pre-wrap text-sm leading-relaxed ${
+            notConfigured
+              ? "bg-surface-800/50 border-surface-700 text-surface-400"
+              : "bg-purple-400/5 border-purple-400/20 text-surface-200"
+          }`}
+        >
+          {digest.content}
+        </div>
+      ) : (
+        <div className="p-6 text-center text-surface-500 text-sm bg-surface-800/50 border border-surface-700 rounded-2xl">
+          No digest generated for Week {week} yet -- click &quot;Generate This Week&apos;s Digest&quot; above.
+        </div>
+      )}
     </div>
   );
 }

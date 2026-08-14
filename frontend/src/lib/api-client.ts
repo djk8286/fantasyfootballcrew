@@ -414,6 +414,14 @@ export const commissionerApi = {
     apiRequest(`/api/v1/leagues/${leagueId}/commissioner/draft-order/randomize`, {
       method: "POST",
     }),
+
+  // AI Commissioner Digest (Phase 8)
+  generateDigest: (leagueId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/digest/generate?week=${week}&year=${year}`, {
+      method: "POST",
+    }),
+  getDigest: (leagueId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/digest?week=${week}&year=${year}`),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)
