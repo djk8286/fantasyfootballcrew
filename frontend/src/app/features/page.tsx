@@ -74,7 +74,9 @@ const features = [
       "Start/sit recommendations based on your actual scoring config",
       "Trade grades that account for both sides of the deal",
       "Freeform betting-angle analysis for any matchup you ask about",
-      "Weekly AI-generated commissioner digests — power rankings, storylines, and a waiver/trade recap, on demand",
+      "Weekly AI-generated commissioner digests — power rankings, storylines, and a waiver/trade recap, with tone and length control",
+      "AI Trade Review Assistant — a fairness/collusion check with a clear Approve, Review Closely, or Veto recommendation for the commissioner",
+      "League Health Dashboard — engagement and parity at a glance, with plain-language explanations for every flagged team",
     ],
   },
   {
