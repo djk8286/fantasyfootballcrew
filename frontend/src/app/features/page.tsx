@@ -8,6 +8,7 @@ import {
   Sparkles,
   Check,
   Skull,
+  DollarSign,
 } from "lucide-react";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
@@ -85,6 +86,20 @@ const features = [
       "The haunt twist: an eliminated team's ghost stays in the waiver priority order forever",
       "Eliminated managers can join a survivor's team as co-owner and keep playing",
       "Leave your last words and see the full elimination history",
+    ],
+  },
+  {
+    icon: DollarSign,
+    title: "Salary Cap Leagues",
+    gradient: "from-green-500 to-emerald-700",
+    description:
+      "A real salary and a hard team cap for every roster spot. Draft-slot pricing, multi-year contracts, and dead-money penalties for cutting a deal early — no manual bookkeeping needed.",
+    points: [
+      "Every drafted pick gets a salary automatically, priced by pick position on a commissioner-set scale",
+      "Free-agent and waiver signings are priced off the same scale, keyed to the player's rank",
+      "Trades and waiver claims that would push a team over the cap are blocked automatically",
+      "Releasing a multi-year deal early charges dead money against your cap for the rest of the season",
+      "1-4 year contracts, fully commissioner-configurable cap total and roster size",
     ],
   },
   {

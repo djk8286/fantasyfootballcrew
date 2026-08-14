@@ -8,6 +8,7 @@ import {
   Sparkles,
   Infinity as InfinityIcon,
   Skull,
+  DollarSign,
 } from "lucide-react";
 import StatTile from "@/components/ui/StatTile";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
@@ -54,6 +55,13 @@ const features = [
     description:
       "Lowest score gets eliminated every week until two teams remain for a head-to-head finale. Their roster hits waivers instantly, and their ghost still haunts the priority order.",
     gradient: "from-red-600 to-surface-900",
+  },
+  {
+    icon: DollarSign,
+    title: "Salary Cap Leagues",
+    description:
+      "Every drafted or signed player carries a real salary against a hard team cap. Trades and waiver claims that would blow the budget get blocked automatically — no spreadsheets required.",
+    gradient: "from-green-500 to-emerald-700",
   },
   {
     icon: Sparkles,
