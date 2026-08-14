@@ -15,10 +15,11 @@ from app.models.weekly_score import WeeklyScore
 from app.models.coach import Coach
 from app.models.score_adjustment import ScoreAdjustment
 from app.models.lineup import Lineup
-from app.services.scoring_engine import calculate_player_score
+from app.services.scoring_engine import calculate_player_score, calculate_optimal_lineup, DEFAULT_ROSTER_SLOTS
 from app.services.sleeper_sync import fetch_weekly_stats
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
+from app.services.best_ball_service import get_best_ball_settings
 
 
 async def _weekly_adjustment_total(team_id: str, week: int, year: int, db: AsyncSession) -> float:
@@ -248,6 +249,8 @@ async def calculate_week(
     if not league:
         raise ValueError(f"League {league_id} not found")
     scoring_config = league.scoring_config or {}
+    bb_settings = get_best_ball_settings(league)
+    is_best_ball = bb_settings["enabled"]
 
     # Get all teams in the league
     teams_result = await db.execute(
@@ -310,7 +313,15 @@ async def calculate_week(
 
     for team in teams:
         full_roster = set(team.roster or [])
-        if team.id in starters_by_team:
+        auto_starter_ids: Optional[list] = None
+        if is_best_ball:
+            # Best-Ball: start with the whole roster -- the optimizer
+            # below picks the real starters once that week's actual
+            # per-player stats are in hand. Any saved Lineup row is
+            # ignored entirely for a best-ball league (there is no
+            # manual starter selection in this mode).
+            roster_ids = list(full_roster)
+        elif team.id in starters_by_team:
             # Lineup exists -- only score starters, and only ones still
             # actually on the roster (protects against a stale Lineup
             # naming a player who's since been dropped/traded away).
@@ -349,6 +360,34 @@ async def calculate_week(
                     stats = (player.week_stats or {}).get(str(week), {}) if player else {}
                 week_stats[pid] = stats
 
+            if is_best_ball:
+                # Pick the real per-week-optimal starters from the whole
+                # roster, using the SAME week_stats already fetched above
+                # (no second stats fetch) -- this is what makes it genuine
+                # best-ball, unlike the /lineup/optimize endpoint, which
+                # only has season-aggregate stats to work with.
+                roster_slots = dict(DEFAULT_ROSTER_SLOTS)
+                roster_slots.update(league.roster_slots or {})
+                roster_for_optimizer = {
+                    pid: {
+                        "stats": week_stats.get(pid, {}),
+                        "position": player_positions.get(pid, "UNKNOWN"),
+                        "name": pid,
+                    }
+                    for pid in roster_ids
+                }
+                optimal = calculate_optimal_lineup(
+                    roster_for_optimizer, scoring_config,
+                    n_qb=roster_slots.get("QB", 0), n_rb=roster_slots.get("RB", 0),
+                    n_wr=roster_slots.get("WR", 0), n_te=roster_slots.get("TE", 0),
+                    n_flex=roster_slots.get("FLEX", 0), n_superflex=roster_slots.get("SUPERFLEX", 0),
+                    n_k=roster_slots.get("K", 0), n_def=roster_slots.get("DEF", 0),
+                    n_dl=roster_slots.get("DL", 0), n_lb=roster_slots.get("LB", 0),
+                    n_db=roster_slots.get("DB", 0), n_idp_flex=roster_slots.get("IDP_FLEX", 0),
+                )
+                auto_starter_ids = [a["player_id"] for a in optimal["lineup"]]
+                roster_ids = auto_starter_ids
+
             # Calculate score per player
             breakdown = {}
             total_score = 0.0
@@ -365,6 +404,13 @@ async def calculate_week(
 
             total_score = round(total_score, 2)
             lineup_data = {"total": total_score, "breakdown": breakdown}
+            if is_best_ball and auto_starter_ids is not None:
+                # Recorded purely for later display (mirrors the
+                # coach_bonus/win_bonus/rivalry_bonus precedent) -- never
+                # read back for the scoring decision itself, which is
+                # recomputed fresh from real per-week stats every call.
+                lineup_data["auto_lineup"] = True
+                lineup_data["auto_starters"] = auto_starter_ids
 
         coach_bonus = await _coach_bonus_sum(team.id, "flat_weekly", db)
         if coach_bonus:
