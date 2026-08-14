@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.league import League
 from app.models.team import Team
 from app.models.player import Player
@@ -108,7 +109,9 @@ async def list_free_agents(
 
 
 @router.post("/claims", status_code=201)
+@limiter.limit("30/hour")
 async def submit_claim(
+    request: Request,
     league_id: str,
     data: WaiverClaimCreate,
     db: AsyncSession = Depends(get_db),
@@ -171,7 +174,9 @@ async def list_claims(
 
 
 @router.delete("/claims/{claim_id}")
+@limiter.limit("30/hour")
 async def cancel_claim(
+    request: Request,
     league_id: str,
     claim_id: str,
     db: AsyncSession = Depends(get_db),
@@ -210,7 +215,9 @@ async def get_priority(league_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/process")
+@limiter.limit("10/hour")
 async def process_waivers(
+    request: Request,
     league_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.league import League, LeagueType
 from app.models.weekly_score import WeeklyScore
 from app.models.user import User
@@ -144,7 +145,9 @@ async def get_season_schedule_endpoint(
 
 
 @router.post("/calculate")
+@limiter.limit("20/hour")
 async def calculate_week_standings(
+    request: Request,
     league_id: str,
     week: int = Query(..., ge=1, le=18, description="Week number (1-18)"),
     year: int = Query(..., ge=2020, le=2030, description="Season year"),

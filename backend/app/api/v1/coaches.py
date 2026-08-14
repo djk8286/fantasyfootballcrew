@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.team import Team
 from app.models.coach import Coach, CoachPosition
 from app.models.user import User
@@ -50,7 +51,9 @@ async def _reject_if_position_filled(
 
 
 @router.post("/teams/{team_id}/coaches", response_model=CoachRead, status_code=201)
+@limiter.limit("30/hour")
 async def create_coach(
+    request: Request,
     team_id: str,
     data: CoachCreate,
     db: AsyncSession = Depends(get_db),
@@ -83,7 +86,9 @@ async def list_coaches(team_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/coaches/{coach_id}", response_model=CoachRead)
+@limiter.limit("30/hour")
 async def update_coach(
+    request: Request,
     coach_id: str,
     data: CoachUpdate,
     db: AsyncSession = Depends(get_db),
@@ -125,7 +130,9 @@ async def update_coach(
 
 
 @router.delete("/coaches/{coach_id}", status_code=204)
+@limiter.limit("30/hour")
 async def delete_coach(
+    request: Request,
     coach_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

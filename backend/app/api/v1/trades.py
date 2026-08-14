@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.league import League
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
@@ -22,7 +23,9 @@ async def _get_team_in_league(team_id: str, league_id: str, db: AsyncSession) ->
 
 
 @router.post("", status_code=201)
+@limiter.limit("20/hour")
 async def propose_trade(
+    request: Request,
     league_id: str,
     data: TradeProposalCreate,
     db: AsyncSession = Depends(get_db),

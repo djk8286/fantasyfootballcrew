@@ -101,7 +101,9 @@ async def list_invites(
 
 
 @router.delete("/leagues/{league_id}/invites/{invite_id}")
+@limiter.limit("30/hour")
 async def revoke_invite(
+    request: Request,
     league_id: str,
     invite_id: str,
     db: AsyncSession = Depends(get_db),
@@ -150,7 +152,9 @@ async def get_invite_by_token(token: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/invites/{token}/accept")
+@limiter.limit("20/hour")
 async def accept_invite(
+    request: Request,
     token: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -207,7 +211,9 @@ async def _notify_commissioners(db: AsyncSession, league: League, type: Notifica
 
 
 @router.post("/leagues/{league_id}/join-requests", response_model=JoinRequestRead, status_code=201)
+@limiter.limit("20/hour")
 async def create_join_request(
+    request: Request,
     league_id: str,
     data: JoinRequestCreate,
     db: AsyncSession = Depends(get_db),
@@ -281,7 +287,9 @@ async def list_join_requests(
 
 
 @router.post("/leagues/{league_id}/join-requests/{request_id}/decision")
+@limiter.limit("30/hour")
 async def decide_join_request(
+    request: Request,
     league_id: str,
     request_id: str,
     data: JoinRequestDecision,

@@ -1,8 +1,9 @@
 import copy
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, asc, desc
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.league import League, LeagueVisibility, LeagueType
 from app.models.team import Team
 from app.models.user import User
@@ -32,7 +33,9 @@ class CommissionerUpdate(BaseModel):
 
 
 @router.post("", response_model=LeagueRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 async def create_league(
+    request: Request,
     league_data: LeagueCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -172,7 +175,9 @@ async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db))
 
 
 @router.put("/{league_id}/scoring")
+@limiter.limit("30/hour")
 async def update_league_scoring(
+    request: Request,
     league_id: str,
     data: ScoringConfigUpdate,
     db: AsyncSession = Depends(get_db),
@@ -210,7 +215,9 @@ class RosterSlotsUpdate(BaseModel):
 
 
 @router.put("/{league_id}/roster-slots")
+@limiter.limit("30/hour")
 async def update_league_roster_slots(
+    request: Request,
     league_id: str,
     data: RosterSlotsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -249,7 +256,9 @@ _VALID_CONFERENCE_MODES = {"combined", "separate"}
 
 
 @router.put("/{league_id}/playoff-settings")
+@limiter.limit("30/hour")
 async def update_league_playoff_settings(
+    request: Request,
     league_id: str,
     data: PlayoffSettingsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -298,7 +307,9 @@ class RivalryWeekSettingsUpdate(BaseModel):
 
 
 @router.put("/{league_id}/rivalry-week-settings")
+@limiter.limit("30/hour")
 async def update_league_rivalry_week_settings(
+    request: Request,
     league_id: str,
     data: RivalryWeekSettingsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -349,7 +360,9 @@ class SalaryCapSettingsUpdate(BaseModel):
 
 
 @router.put("/{league_id}/salary-cap-settings")
+@limiter.limit("30/hour")
 async def update_league_salary_cap_settings(
+    request: Request,
     league_id: str,
     data: SalaryCapSettingsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -434,7 +447,9 @@ class BestBallSettingsUpdate(BaseModel):
 
 
 @router.put("/{league_id}/best-ball-settings")
+@limiter.limit("30/hour")
 async def update_league_best_ball_settings(
+    request: Request,
     league_id: str,
     data: BestBallSettingsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -488,7 +503,9 @@ class AICommissionerSettingsUpdate(BaseModel):
 
 
 @router.put("/{league_id}/ai-settings")
+@limiter.limit("30/hour")
 async def update_league_ai_settings(
+    request: Request,
     league_id: str,
     data: AICommissionerSettingsUpdate,
     db: AsyncSession = Depends(get_db),
@@ -539,7 +556,9 @@ async def get_league_management_window(league_id: str, db: AsyncSession = Depend
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)
+@limiter.limit("30/hour")
 async def update_league(
+    request: Request,
     league_id: str,
     update_data: LeagueUpdate,
     db: AsyncSession = Depends(get_db),
@@ -592,7 +611,9 @@ async def update_league(
 
 
 @router.post("/{league_id}/commissioner")
+@limiter.limit("20/hour")
 async def manage_commissioners(
+    request: Request,
     league_id: str,
     req: CommissionerUpdate,
     db: AsyncSession = Depends(get_db),

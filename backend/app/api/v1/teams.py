@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
@@ -32,7 +33,9 @@ class BulkAddTeamsRequest(BaseModel):
 
 
 @router.post("", response_model=TeamRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/hour")
 async def create_team(
+    request: Request,
     team_data: TeamCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -58,7 +61,9 @@ async def create_team(
 
 
 @router.patch("/{team_id}", response_model=TeamRead)
+@limiter.limit("30/hour")
 async def update_team(
+    request: Request,
     team_id: str,
     update_data: TeamUpdate,
     db: AsyncSession = Depends(get_db),
@@ -110,7 +115,9 @@ class ReleaseRequest(BaseModel):
 
 
 @router.post("/{team_id}/release", response_model=TeamRead)
+@limiter.limit("30/hour")
 async def release_player_route(
+    request: Request,
     team_id: str,
     data: ReleaseRequest,
     db: AsyncSession = Depends(get_db),
@@ -160,7 +167,9 @@ async def release_player_route(
 
 
 @router.post("/{team_id}/claim-co-owner", response_model=TeamRead)
+@limiter.limit("20/hour")
 async def claim_co_owner(
+    request: Request,
     team_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -200,7 +209,9 @@ async def claim_co_owner(
 
 
 @router.post("/{team_id}/claim", response_model=TeamRead)
+@limiter.limit("20/hour")
 async def claim_team(
+    request: Request,
     team_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -245,7 +256,9 @@ async def claim_team(
 
 
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/hour")
 async def delete_team(
+    request: Request,
     team_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -279,7 +292,9 @@ async def delete_team(
 
 
 @router.post("/bulk-add/{league_id}", status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 async def bulk_add_cpu_teams(
+    request: Request,
     league_id: str,
     req: BulkAddTeamsRequest,
     db: AsyncSession = Depends(get_db),

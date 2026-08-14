@@ -59,7 +59,9 @@ def _require_ai_enabled(league: League) -> None:
 # ═══════════════════════════════════════════════
 
 @router.post("/adjustments", status_code=201)
+@limiter.limit("30/hour")
 async def create_adjustment(
+    request: Request,
     league_id: str,
     data: ScoreAdjustmentCreate,
     db: AsyncSession = Depends(get_db),
@@ -112,7 +114,9 @@ async def list_adjustments(
 
 
 @router.delete("/adjustments/{adjustment_id}")
+@limiter.limit("30/hour")
 async def delete_adjustment(
+    request: Request,
     league_id: str,
     adjustment_id: str,
     db: AsyncSession = Depends(get_db),
@@ -165,7 +169,9 @@ async def list_pending_trades(
 
 
 @router.post("/trades/{trade_id}/review")
+@limiter.limit("30/hour")
 async def review_trade(
+    request: Request,
     league_id: str,
     trade_id: str,
     data: TradeReview,
@@ -429,7 +435,9 @@ async def get_draft_order(league_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/draft-order")
+@limiter.limit("20/hour")
 async def set_draft_order(
+    request: Request,
     league_id: str,
     data: DraftOrderUpdate,
     db: AsyncSession = Depends(get_db),
@@ -458,7 +466,9 @@ async def set_draft_order(
 
 
 @router.post("/draft-order/randomize")
+@limiter.limit("20/hour")
 async def randomize_draft_order(
+    request: Request,
     league_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -708,7 +718,9 @@ async def post_chat(
 
 
 @router.delete("/chat")
+@limiter.limit("30/hour")
 async def delete_chat(
+    request: Request,
     league_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

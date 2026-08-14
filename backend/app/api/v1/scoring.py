@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.scoring import ScoringConfig
 from app.models.player import Player
 from app.models.league import League
@@ -54,7 +55,9 @@ class ScoringConfigCreate(BaseModel):
 
 
 @router.post("", status_code=201)
+@limiter.limit("20/hour")
 async def create_scoring_config(
+    request: Request,
     config: ScoringConfigCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -92,7 +95,9 @@ async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db))
 
 
 @router.delete("/{config_id}", status_code=204)
+@limiter.limit("20/hour")
 async def delete_scoring_config(
+    request: Request,
     config_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -127,7 +132,8 @@ async def get_default_scoring():
 
 
 @router.post("/calculate", response_model=ScoringCalculatorResult)
-async def calculate_score(input: ScoringCalculatorInput):
+@limiter.limit("30/hour")
+async def calculate_score(request: Request, input: ScoringCalculatorInput):
     """
     Calculate fantasy points for a single player.
 
@@ -196,7 +202,8 @@ async def calculate_score(input: ScoringCalculatorInput):
 
 
 @router.post("/calculate/weekly", response_model=WeeklyScoringResult)
-async def calculate_weekly(input: WeeklyScoringInput):
+@limiter.limit("30/hour")
+async def calculate_weekly(request: Request, input: WeeklyScoringInput):
     """
     Calculate total weekly score for a lineup of players.
 
@@ -231,7 +238,8 @@ async def calculate_weekly(input: WeeklyScoringInput):
 
 
 @router.post("/calculate/optimal", response_model=OptimalLineupResult)
-async def calculate_optimal(input: OptimalLineupInput):
+@limiter.limit("30/hour")
+async def calculate_optimal(request: Request, input: OptimalLineupInput):
     """
     Calculate the optimal starting lineup from a roster.
 
@@ -273,7 +281,8 @@ async def calculate_optimal(input: OptimalLineupInput):
 
 
 @router.post("/validate")
-async def validate_config(scoring_config: dict):
+@limiter.limit("30/hour")
+async def validate_config(request: Request, scoring_config: dict):
     """
     Validate a scoring configuration and return any warnings/errors.
     """
@@ -288,7 +297,9 @@ async def validate_config(scoring_config: dict):
 
 
 @router.post("/sleeper/weekly", response_model=Dict[str, PlayerBreakdown])
+@limiter.limit("10/hour")
 async def sleeper_weekly_scoring(
+    request: Request,
     input: SleeperWeeklyScoringInput,
     db: AsyncSession = Depends(get_db),
 ):

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.notification import Notification
 from app.models.user import User
 from app.api.deps import get_current_user
@@ -49,7 +50,9 @@ async def list_notifications(
 
 
 @router.post("/{notification_id}/read")
+@limiter.limit("100/hour")
 async def mark_read(
+    request: Request,
     notification_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -66,7 +69,9 @@ async def mark_read(
 
 
 @router.post("/read-all")
+@limiter.limit("60/hour")
 async def mark_all_read(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

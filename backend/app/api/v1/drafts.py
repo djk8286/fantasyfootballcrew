@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.services.draft_manager import (
     create_draft,
     start_draft,
@@ -90,7 +91,9 @@ async def _require_pick_access(team_id: str, league: League, current_user: User,
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 async def api_create_draft(
+    request: Request,
     draft_data: DraftCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -108,7 +111,9 @@ async def api_create_draft(
 # Static-prefix route -- must come before /{draft_id}/... below, or a
 # dynamic segment could shadow it depending on match order.
 @router.post("/mock/quickstart", status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 async def api_quickstart_mock_draft(
+    request: Request,
     data: MockDraftQuickstart,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -132,7 +137,9 @@ async def api_quickstart_mock_draft(
 
 
 @router.post("/{draft_id}/start")
+@limiter.limit("10/hour")
 async def api_start_draft(
+    request: Request,
     draft_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -148,7 +155,9 @@ async def api_start_draft(
 
 
 @router.post("/{draft_id}/pick")
+@limiter.limit("300/hour")  # deliberately generous -- a real live draft legitimately fires many rapid sequential picks; breaking that would be worse than the abuse case being guarded against
 async def api_make_pick(
+    request: Request,
     draft_id: str,
     pick_data: DraftPickCreate,
     db: AsyncSession = Depends(get_db),
@@ -193,7 +202,9 @@ async def api_draft_state(draft_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{draft_id}/mock")
+@limiter.limit("10/hour")
 async def api_run_mock(
+    request: Request,
     draft_id: str,
     req: MockDraftRequest,
     db: AsyncSession = Depends(get_db),
@@ -218,7 +229,9 @@ async def api_run_mock(
 
 
 @router.post("/{draft_id}/auto-pick")
+@limiter.limit("300/hour")  # deliberately generous -- same reasoning as /{draft_id}/pick
 async def api_auto_pick(
+    request: Request,
     draft_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -259,7 +272,9 @@ async def api_auto_pick(
 
 
 @router.patch("/{draft_id}/timer")
+@limiter.limit("30/hour")
 async def api_set_timer(
+    request: Request,
     draft_id: str,
     timer_data: TimerUpdate,
     db: AsyncSession = Depends(get_db),

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.team import Team
 from app.models.league import League
 from app.models.player import Player
@@ -117,7 +118,9 @@ class SetLineupRequest(BaseModel):
 
 
 @router.put("/{team_id}/lineup")
+@limiter.limit("60/hour")  # generous -- managers legitimately tweak a lineup multiple times before games lock
 async def set_lineup(
+    request: Request,
     team_id: str,
     week: int = Query(..., ge=1, le=18),
     year: int = Query(..., ge=2020, le=2030),
@@ -161,7 +164,9 @@ async def set_lineup(
 
 
 @router.post("/{team_id}/lineup/optimize")
+@limiter.limit("30/hour")
 async def optimize_lineup(
+    request: Request,
     team_id: str,
     week: int = Query(..., ge=1, le=18),
     year: int = Query(..., ge=2020, le=2030),
