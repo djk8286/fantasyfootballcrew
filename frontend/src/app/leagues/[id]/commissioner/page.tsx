@@ -487,6 +487,7 @@ function TradesPanel({
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("pending");
   const [processing, setProcessing] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState<string | null>(null);
 
   const loadTrades = useCallback(async () => {
     try {
@@ -520,6 +521,24 @@ function TradesPanel({
   };
 
   const [error, setError] = useState("");
+
+  const handleAnalyze = async (tradeId: string) => {
+    setAnalyzing(tradeId);
+    setError("");
+    try {
+      await commissionerApi.analyzeTradeForReview(leagueId, tradeId);
+      await loadTrades();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to analyze trade");
+    }
+    setAnalyzing(null);
+  };
+
+  const recommendationColors: Record<string, string> = {
+    APPROVE: "bg-green-500/10 text-green-400 border-green-500/20",
+    "REVIEW CLOSELY": "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+    VETO: "bg-red-500/10 text-red-400 border-red-500/20",
+  };
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
@@ -582,6 +601,18 @@ function TradesPanel({
                 {trade.status === "pending" && (
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => handleAnalyze(trade.id)}
+                      disabled={analyzing === trade.id}
+                      className="inline-flex items-center gap-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                    >
+                      {analyzing === trade.id ? (
+                        <div className="w-3 h-3 border border-purple-300 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Bot className="w-3 h-3" />
+                      )}
+                      {trade.details?.ai_review ? "Re-analyze" : "Analyze with AI"}
+                    </button>
+                    <button
                       onClick={() => handleReview(trade.id, "approve")}
                       disabled={processing === trade.id}
                       className="inline-flex items-center gap-1 bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
@@ -610,6 +641,30 @@ function TradesPanel({
               {trade.details && (
                 <p className="text-xs text-surface-500 mt-2">{JSON.stringify(trade.details)}</p>
               )}
+              {(() => {
+                const aiReview = trade.details?.ai_review as
+                  | { content: string; recommendation: string | null; analyzed_at: string }
+                  | undefined;
+                if (!aiReview) return null;
+                return (
+                  <div className="mt-3 pt-3 border-t border-surface-700">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Bot className="w-3.5 h-3.5 text-purple-400" />
+                      <span className="text-xs font-semibold text-purple-300">AI Trade Review</span>
+                      {aiReview.recommendation && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${
+                          recommendationColors[aiReview.recommendation] || "bg-surface-700 text-surface-400 border-surface-600"
+                        }`}>
+                          {aiReview.recommendation}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-surface-300 whitespace-pre-wrap leading-relaxed bg-surface-900/50 rounded-lg p-3">
+                      {aiReview.content}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>

@@ -401,6 +401,10 @@ export const commissionerApi = {
       method: "POST",
       body: { action },
     }),
+  analyzeTradeForReview: (leagueId: string, tradeId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/trades/${tradeId}/analyze`, {
+      method: "POST",
+    }),
 
   // Draft order
   getDraftOrder: (leagueId: string) =>
