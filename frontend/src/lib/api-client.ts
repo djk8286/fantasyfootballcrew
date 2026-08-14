@@ -420,8 +420,8 @@ export const commissionerApi = {
     }),
 
   // AI Commissioner Digest (Phase 8)
-  generateDigest: (leagueId: string, week: number, year: number) =>
-    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/digest/generate?week=${week}&year=${year}`, {
+  generateDigest: (leagueId: string, week: number, year: number, tone = "professional", length = "full") =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/digest/generate?week=${week}&year=${year}&tone=${tone}&length=${length}`, {
       method: "POST",
     }),
   getDigest: (leagueId: string, week: number, year: number) =>

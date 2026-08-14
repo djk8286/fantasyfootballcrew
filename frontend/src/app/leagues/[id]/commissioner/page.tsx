@@ -1199,9 +1199,24 @@ function JoinRequestsSection({ leagueId }: { leagueId: string }) {
 // (whitespace-pre-wrap plain text, no markdown parser anywhere in this
 // codebase) and its "not configured" fallback-string detection.
 
+const DIGEST_TONES = [
+  { value: "professional", label: "Professional" },
+  { value: "casual", label: "Casual" },
+  { value: "hype", label: "Hype" },
+  { value: "sarcastic", label: "Sarcastic" },
+  { value: "dry", label: "Dry" },
+] as const;
+
+const DIGEST_LENGTHS = [
+  { value: "full", label: "Full" },
+  { value: "short", label: "Short" },
+] as const;
+
 function DigestPanel({ leagueId }: { leagueId: string }) {
   const [week, setWeek] = useState(1);
-  const [digest, setDigest] = useState<{ content: string; created_at: string } | null>(null);
+  const [tone, setTone] = useState("professional");
+  const [length, setLength] = useState("full");
+  const [digest, setDigest] = useState<{ content: string; created_at: string; tone?: string; length?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
@@ -1211,7 +1226,7 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
     setError("");
     commissionerApi
       .getDigest(leagueId, week, CURRENT_YEAR)
-      .then((data) => setDigest(data as { content: string; created_at: string }))
+      .then((data) => setDigest(data as { content: string; created_at: string; tone?: string; length?: string }))
       .catch(() => setDigest(null)) // 404 just means "nothing generated yet" -- not an error banner
       .finally(() => setLoading(false));
   }, [leagueId, week]);
@@ -1224,8 +1239,8 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
     setGenerating(true);
     setError("");
     try {
-      const result = await commissionerApi.generateDigest(leagueId, week, CURRENT_YEAR);
-      setDigest(result as { content: string; created_at: string });
+      const result = await commissionerApi.generateDigest(leagueId, week, CURRENT_YEAR, tone, length);
+      setDigest(result as { content: string; created_at: string; tone?: string; length?: string });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to generate digest");
     }
@@ -1237,17 +1252,43 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-surface-500">Week:</span>
-          <select
-            value={week}
-            onChange={(e) => setWeek(parseInt(e.target.value, 10))}
-            className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
-          >
-            {Array.from({ length: 18 }, (_, i) => i + 1).map((w) => (
-              <option key={w} value={w}>Week {w}</option>
-            ))}
-          </select>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-surface-500">Week:</span>
+            <select
+              value={week}
+              onChange={(e) => setWeek(parseInt(e.target.value, 10))}
+              className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+            >
+              {Array.from({ length: 18 }, (_, i) => i + 1).map((w) => (
+                <option key={w} value={w}>Week {w}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-surface-500">Tone:</span>
+            <select
+              value={tone}
+              onChange={(e) => setTone(e.target.value)}
+              className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+            >
+              {DIGEST_TONES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-surface-500">Length:</span>
+            <select
+              value={length}
+              onChange={(e) => setLength(e.target.value)}
+              className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+            >
+              {DIGEST_LENGTHS.map((l) => (
+                <option key={l.value} value={l.value}>{l.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
         <button
           onClick={handleGenerate}
@@ -1273,14 +1314,22 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
       {loading ? (
         <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>
       ) : digest ? (
-        <div
-          className={`p-5 rounded-2xl border whitespace-pre-wrap text-sm leading-relaxed ${
-            notConfigured
-              ? "bg-surface-800/50 border-surface-700 text-surface-400"
-              : "bg-purple-400/5 border-purple-400/20 text-surface-200"
-          }`}
-        >
-          {digest.content}
+        <div>
+          {(digest.tone || digest.length) && (
+            <p className="text-[10px] text-surface-500 mb-2">
+              Generated with {DIGEST_TONES.find((t) => t.value === digest.tone)?.label || digest.tone} tone,{" "}
+              {DIGEST_LENGTHS.find((l) => l.value === digest.length)?.label || digest.length} length.
+            </p>
+          )}
+          <div
+            className={`p-5 rounded-2xl border whitespace-pre-wrap text-sm leading-relaxed ${
+              notConfigured
+                ? "bg-surface-800/50 border-surface-700 text-surface-400"
+                : "bg-purple-400/5 border-purple-400/20 text-surface-200"
+            }`}
+          >
+            {digest.content}
+          </div>
         </div>
       ) : (
         <div className="p-6 text-center text-surface-500 text-sm bg-surface-800/50 border border-surface-700 rounded-2xl">
