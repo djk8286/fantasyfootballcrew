@@ -11,6 +11,7 @@ from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.services.playoff_service import DEFAULT_PLAYOFF_SETTINGS, get_playoff_settings
 from app.services.standings_service import DEFAULT_RIVALRY_WEEK_SETTINGS, get_rivalry_week_settings
 from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_salary_cap_settings, compute_waiver_salary
+from app.services.best_ball_service import DEFAULT_BEST_BALL_SETTINGS, get_best_ball_settings, is_window_open, describe_window
 from app.models.player import Player
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
@@ -407,6 +408,81 @@ async def preview_salary_cap_signing(league_id: str, player_id: str, db: AsyncSe
         raise HTTPException(status_code=404, detail="Player not found")
     settings = get_salary_cap_settings(league)
     return {"player_id": player_id, "estimated_salary": compute_waiver_salary(player, settings)}
+
+
+@router.get("/{league_id}/best-ball-settings")
+async def get_league_best_ball_settings(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the Best-Ball config for a league, or defaults (disabled).
+    Ungated -- same house style as GET playoff-settings/salary-cap-settings."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return get_best_ball_settings(league)
+
+
+class BestBallSettingsUpdate(BaseModel):
+    best_ball_settings: dict
+
+
+@router.put("/{league_id}/best-ball-settings")
+async def update_league_best_ball_settings(
+    league_id: str,
+    data: BestBallSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the Best-Ball config for a league (commissioner only). A
+    bolt-on flag for ANY league_type, mirroring salary-cap-settings
+    exactly."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, current_user)
+
+    merged = dict(DEFAULT_BEST_BALL_SETTINGS)
+    merged.update(data.best_ball_settings)
+
+    def _is_int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if not isinstance(merged.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="best_ball_settings.enabled must be a boolean")
+    if not _is_int(merged.get("lock_weekday")) or not (0 <= merged["lock_weekday"] <= 6):
+        raise HTTPException(status_code=422, detail="best_ball_settings.lock_weekday must be an integer 0-6")
+    if not _is_int(merged.get("reopen_weekday")) or not (0 <= merged["reopen_weekday"] <= 6):
+        raise HTTPException(status_code=422, detail="best_ball_settings.reopen_weekday must be an integer 0-6")
+    if not _is_int(merged.get("lock_hour")) or not (0 <= merged["lock_hour"] <= 23):
+        raise HTTPException(status_code=422, detail="best_ball_settings.lock_hour must be an integer 0-23")
+    if not _is_int(merged.get("reopen_hour")) or not (0 <= merged["reopen_hour"] <= 23):
+        raise HTTPException(status_code=422, detail="best_ball_settings.reopen_hour must be an integer 0-23")
+
+    league.best_ball_settings = merged
+    await db.commit()
+    return {"status": "ok", "best_ball_settings": league.best_ball_settings}
+
+
+@router.get("/{league_id}/management-window")
+async def get_league_management_window(league_id: str, db: AsyncSession = Depends(get_db)):
+    """Whether trade approvals / waiver processing are currently allowed
+    for this league. Meaningless (always open) outside Best-Ball --
+    ungated read, so the frontend can call it unconditionally without
+    first checking whether best-ball is enabled."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    settings = get_best_ball_settings(league)
+    if not settings["enabled"]:
+        return {
+            "enabled": False, "is_open": True,
+            "next_transition_at": None, "next_transition_type": None,
+            **{k: v for k, v in settings.items() if k != "enabled"},
+        }
+    from datetime import datetime, timezone
+    description = describe_window(datetime.now(timezone.utc), settings)
+    return {"enabled": True, **settings, **description}
 
 
 @router.patch("/{league_id}", response_model=LeagueRead)

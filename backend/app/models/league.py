@@ -113,6 +113,12 @@ class League(Base):
     # dead_money_pct, default_contract_years, waiver_contract_years} --
     # see DEFAULT_SALARY_CAP_SETTINGS in salary_cap_service.py.
     salary_cap_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
+    # Best-Ball Hybrid (Phase 6). Bolt-on to ANY league_type (not a new
+    # LeagueType value). Entirely opt-in (enabled defaults False). Shape:
+    # {enabled, lock_weekday, lock_hour, reopen_weekday, reopen_hour} --
+    # a weekly recurring management-window lock, UTC, weekday 0=Mon..6=Sun.
+    # See DEFAULT_BEST_BALL_SETTINGS in best_ball_service.py.
+    best_ball_settings: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
