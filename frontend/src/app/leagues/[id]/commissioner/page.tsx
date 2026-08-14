@@ -28,6 +28,7 @@ import {
   HeartPulse,
   BarChart3,
   CalendarClock,
+  MessageSquare,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -76,7 +77,14 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights" | "messages";
+
+const MESSAGE_TYPES = [
+  { value: "trade_deadline", label: "Trade Deadline Reminder" },
+  { value: "playoff_explanation", label: "Playoff Explanation" },
+  { value: "inactivity_warning", label: "Inactivity Warning" },
+  { value: "general", label: "General Announcement" },
+] as const;
 
 interface TeamSOS {
   team_id: string;
@@ -248,6 +256,7 @@ export default function CommissionerPage() {
             { id: "health" as Tab, label: "League Health", icon: HeartPulse },
             { id: "insights" as Tab, label: "Scoring Insights", icon: BarChart3 },
             { id: "schedule-insights" as Tab, label: "Schedule Insights", icon: CalendarClock },
+            { id: "messages" as Tab, label: "Messages", icon: MessageSquare },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -295,6 +304,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "schedule-insights" && (
           <ScheduleInsightsPanel leagueId={leagueId} />
+        )}
+        {activeTab === "messages" && (
+          <MessagesPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1719,6 +1731,137 @@ function ScheduleInsightsPanel({ leagueId }: { leagueId: string }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 10: COMMUNICATION HELPERS (AI Co-Commissioner v1, Phase 2)
+// ═══════════════════════════════════════════
+// Generate -> review/edit -> send. Unlike DigestPanel/InsightsPanel,
+// the draft renders in an EDITABLE textarea (not a read-only div) --
+// the spec explicitly requires the commissioner can edit before
+// sending. Sending fans out via the existing per-user notification
+// system (no league feed exists) -- there's no "undo" once sent, so a
+// confirmation is shown but there's no draft history/persistence.
+
+function MessagesPanel({ leagueId }: { leagueId: string }) {
+  const [messageType, setMessageType] = useState<string>(MESSAGE_TYPES[0].value);
+  const [tone, setTone] = useState("professional");
+  const [customContext, setCustomContext] = useState("");
+  const [content, setContent] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [sentCount, setSentCount] = useState<number | null>(null);
+
+  const handleDraft = async () => {
+    setDrafting(true);
+    setError("");
+    setSentCount(null);
+    try {
+      const result = (await commissionerApi.draftMessage(leagueId, messageType, tone, customContext)) as { content: string };
+      setContent(result.content);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to draft message");
+    }
+    setDrafting(false);
+  };
+
+  const handleSend = async () => {
+    if (!content.trim()) return;
+    setSending(true);
+    setError("");
+    try {
+      const result = (await commissionerApi.sendMessage(leagueId, messageType, content)) as { recipients: number };
+      setSentCount(result.recipients);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to send message");
+    }
+    setSending(false);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-surface-500">Type:</span>
+          <select
+            value={messageType}
+            onChange={(e) => { setMessageType(e.target.value); setSentCount(null); }}
+            className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+          >
+            {MESSAGE_TYPES.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-surface-500">Tone:</span>
+          <select
+            value={tone}
+            onChange={(e) => setTone(e.target.value)}
+            className="px-2 py-1.5 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white"
+          >
+            {DIGEST_TONES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <textarea
+        value={customContext}
+        onChange={(e) => setCustomContext(e.target.value)}
+        placeholder="Optional -- anything specific you want mentioned (e.g. exact deadline date, extra context)..."
+        rows={2}
+        className="w-full mb-3 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500"
+      />
+
+      <button
+        onClick={handleDraft}
+        disabled={drafting}
+        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-50 transition-all mb-4"
+      >
+        {drafting ? (
+          <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Drafting...</>
+        ) : (
+          <><Bot className="w-3.5 h-3.5" /> Draft with AI</>
+        )}
+      </button>
+
+      {error && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+          {error}
+        </div>
+      )}
+
+      {sentCount !== null && (
+        <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm">
+          Sent to {sentCount} recipient{sentCount === 1 ? "" : "s"}.
+        </div>
+      )}
+
+      <label className="text-[10px] text-surface-500 uppercase tracking-wider">Message (editable before sending)</label>
+      <textarea
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        rows={8}
+        placeholder="Draft a message above, or write your own here..."
+        className="w-full mt-1 mb-4 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-sm text-surface-200 placeholder-surface-500 whitespace-pre-wrap"
+      />
+
+      <button
+        onClick={handleSend}
+        disabled={sending || !content.trim()}
+        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white disabled:opacity-50 transition-all"
+      >
+        {sending ? (
+          <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending...</>
+        ) : (
+          <><Send className="w-3.5 h-3.5" /> Send to League</>
+        )}
+      </button>
     </div>
   );
 }

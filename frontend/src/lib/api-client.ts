@@ -438,6 +438,18 @@ export const commissionerApi = {
   // Schedule & Strength-of-Schedule Tools (AI Co-Commissioner v1, Phase 2)
   getScheduleInsights: (leagueId: string) =>
     apiRequest(`/api/v1/leagues/${leagueId}/commissioner/schedule-insights`),
+
+  // Communication Helpers (AI Co-Commissioner v1, Phase 2)
+  draftMessage: (leagueId: string, messageType: string, tone: string, customContext?: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/messages/draft`, {
+      method: "POST",
+      body: { message_type: messageType, tone, custom_context: customContext || undefined },
+    }),
+  sendMessage: (leagueId: string, messageType: string, content: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/messages/send`, {
+      method: "POST",
+      body: { message_type: messageType, content },
+    }),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)
