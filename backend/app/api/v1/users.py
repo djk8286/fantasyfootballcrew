@@ -57,6 +57,9 @@ async def change_password(
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     current_user.hashed_password = hash_password(data.new_password)
+    # Invalidates every token issued before this change -- a stolen
+    # token no longer survives a password change. See User.token_version.
+    current_user.token_version += 1
     await db.commit()
     return {"message": "Password updated."}
 

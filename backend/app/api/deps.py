@@ -30,6 +30,13 @@ async def get_current_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+    # A token issued before the account's last password change/reset
+    # carries a stale (or absent, for a token issued before this check
+    # existed) token_version claim -- reject it rather than leak *why*
+    # via a distinct error message. See User.token_version.
+    if payload.get("token_version", 0) != user.token_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
     return user
 
 
@@ -44,7 +51,10 @@ async def get_current_user_optional(
     if not payload or "sub" not in payload:
         return None
     result = await db.execute(select(User).where(User.id == payload["sub"]))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user is None or payload.get("token_version", 0) != user.token_version:
+        return None
+    return user
 
 
 def require_commissioner(league: League, current_user: User) -> None:

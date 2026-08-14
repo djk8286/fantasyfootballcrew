@@ -66,7 +66,7 @@ async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depe
         user.hashed_password = hash_password(login_data.password)
         await db.commit()
 
-    token = create_access_token({"sub": user.id, "email": user.email})
+    token = create_access_token({"sub": user.id, "email": user.email, "token_version": user.token_version})
     return {"access_token": token, "token_type": "bearer", "user": UserRead.model_validate(user)}
 
 
@@ -122,6 +122,9 @@ async def reset_password(request: Request, data: ResetPasswordRequest, db: Async
         raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Please request a new one.")
 
     user.hashed_password = hash_password(data.new_password)
+    # Invalidates every token issued before this reset -- a stolen
+    # token no longer survives a password reset. See User.token_version.
+    user.token_version += 1
     reset_token.used_at = now
     await db.commit()
 
