@@ -209,3 +209,50 @@ async def test_trade_prompt_renders_without_partner_context():
     service._call_llm = spy
     await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
     assert "Linked Pair" in captured["prompt"]
+
+
+# ─── Commissioner Digest (Phase 8, "AI-Assisted Commissioner Tools") ───
+
+@pytest.mark.asyncio
+async def test_digest_prompt_includes_standings_and_transactions():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_commissioner_digest(
+        league_name="Test League", week=3, year=2026,
+        standings=[{"team_name": "The Contenders", "wins": 2}],
+        recent_transactions=[{"type": "trade", "status": "approved"}],
+    )
+    assert "Test League" in captured["prompt"]
+    assert "The Contenders" in captured["prompt"]
+    assert '"type": "trade"' in captured["prompt"]
+    assert "POWER RANKINGS" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_digest_prompt_renders_without_optional_context():
+    """No combined_standings/recent_transactions/features passed at all
+    -- must not KeyError on any optional prompt field."""
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_commissioner_digest(league_name="Empty League", week=1, year=2026)
+    assert "Empty League" in captured["prompt"]
+    assert "Combined Pairs Standings" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_digest_no_api_key_never_calls_network_path():
+    service = AIService(api_key=None)
+    result = await service.generate_commissioner_digest(league_name="X", week=1, year=2026)
+    assert "not configured" in result

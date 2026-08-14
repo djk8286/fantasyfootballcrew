@@ -79,6 +79,37 @@ Provide:
 4. Counter-offer suggestion if unbalanced
 """
 
+COMMISSIONER_DIGEST_PROMPT = """
+You are an expert fantasy football commissioner's assistant. Write a
+weekly digest for this league using ONLY plain text -- no markdown
+syntax (no #, **, or -- for emphasis), since this will be displayed as
+plain text, not rendered markdown. Use simple ALL-CAPS section titles
+on their own line instead of markdown headers.
+
+**League:** {league_name} -- Week {week}, {year}
+
+**Standings:**
+{standings}
+
+**Combined Pairs Standings (Dual-Squad, if applicable):**
+{combined_standings}
+
+**Recent Transactions:**
+{recent_transactions}
+
+**Active League Features:**
+{features}
+
+**Scoring Settings:**
+{scoring_config}
+
+Write, in plain text with ALL-CAPS section titles:
+1. POWER RANKINGS -- ranked list with a one-line reason for each team's spot
+2. THIS WEEK'S STORYLINES -- 2-3 short paragraphs of narrative color
+3. WAIVER & TRADE RECAP -- what moved and who it helps/hurts
+4. COMMISSIONER NOTES -- any fairness/rule-adjustment observations worth flagging (advisory only -- the commissioner decides, never phrase this as an instruction)
+"""
+
 BET_ANALYSIS_PROMPT = """
 You are a sports betting analyst. Analyze these betting props/lines:
 
@@ -157,6 +188,33 @@ class AIService:
             team_b_salary=json.dumps(team_b_salary or {}, indent=2),
             team_a_partner=json.dumps(team_a_partner or {}, indent=2),
             team_b_partner=json.dumps(team_b_partner or {}, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_commissioner_digest(
+        self,
+        league_name: str,
+        week: int,
+        year: int,
+        standings: Optional[list] = None,
+        combined_standings: Optional[list] = None,
+        recent_transactions: Optional[list] = None,
+        features: Optional[dict] = None,
+        scoring_config: Optional[dict] = None,
+    ) -> str:
+        """Generate a weekly commissioner digest -- power rankings,
+        storylines, and a waiver/trade recap (Phase 8, "AI-Assisted
+        Commissioner Tools"). Commissioner-triggered on demand, never
+        cron-driven -- see commissioner_digest_service.py."""
+        prompt = COMMISSIONER_DIGEST_PROMPT.format(
+            league_name=league_name,
+            week=week,
+            year=year,
+            standings=json.dumps(standings or [], indent=2),
+            combined_standings=json.dumps(combined_standings or [], indent=2),
+            recent_transactions=json.dumps(recent_transactions or [], indent=2),
+            features=json.dumps(features or {}, indent=2),
+            scoring_config=json.dumps(scoring_config or {}, indent=2),
         )
         return await self._call_llm(prompt)
 
