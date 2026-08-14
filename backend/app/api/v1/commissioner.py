@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.league import League
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
@@ -18,6 +19,7 @@ from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
 from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
+from app.services.commissioner_digest_service import generate_and_save_digest, get_digest
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -410,3 +412,44 @@ async def randomize_draft_order(
     league.draft_order = team_ids
     await db.commit()
     return {"status": "ok", "draft_order": team_ids}
+
+
+# ═══════════════════════════════════════════════
+# AI COMMISSIONER DIGEST (Phase 8, "AI-Assisted Commissioner Tools")
+# ═══════════════════════════════════════════════
+# Commissioner-triggered on demand only -- no scheduler integration.
+# The generate endpoint is the only one that spends real LLM API money,
+# so it's rate-limited the same way /ai/lineup and /ai/trade already
+# are; the GET is a plain cached read, unlimited like every other read
+# in this router.
+
+@router.post("/digest/generate")
+@limiter.limit("10/hour")
+async def generate_digest(
+    request: Request,
+    league_id: str,
+    week: int,
+    year: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    digest = await generate_and_save_digest(league, week, year, current_user.id, db)
+    return {"week": digest.week, "year": digest.year, "content": digest.content, "created_at": digest.created_at}
+
+
+@router.get("/digest")
+async def get_digest_route(
+    league_id: str,
+    week: int,
+    year: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    digest = await get_digest(league_id, week, year, db)
+    if not digest:
+        raise HTTPException(status_code=404, detail="No digest generated for this week yet")
+    return {"week": digest.week, "year": digest.year, "content": digest.content, "created_at": digest.created_at}
