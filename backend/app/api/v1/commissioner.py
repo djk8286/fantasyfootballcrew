@@ -23,6 +23,7 @@ from app.services.commissioner_digest_service import generate_and_save_digest, g
 from app.services.trade_review_service import generate_and_save_trade_review
 from app.services.league_health_service import compute_league_health
 from app.services.insights_service import compute_scoring_insights
+from app.services.schedule_insights_service import compute_strength_of_schedule
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -556,3 +557,20 @@ async def get_scoring_insights(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     return await compute_scoring_insights(league, db)
+
+
+# ═══════════════════════════════════════════════
+#  7. SCHEDULE INSIGHTS (AI Co-Commissioner v1, Phase 2)
+# ═══════════════════════════════════════════════
+# Pure computation, zero LLM calls -- see schedule_insights_service.py.
+# No rate limit, no persistence, recomputed fresh on every request.
+
+@router.get("/schedule-insights")
+async def get_schedule_insights(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    return await compute_strength_of_schedule(league, db)
