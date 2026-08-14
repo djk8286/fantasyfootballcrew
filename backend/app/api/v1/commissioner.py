@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
@@ -7,6 +8,7 @@ from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.score_adjustment import ScoreAdjustment
 from app.models.user import User
+from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.schemas.commissioner import (
     ScoreAdjustmentCreate, ScoreAdjustmentRead,
     TradeReview, TradeRead, DraftOrderUpdate,
@@ -170,6 +172,17 @@ async def review_trade(
     target_team_id = details.get("target_team_id")
 
     if data.action == "approve":
+        # Best-Ball (Phase 6): only the APPROVAL action is gated by the
+        # management window -- denial isn't a "grant," so there's no
+        # fairness/window concern, and blocking it would just trap a
+        # proposer's players in limbo longer than necessary.
+        bb_settings = get_best_ball_settings(league)
+        if bb_settings["enabled"] and not is_window_open(datetime.now(timezone.utc), bb_settings):
+            raise HTTPException(
+                status_code=400,
+                detail="This league's management window is currently closed -- trade approvals resume once it reopens.",
+            )
+
         offered_ids = set(details.get("offered_player_ids") or [])
         requested_ids = set(details.get("requested_player_ids") or [])
 
