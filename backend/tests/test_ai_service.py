@@ -258,6 +258,37 @@ async def test_digest_no_api_key_never_calls_network_path():
     assert "not configured" in result
 
 
+@pytest.mark.asyncio
+async def test_digest_prompt_includes_tone_and_length_instructions():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_commissioner_digest(league_name="X", week=1, year=2026, tone="hype", length="short")
+    assert "hype-man" in captured["prompt"]
+    assert "2-3 short paragraphs" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_digest_prompt_unrecognized_tone_and_length_fall_back_safely():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    # Must never KeyError, even with a nonsense value.
+    await service.generate_commissioner_digest(league_name="X", week=1, year=2026, tone="nonsense", length="nonsense")
+    assert "professional, measured tone" in captured["prompt"]
+    assert "full, detailed digest" in captured["prompt"]
+
+
 # ─── Trade Review Assistant (AI Co-Commissioner v1) ────────────────────
 
 @pytest.mark.asyncio

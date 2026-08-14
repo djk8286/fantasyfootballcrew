@@ -23,4 +23,11 @@ class CommissionerDigest(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     generated_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    # AI Co-Commissioner v1: the tone/length actually used to generate
+    # this digest -- per-generation params, not a persisted league
+    # default (see ai_service.py's TONE_INSTRUCTIONS/LENGTH_INSTRUCTIONS).
+    # Stored here purely so a cached/re-viewed digest shows what was
+    # actually used, not as a reusable "default" anywhere.
+    tone: Mapped[str] = mapped_column(String, nullable=False, default="professional")
+    length: Mapped[str] = mapped_column(String, nullable=False, default="full")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

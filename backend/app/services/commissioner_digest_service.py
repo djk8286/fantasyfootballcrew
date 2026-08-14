@@ -90,25 +90,33 @@ async def get_digest(league_id: str, week: int, year: int, db: AsyncSession) -> 
     return result.scalar_one_or_none()
 
 
-async def generate_and_save_digest(league: League, week: int, year: int, generated_by: str, db: AsyncSession) -> CommissionerDigest:
+async def generate_and_save_digest(
+    league: League, week: int, year: int, generated_by: str, db: AsyncSession,
+    tone: str = "professional", length: str = "full",
+) -> CommissionerDigest:
     """Calls the LLM (real spend, if a key is configured -- this is
     exactly why it's commissioner-triggered only, never on a timer) and
     upserts the result. A regenerate for the same (league, week, year)
-    overwrites the existing row's content/generated_by in place --
-    CommissionerDigest's own unique constraint would otherwise reject a
-    second insert outright."""
+    overwrites the existing row's content/generated_by/tone/length in
+    place -- CommissionerDigest's own unique constraint would otherwise
+    reject a second insert outright. tone/length (AI Co-Commissioner v1)
+    are per-generation params, not a persisted league default -- see
+    ai_service.py's TONE_INSTRUCTIONS/LENGTH_INSTRUCTIONS."""
     context = await build_digest_context(league, week, year, db)
     service = _get_ai_service()
-    content = await service.generate_commissioner_digest(**context)
+    content = await service.generate_commissioner_digest(tone=tone, length=length, **context)
 
     existing = await get_digest(league.id, week, year, db)
     if existing:
         existing.content = content
         existing.generated_by = generated_by
+        existing.tone = tone
+        existing.length = length
         digest = existing
     else:
         digest = CommissionerDigest(
             league_id=league.id, week=week, year=year, content=content, generated_by=generated_by,
+            tone=tone, length=length,
         )
         db.add(digest)
 

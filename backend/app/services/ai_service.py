@@ -10,6 +10,27 @@ import httpx
 import json
 
 
+# AI Co-Commissioner v1: tone/length are per-generation params on the
+# weekly digest (not a persisted league setting -- see
+# commissioner_digest_service.py), mapped here to one-line instruction
+# phrases spliced into COMMISSIONER_DIGEST_PROMPT. An unrecognized
+# value falls back to "professional"/"full" rather than raising --
+# matches this codebase's general "degrade gracefully" convention for
+# optional fields.
+TONE_INSTRUCTIONS: Dict[str, str] = {
+    "professional": "Write in a professional, measured tone.",
+    "casual": "Write in a casual, conversational tone, like a friend texting league updates.",
+    "hype": "Write with high energy and hype, like a sports hype-man.",
+    "sarcastic": "Write with dry sarcasm and playful jabs at underperforming teams.",
+    "dry": "Write in a deadpan, understated, dry-humor tone.",
+}
+
+LENGTH_INSTRUCTIONS: Dict[str, str] = {
+    "short": "Keep the whole digest to 2-3 short paragraphs total, hitting only the highlights.",
+    "full": "Write the full, detailed digest as specified below.",
+}
+
+
 # Default analysis prompts
 LINEUP_ANALYSIS_PROMPT = """
 You are an expert fantasy football analyst. Analyze the following lineup and matchups:
@@ -85,6 +106,8 @@ weekly digest for this league using ONLY plain text -- no markdown
 syntax (no #, **, or -- for emphasis), since this will be displayed as
 plain text, not rendered markdown. Use simple ALL-CAPS section titles
 on their own line instead of markdown headers.
+
+{tone_instruction} {length_instruction}
 
 **League:** {league_name} -- Week {week}, {year}
 
@@ -236,12 +259,19 @@ class AIService:
         recent_transactions: Optional[list] = None,
         features: Optional[dict] = None,
         scoring_config: Optional[dict] = None,
+        tone: str = "professional",
+        length: str = "full",
     ) -> str:
         """Generate a weekly commissioner digest -- power rankings,
         storylines, and a waiver/trade recap (Phase 8, "AI-Assisted
         Commissioner Tools"). Commissioner-triggered on demand, never
-        cron-driven -- see commissioner_digest_service.py."""
+        cron-driven -- see commissioner_digest_service.py. tone/length
+        are per-generation params (AI Co-Commissioner v1) -- an
+        unrecognized value degrades to the professional/full default
+        rather than raising."""
         prompt = COMMISSIONER_DIGEST_PROMPT.format(
+            tone_instruction=TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["professional"]),
+            length_instruction=LENGTH_INSTRUCTIONS.get(length, LENGTH_INSTRUCTIONS["full"]),
             league_name=league_name,
             week=week,
             year=year,

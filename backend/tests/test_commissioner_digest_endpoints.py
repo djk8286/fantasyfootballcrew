@@ -119,3 +119,40 @@ async def test_get_digest_after_generation_makes_zero_additional_llm_calls(clien
         r = await client.get(f"/leagues/{setup['league_id']}/commissioner/digest", params={"week": WEEK, "year": YEAR})
         assert r.status_code == 200
     assert call_count["n"] == 1  # GET never calls the LLM
+
+
+@pytest.mark.asyncio
+async def test_generate_digest_bad_tone_422s(client, db_session_factory):
+    setup = await _make_league(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {setup['token']}"
+    r = await client.post(f"/leagues/{setup['league_id']}/commissioner/digest/generate",
+                           params={"week": WEEK, "year": YEAR, "tone": "bogus"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_digest_bad_length_422s(client, db_session_factory):
+    setup = await _make_league(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {setup['token']}"
+    r = await client.post(f"/leagues/{setup['league_id']}/commissioner/digest/generate",
+                           params={"week": WEEK, "year": YEAR, "length": "bogus"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_digest_valid_tone_length_round_trip(client, db_session_factory, monkeypatch):
+    async def spy(self, prompt):
+        return "hyped up content"
+    monkeypatch.setattr(AIService, "_call_llm", spy)
+
+    setup = await _make_league(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {setup['token']}"
+    r = await client.post(f"/leagues/{setup['league_id']}/commissioner/digest/generate",
+                           params={"week": WEEK, "year": YEAR, "tone": "hype", "length": "short"})
+    assert r.status_code == 200
+    assert r.json()["tone"] == "hype"
+    assert r.json()["length"] == "short"
+
+    r_get = await client.get(f"/leagues/{setup['league_id']}/commissioner/digest", params={"week": WEEK, "year": YEAR})
+    assert r_get.json()["tone"] == "hype"
+    assert r_get.json()["length"] == "short"

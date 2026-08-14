@@ -159,3 +159,40 @@ async def test_get_digest_returns_none_when_absent(db_session_factory):
     async with db_session_factory() as db:
         digest = await get_digest(league_id, WEEK, YEAR, db)
     assert digest is None
+
+
+@pytest.mark.asyncio
+async def test_generate_and_save_digest_persists_tone_and_length(db_session_factory, monkeypatch):
+    league_id, commissioner_id, _team_id = await _make_league(db_session_factory)
+
+    async def spy(self, prompt):
+        return "content"
+    monkeypatch.setattr(AIService, "_call_llm", spy)
+
+    async with db_session_factory() as db:
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        digest = await generate_and_save_digest(league, WEEK, YEAR, commissioner_id, db, tone="hype", length="short")
+
+    assert digest.tone == "hype"
+    assert digest.length == "short"
+
+    async with db_session_factory() as db:
+        fetched = await get_digest(league_id, WEEK, YEAR, db)
+        assert fetched.tone == "hype"
+        assert fetched.length == "short"
+
+
+@pytest.mark.asyncio
+async def test_generate_and_save_digest_defaults_tone_and_length(db_session_factory, monkeypatch):
+    league_id, commissioner_id, _team_id = await _make_league(db_session_factory)
+
+    async def spy(self, prompt):
+        return "content"
+    monkeypatch.setattr(AIService, "_call_llm", spy)
+
+    async with db_session_factory() as db:
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        digest = await generate_and_save_digest(league, WEEK, YEAR, commissioner_id, db)
+
+    assert digest.tone == "professional"
+    assert digest.length == "full"

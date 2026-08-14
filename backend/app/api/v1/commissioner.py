@@ -468,6 +468,13 @@ async def randomize_draft_order(
 # are; the GET is a plain cached read, unlimited like every other read
 # in this router.
 
+# AI Co-Commissioner v1: per-generation tone/length -- see
+# ai_service.py's TONE_INSTRUCTIONS/LENGTH_INSTRUCTIONS for the actual
+# prompt phrasing each value maps to.
+_VALID_TONES = {"professional", "casual", "hype", "sarcastic", "dry"}
+_VALID_LENGTHS = {"short", "full"}
+
+
 @router.post("/digest/generate")
 @limiter.limit("10/hour")
 async def generate_digest(
@@ -475,13 +482,23 @@ async def generate_digest(
     league_id: str,
     week: int,
     year: int,
+    tone: str = "professional",
+    length: str = "full",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if tone not in _VALID_TONES:
+        raise HTTPException(status_code=422, detail=f"tone must be one of {sorted(_VALID_TONES)}")
+    if length not in _VALID_LENGTHS:
+        raise HTTPException(status_code=422, detail=f"length must be one of {sorted(_VALID_LENGTHS)}")
+
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
-    digest = await generate_and_save_digest(league, week, year, current_user.id, db)
-    return {"week": digest.week, "year": digest.year, "content": digest.content, "created_at": digest.created_at}
+    digest = await generate_and_save_digest(league, week, year, current_user.id, db, tone=tone, length=length)
+    return {
+        "week": digest.week, "year": digest.year, "content": digest.content,
+        "created_at": digest.created_at, "tone": digest.tone, "length": digest.length,
+    }
 
 
 @router.get("/digest")
@@ -497,4 +514,7 @@ async def get_digest_route(
     digest = await get_digest(league_id, week, year, db)
     if not digest:
         raise HTTPException(status_code=404, detail="No digest generated for this week yet")
-    return {"week": digest.week, "year": digest.year, "content": digest.content, "created_at": digest.created_at}
+    return {
+        "week": digest.week, "year": digest.year, "content": digest.content,
+        "created_at": digest.created_at, "tone": digest.tone, "length": digest.length,
+    }
