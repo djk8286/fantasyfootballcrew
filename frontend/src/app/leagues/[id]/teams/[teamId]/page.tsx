@@ -302,7 +302,7 @@ export default function TeamPage() {
         )}
 
         {/* Team header */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 flex items-center gap-4">
+        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 flex items-center gap-4 flex-wrap gap-y-4">
           <div
             className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl shrink-0 border border-surface-700/50"
             style={{ backgroundColor: avatar.bg }}
@@ -461,8 +461,8 @@ export default function TeamPage() {
                     className="flex items-center justify-between px-3 py-2 rounded-lg border border-surface-700 bg-surface-900 text-sm"
                   >
                     <span className="text-surface-500 text-xs font-mono w-14 shrink-0">Week {week}</span>
-                    <div className="flex items-center gap-2 flex-1 justify-center">
-                      <Swords className="w-3.5 h-3.5 text-surface-600" />
+                    <div className="flex items-center gap-2 flex-1 min-w-0 justify-center">
+                      <Swords className="w-3.5 h-3.5 text-surface-600 shrink-0" />
                       <Link
                         href={`/leagues/${leagueId}/teams/${opp.id}`}
                         className="text-surface-300 hover:text-gold-400 transition-colors truncate"
