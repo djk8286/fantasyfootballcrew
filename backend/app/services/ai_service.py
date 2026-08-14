@@ -9,6 +9,21 @@ from typing import Dict, Any, Optional
 import httpx
 import json
 
+# Distinct from the "not configured" fallback -- this covers a
+# configured key that fails at call time (quota exhausted, provider
+# outage, transient network error, revoked key, etc). Every _call_*
+# method below catches broad Exception around its actual HTTP call and
+# returns this instead of letting the error propagate -- none of the
+# calling service modules (commissioner_digest_service.py,
+# trade_review_service.py, message_service.py, chat_service.py) wrap
+# these calls in their own try/except, so an uncaught exception here
+# would surface as a raw 500 to the user on what looks like a normal
+# request. Logged server-side (visible in `railway logs`) so a real
+# outage/quota problem is still diagnosable, same "don't let a
+# third-party hiccup break the user-facing request" precedent
+# email_service.py already established for outbound email.
+AI_TEMPORARILY_UNAVAILABLE = "AI Analysis: the AI service is temporarily unavailable right now. Please try again in a few minutes."
+
 
 # AI Co-Commissioner v1: tone/length are per-generation params on the
 # weekly digest (not a persisted league setting -- see
@@ -401,45 +416,53 @@ class AIService:
     async def _call_openai_chat(self, system: str, history: list) -> str:
         """OpenAI puts the system prompt as a {"role": "system", ...}
         entry inside the messages array itself."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "system", "content": system}] + history,
-                    "temperature": 0.3,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "gpt-4o-mini",
+                        "messages": [{"role": "system", "content": system}] + history,
+                        "temperature": 0.3,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"[AI call FAILED -- openai chat] {e}", flush=True)
+            return AI_TEMPORARILY_UNAVAILABLE
 
     async def _call_anthropic_chat(self, system: str, history: list) -> str:
         """Anthropic's Messages API takes `system` as a top-level
         request field, separate from `messages` -- unlike OpenAI, it
         is NOT a message with role "system" inside the array."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 1000,
-                    "system": system,
-                    "messages": history,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["content"][0]["text"]
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-haiku-4-5-20251001",
+                        "max_tokens": 1000,
+                        "system": system,
+                        "messages": history,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["content"][0]["text"]
+        except Exception as e:
+            print(f"[AI call FAILED -- anthropic chat] {e}", flush=True)
+            return AI_TEMPORARILY_UNAVAILABLE
 
     async def analyze_bet(
         self,
@@ -470,50 +493,58 @@ class AIService:
 
     async def _call_openai(self, prompt: str) -> str:
         """Call OpenAI API."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are an expert fantasy football analyst. Provide detailed, data-driven analysis with clear recommendations.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.3,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "gpt-4o-mini",
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are an expert fantasy football analyst. Provide detailed, data-driven analysis with clear recommendations.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.3,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"[AI call FAILED -- openai] {e}", flush=True)
+            return AI_TEMPORARILY_UNAVAILABLE
 
     async def _call_anthropic(self, prompt: str) -> str:
         """Call Anthropic Claude API."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 1000,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["content"][0]["text"]
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-haiku-4-5-20251001",
+                        "max_tokens": 1000,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": prompt,
+                            }
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["content"][0]["text"]
+        except Exception as e:
+            print(f"[AI call FAILED -- anthropic] {e}", flush=True)
+            return AI_TEMPORARILY_UNAVAILABLE

@@ -441,3 +441,70 @@ async def test_call_anthropic_chat_puts_system_at_top_level_not_in_messages(monk
     assert captured["json"]["system"] == "SYSTEM PROMPT HERE"
     assert captured["json"]["messages"] == [{"role": "user", "content": "hi"}]
     assert all(m.get("role") != "system" for m in captured["json"]["messages"])
+
+
+# ─── Graceful degradation on a configured-but-failing key ───────────────
+# Regression coverage for a real production bug: a key that AUTHENTICATES
+# but fails at call time (quota exhausted, provider outage, revoked key)
+# must never raise -- none of the calling service modules wrap these
+# calls in their own try/except, so an uncaught exception here would
+# surface as a raw 500 on what looks like a normal request.
+
+class _RaisingAsyncClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, *args, **kwargs):
+        raise RuntimeError("simulated provider outage / insufficient_quota")
+
+
+@pytest.mark.asyncio
+async def test_call_openai_degrades_gracefully_on_failure(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="openai")
+    result = await service._call_openai("some prompt")
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_call_anthropic_degrades_gracefully_on_failure(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="anthropic")
+    result = await service._call_anthropic("some prompt")
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_call_openai_chat_degrades_gracefully_on_failure(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="openai")
+    result = await service._call_openai_chat("system", [{"role": "user", "content": "hi"}])
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_call_anthropic_chat_degrades_gracefully_on_failure(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="anthropic")
+    result = await service._call_anthropic_chat("system", [{"role": "user", "content": "hi"}])
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_chat_end_to_end_degrades_gracefully_on_failure(monkeypatch):
+    """The full public chat() method, not just the private _call_*
+    helper -- confirms the fallback actually reaches whatever called
+    it (chat_service.send_chat_message persists this string as the
+    assistant's reply rather than crashing the request)."""
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="openai")
+    result = await service.chat(league_name="X", context={}, history=[{"role": "user", "content": "hi"}])
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
