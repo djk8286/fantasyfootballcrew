@@ -34,6 +34,7 @@ The manual commissioner button still exists unchanged, as a force-recalc
 option (e.g. after a late roster correction).
 """
 import asyncio
+from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 from app.core.database import async_session
@@ -41,6 +42,8 @@ from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fet
 from app.services.standings_service import calculate_week, notify_matchup_results
 from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
+from app.services.best_ball_service import get_best_ball_settings, is_window_open
+from app.services.waiver_service import process_league_waivers
 from app.models.league import League, DraftStatus, LeagueType
 
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
@@ -176,6 +179,53 @@ async def _process_all_league_guillotines_once(season: int, week: int) -> None:
 # correctness issue for anything else in this file).
 _last_seen_week: tuple[int, int] | None = None
 
+# Best-Ball (Phase 6): same in-memory-only tradeoff as _last_seen_week
+# above, deliberately NOT the correctness gate itself (is_window_open is
+# pure wall-clock math, recomputed fresh every tick -- a redeploy just
+# means the very next closed->open transition after restart won't
+# auto-fire the waiver pass, since "was_open" resets to unknown; the
+# window's actual open/closed state for trade/waiver GATING is never
+# affected, only this one auto-processing convenience).
+_best_ball_window_state: dict[str, bool] = {}
+
+
+async def _process_all_league_best_ball_window_reopens_once(now: datetime | None = None) -> None:
+    """Runs every tick (like playoff processing, not gated to the
+    week-transition block -- the management window can flip mid-week,
+    independent of the NFL calendar). Auto-processes any queued waiver
+    claims the moment a best-ball league's window transitions
+    closed->open, via the exact same process_league_waivers the manual
+    endpoint calls (same WAIVER_APPROVED/WAIVER_DENIED notifications,
+    reviewed_by=None since there's no human actor here).
+
+    `was_open is False` (not just falsy) deliberately excludes a
+    league's first-ever observation (None) from firing -- mirrors
+    _last_seen_week's own "observe, don't act, on the first tick"
+    precedent, so a fresh deploy doesn't immediately fire a
+    processing pass for every already-open best-ball league."""
+    now = now or datetime.now(timezone.utc)
+    async with async_session() as db:
+        result = await db.execute(select(League))
+        leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
+
+        processed = 0
+        for league in leagues:
+            settings = get_best_ball_settings(league)
+            if not settings["enabled"]:
+                continue
+            now_open = is_window_open(now, settings)
+            was_open = _best_ball_window_state.get(league.id)
+            _best_ball_window_state[league.id] = now_open
+            if was_open is False and now_open:
+                try:
+                    await process_league_waivers(league, db, reviewed_by=None)
+                    processed += 1
+                except Exception as e:
+                    print(f"[scheduler] Best-Ball auto-waiver-process failed for league {league.id}: {e}")
+
+    if processed:
+        print(f"[scheduler] Auto-processed waivers on management-window reopen for {processed} league(s)")
+
 
 async def _notify_matchup_results_for_all_leagues_once(season: int, week: int) -> None:
     """Fires "you won/lost/tied your matchup" notifications for every
@@ -244,6 +294,10 @@ async def run_scheduler() -> None:
                 await _process_all_league_playoffs_once(season, week)
             except Exception as e:
                 print(f"[scheduler] Playoff pass failed: {e}")
+            try:
+                await _process_all_league_best_ball_window_reopens_once()
+            except Exception as e:
+                print(f"[scheduler] Best-Ball window-reopen pass failed: {e}")
 
             # The live week only advances once Sleeper considers the
             # previous week's games over, so the moment it changes is our
