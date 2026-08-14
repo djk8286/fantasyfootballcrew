@@ -27,6 +27,7 @@ import {
   Loader2,
   HeartPulse,
   BarChart3,
+  CalendarClock,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -75,7 +76,25 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights";
+
+interface TeamSOS {
+  team_id: string;
+  team_name: string;
+  sos_score: number | null;
+  next_stretch_average?: number;
+  flag?: "hard_stretch" | "easy_stretch" | null;
+  summary: string;
+}
+
+interface ScheduleInsights {
+  available: boolean;
+  reason?: string;
+  finale?: boolean;
+  summary?: string;
+  remaining_weeks?: number[];
+  teams?: TeamSOS[];
+}
 
 interface CategoryVarianceObservation {
   category: string;
@@ -228,6 +247,7 @@ export default function CommissionerPage() {
             { id: "digest" as Tab, label: "AI Digest", icon: Bot },
             { id: "health" as Tab, label: "League Health", icon: HeartPulse },
             { id: "insights" as Tab, label: "Scoring Insights", icon: BarChart3 },
+            { id: "schedule-insights" as Tab, label: "Schedule Insights", icon: CalendarClock },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -272,6 +292,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "insights" && (
           <InsightsPanel leagueId={leagueId} />
+        )}
+        {activeTab === "schedule-insights" && (
+          <ScheduleInsightsPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1605,6 +1628,97 @@ function InsightsPanel({ leagueId }: { leagueId: string }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 9: SCHEDULE INSIGHTS (AI Co-Commissioner v1, Phase 2)
+// ═══════════════════════════════════════════
+// Same zero-LLM, computed-data pattern as InsightsPanel/HealthPanel.
+// Never suggests actually changing the schedule -- no such mechanism
+// exists in this app -- just flags which teams have a notably easier
+// or harder run of remaining opponents.
+
+const SOS_FLAG_STYLES: Record<string, string> = {
+  hard_stretch: "text-red-400",
+  easy_stretch: "text-green-400",
+};
+
+function ScheduleInsightsPanel({ leagueId }: { leagueId: string }) {
+  const [sos, setSos] = useState<ScheduleInsights | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    commissionerApi
+      .getScheduleInsights(leagueId)
+      .then((data) => setSos(data as ScheduleInsights))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load schedule insights"))
+      .finally(() => setLoading(false));
+  }, [leagueId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!sos || !sos.available) {
+    return (
+      <div className="p-6 text-center text-surface-500 text-sm bg-surface-800/50 border border-surface-700 rounded-2xl">
+        {sos?.reason || "No schedule data available yet."}
+      </div>
+    );
+  }
+
+  if (sos.finale) {
+    return (
+      <div className="p-6 text-center text-surface-300 text-sm bg-purple-400/5 border border-purple-400/20 rounded-2xl">
+        {sos.summary}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-xs text-surface-500 mb-4">
+        Remaining opponent strength for the rest of the season. Suggestions only -- nothing here changes the actual schedule.
+      </p>
+      <div className="overflow-x-auto rounded-2xl border border-surface-700">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-800 text-surface-400 text-xs uppercase tracking-wider">
+            <tr>
+              <th className="text-left px-4 py-3">Team</th>
+              <th className="text-left px-4 py-3">Remaining SOS (avg opp pts/game)</th>
+              <th className="text-left px-4 py-3">Outlook</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(sos.teams || []).map((t) => (
+              <tr key={t.team_id} className="border-t border-surface-800">
+                <td className="px-4 py-3 text-white font-medium">{t.team_name}</td>
+                <td className="px-4 py-3 text-surface-300">{t.sos_score === null ? "N/A" : t.sos_score}</td>
+                <td className={`px-4 py-3 text-xs ${t.flag ? SOS_FLAG_STYLES[t.flag] : "text-surface-400"}`}>
+                  {t.summary}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

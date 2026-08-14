@@ -434,6 +434,10 @@ export const commissionerApi = {
   // Scoring & Rule Balance Insights (AI Co-Commissioner v1, Phase 2)
   getScoringInsights: (leagueId: string) =>
     apiRequest(`/api/v1/leagues/${leagueId}/commissioner/insights`),
+
+  // Schedule & Strength-of-Schedule Tools (AI Co-Commissioner v1, Phase 2)
+  getScheduleInsights: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/schedule-insights`),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)
