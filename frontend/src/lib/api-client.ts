@@ -450,6 +450,19 @@ export const commissionerApi = {
       method: "POST",
       body: { message_type: messageType, content },
     }),
+
+  // AI Co-Commissioner Chat (AI Co-Commissioner v1, deferred item 7)
+  getChatHistory: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/chat`),
+  sendChatMessage: (leagueId: string, message: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/chat`, {
+      method: "POST",
+      body: { message },
+    }),
+  clearChatHistory: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/chat`, {
+      method: "DELETE",
+    }),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -29,6 +29,7 @@ import {
   BarChart3,
   CalendarClock,
   MessageSquare,
+  MessageCircle,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -77,7 +78,14 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights" | "messages";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights" | "messages" | "chat";
+
+interface ChatMessageItem {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
 
 const MESSAGE_TYPES = [
   { value: "trade_deadline", label: "Trade Deadline Reminder" },
@@ -257,6 +265,7 @@ export default function CommissionerPage() {
             { id: "insights" as Tab, label: "Scoring Insights", icon: BarChart3 },
             { id: "schedule-insights" as Tab, label: "Schedule Insights", icon: CalendarClock },
             { id: "messages" as Tab, label: "Messages", icon: MessageSquare },
+            { id: "chat" as Tab, label: "AI Chat", icon: MessageCircle },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -307,6 +316,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "messages" && (
           <MessagesPanel leagueId={leagueId} />
+        )}
+        {activeTab === "chat" && (
+          <ChatPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1862,6 +1874,150 @@ function MessagesPanel({ leagueId }: { leagueId: string }) {
           <><Send className="w-3.5 h-3.5" /> Send to League</>
         )}
       </button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 11: AI CO-COMMISSIONER CHAT (deferred item 7)
+// ═══════════════════════════════════════════
+// The first genuinely new UI pattern this initiative has needed --
+// every other tab is generate-once-and-display, not a real
+// back-and-forth. Grounded in a fresh league-data snapshot every
+// turn (see chat_service.py) -- not a generic chatbot.
+
+function ChatPanel({ leagueId }: { leagueId: string }) {
+  const [messages, setMessages] = useState<ChatMessageItem[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    commissionerApi
+      .getChatHistory(leagueId)
+      .then((data) => setMessages((data as { messages: ChatMessageItem[] }).messages))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load chat"))
+      .finally(() => setLoading(false));
+  }, [leagueId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages, sending]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setError("");
+    const optimisticUser: ChatMessageItem = {
+      id: `optimistic-${Date.now()}`, role: "user", content: text, created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimisticUser]);
+    setInput("");
+    try {
+      const reply = (await commissionerApi.sendChatMessage(leagueId, text)) as ChatMessageItem;
+      setMessages((prev) => [...prev, reply]);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to send message");
+    }
+    setSending(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleClear = async () => {
+    try {
+      await commissionerApi.clearChatHistory(leagueId);
+      setMessages([]);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to clear conversation");
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-surface-500">
+          Ask about league health, recent activity, trades, and more -- grounded in this league&apos;s actual data.
+        </p>
+        <button
+          onClick={handleClear}
+          className="inline-flex items-center gap-1 text-xs text-surface-500 hover:text-red-400 transition-colors"
+        >
+          <Trash2 className="w-3.5 h-3.5" /> Clear Conversation
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="h-96 overflow-y-auto bg-surface-800/50 border border-surface-700 rounded-2xl p-4 space-y-3 mb-3"
+      >
+        {loading ? (
+          <div className="text-center text-surface-500 text-sm">Loading...</div>
+        ) : messages.length === 0 ? (
+          <div className="text-center text-surface-500 text-sm">
+            No messages yet -- ask something like &quot;How healthy is the league?&quot;
+          </div>
+        ) : (
+          messages.map((m) => (
+            <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-gold-400 text-surface-900"
+                    : "bg-purple-400/10 border border-purple-400/20 text-surface-200"
+                }`}
+              >
+                {m.content}
+              </div>
+            </div>
+          ))
+        )}
+        {sending && (
+          <div className="flex justify-start">
+            <div className="px-3 py-2 rounded-2xl bg-purple-400/10 border border-purple-400/20 text-surface-400 text-sm inline-flex items-center gap-1.5">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Thinking...
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-end gap-2">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Ask the AI Co-Commissioner..."
+          rows={2}
+          className="flex-1 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500 resize-none"
+        />
+        <button
+          onClick={handleSend}
+          disabled={sending || !input.trim()}
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white disabled:opacity-50 transition-all"
+        >
+          {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+        </button>
+      </div>
     </div>
   );
 }
