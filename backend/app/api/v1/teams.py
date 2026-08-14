@@ -223,6 +223,22 @@ async def claim_team(
 
     team.owner_id = current_user.id
     team.is_cpu = False
+
+    # Dual-Squad (Phase 7): claiming one team of a linked pair also
+    # auto-claims its still-CPU partner as the SAME owner, atomically --
+    # reuses this existing "Claim CPU team" button rather than adding a
+    # second endpoint. Only mirrors the OWNER; claim_co_owner is
+    # deliberately NOT auto-mirrored (a manager might want a different
+    # or no co-owner per team). If the partner was already independently
+    # claimed by someone else (a race), this just leaves the pair split
+    # between two owners rather than erroring.
+    if league.league_type == LeagueType.DUAL_SQUAD and team.partner_team_id:
+        partner_result = await db.execute(select(Team).where(Team.id == team.partner_team_id))
+        partner = partner_result.scalar_one_or_none()
+        if partner and partner.is_cpu:
+            partner.owner_id = current_user.id
+            partner.is_cpu = False
+
     await db.commit()
     await db.refresh(team)
     return team
@@ -289,6 +305,15 @@ async def bulk_add_cpu_teams(
 
     count = min(req.count, available_slots)
 
+    # Dual-Squad (Phase 7): teams only ever come in linked pairs -- an
+    # odd leftover slot from a partially-full league is simply left
+    # unfilled by this call rather than creating a half-pair (max_teams
+    # is already validated even/>=4 for DUAL_SQUAD, see create_league/
+    # update_league, so this should be rare in practice).
+    is_dual_squad = league.league_type == LeagueType.DUAL_SQUAD
+    if is_dual_squad:
+        count = count - (count % 2)
+
     # Track A/B balance locally rather than re-querying per team -- teams
     # created earlier in this same loop aren't committed yet, so a query
     # wouldn't see them.
@@ -297,7 +322,8 @@ async def bulk_add_cpu_teams(
     b_count = sum(1 for t in existing if t.conference == "B")
 
     created = []
-    for i in range(count):
+    i = 0
+    while i < count:
         team_num = current_count + i + 1
         conference = None
         if is_conference:
@@ -315,7 +341,27 @@ async def bulk_add_cpu_teams(
             conference=conference,
         )
         db.add(team)
-        created.append(team)
+
+        if is_dual_squad:
+            partner = Team(
+                name=f"{req.name_prefix} {team_num + 1}",
+                owner_id=None,
+                league_id=league_id,
+                roster=[],
+                is_cpu=True,
+                conference=conference,
+            )
+            db.add(partner)
+            # Need real IDs (Team.id's default is a Python-side callable,
+            # only populated on flush) before cross-linking.
+            await db.flush()
+            team.partner_team_id = partner.id
+            partner.partner_team_id = team.id
+            created.extend([team, partner])
+            i += 2
+        else:
+            created.append(team)
+            i += 1
 
     await db.commit()
     for t in created:

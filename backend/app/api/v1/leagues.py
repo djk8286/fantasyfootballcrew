@@ -36,6 +36,13 @@ async def create_league(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Dual-Squad (Phase 7): teams only ever come in pairs, so max_teams
+    # must be even and at least 4 (2 pairs). Defensive -- the create-
+    # league frontend's slider already forces even/>=4 for every league
+    # type, but the API can be hit directly.
+    if league_data.league_type == LeagueType.DUAL_SQUAD and (league_data.max_teams < 4 or league_data.max_teams % 2 != 0):
+        raise HTTPException(status_code=422, detail="Dual-Squad leagues need an even number of teams, at least 4 (2 pairs)")
+
     # New leagues default to standard PPR scoring, not an empty config.
     # standings_service.calculate_week reads league.scoring_config directly
     # (no defaults merge -- that merge only happens in the GET /scoring
@@ -514,6 +521,8 @@ async def update_league(
     if update_data.max_teams is not None:
         if update_data.max_teams < team_count:
             raise HTTPException(status_code=400, detail=f"Cannot reduce max teams below current count ({team_count})")
+        if league.league_type == LeagueType.DUAL_SQUAD and (update_data.max_teams < 4 or update_data.max_teams % 2 != 0):
+            raise HTTPException(status_code=422, detail="Dual-Squad leagues need an even number of teams, at least 4 (2 pairs)")
         league.max_teams = update_data.max_teams
     if update_data.draft_type is not None:
         league.draft_type = update_data.draft_type
