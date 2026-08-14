@@ -177,6 +177,59 @@ def calculate_player_score(
     return round(total_points, 2)
 
 
+def calculate_player_score_by_category(
+    player_stats: Dict[str, Any],
+    scoring_config: Dict[str, Any],
+) -> Dict[str, float]:
+    """Same category loop as calculate_player_score, but returns the
+    per-category point breakdown instead of one summed total -- what
+    insights_service.py needs to find which scoring categories are
+    driving score variance week to week. A deliberate sibling, not a
+    refactor of calculate_player_score itself: that function's exact
+    rounding/return-float behavior is relied on elsewhere and pinned by
+    existing tests, so this duplicates its small loop rather than
+    risking it.
+
+    "bonus" (threshold-based) and "custom" (user-defined rules) each
+    get their own key in the returned dict, consistent with how
+    they're already distinct top-level scoring_config categories
+    everywhere else -- so a category_variance analysis can treat
+    "bonus points" as their own signal alongside passing/rushing/etc.
+
+    Returns: Dict of category -> points from that category (only for
+    categories present in scoring_config; a category contributing 0.0
+    still gets a key, since "this league scores kicking but a given
+    player got 0 kicking points this week" is different from "this
+    league doesn't score kicking at all").
+    """
+    if not player_stats:
+        return {}
+
+    by_category: Dict[str, float] = {}
+
+    for category, rules in scoring_config.items():
+        if category in ("custom", "bonus"):
+            continue
+        if not isinstance(rules, dict):
+            continue
+
+        category_points = 0.0
+        for stat_name, points_per_unit in rules.items():
+            if stat_name in player_stats:
+                stat_value = player_stats[stat_name]
+                if stat_value is not None:
+                    category_points += float(stat_value) * float(points_per_unit)
+        by_category[category] = round(category_points, 2)
+
+    if "bonus" in scoring_config and isinstance(scoring_config["bonus"], dict):
+        by_category["bonus"] = round(_calculate_bonus(player_stats, scoring_config["bonus"]), 2)
+
+    if "custom" in scoring_config and isinstance(scoring_config["custom"], list):
+        by_category["custom"] = round(_calculate_custom(player_stats, scoring_config["custom"]), 2)
+
+    return by_category
+
+
 def _calculate_bonus(player_stats: Dict[str, Any], bonus_rules: Dict[str, float]) -> float:
     """Calculate threshold-based bonus points."""
     bonus_points = 0.0

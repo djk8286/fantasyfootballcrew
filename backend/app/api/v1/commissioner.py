@@ -22,6 +22,7 @@ from app.services.salary_cap_service import get_salary_cap_settings, team_cap_su
 from app.services.commissioner_digest_service import generate_and_save_digest, get_digest
 from app.services.trade_review_service import generate_and_save_trade_review
 from app.services.league_health_service import compute_league_health
+from app.services.insights_service import compute_scoring_insights
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -537,3 +538,21 @@ async def get_league_health(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     return await compute_league_health(league, db)
+
+
+# ═══════════════════════════════════════════════
+#  6. SCORING & RULE INSIGHTS (AI Co-Commissioner v1, Phase 2)
+# ═══════════════════════════════════════════════
+# Pure computation, zero LLM calls -- see insights_service.py. Cheap
+# and deterministic, same shape as Section 5: no rate limit, no
+# persistence, recomputed fresh on every request.
+
+@router.get("/insights")
+async def get_scoring_insights(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    return await compute_scoring_insights(league, db)
