@@ -64,3 +64,9 @@ class MessageDraftRequest(BaseModel):
 class MessageSendRequest(BaseModel):
     message_type: str
     content: str
+
+
+# AI Co-Commissioner v1, deferred item 7 -- AI Co-Commissioner Chat.
+
+class ChatMessageRequest(BaseModel):
+    message: str

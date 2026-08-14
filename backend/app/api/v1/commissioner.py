@@ -14,6 +14,7 @@ from app.schemas.commissioner import (
     ScoreAdjustmentCreate, ScoreAdjustmentRead,
     TradeReview, TradeRead, DraftOrderUpdate,
     MessageDraftRequest, MessageSendRequest,
+    ChatMessageRequest,
 )
 from app.api.deps import get_current_user, require_commissioner
 from app.services.notification_service import notify_team_owners
@@ -26,6 +27,7 @@ from app.services.league_health_service import compute_league_health
 from app.services.insights_service import compute_scoring_insights
 from app.services.schedule_insights_service import compute_strength_of_schedule
 from app.services.message_service import MESSAGE_TYPES, draft_message, send_message
+from app.services.chat_service import get_chat_history, send_chat_message, clear_chat_history
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -628,3 +630,59 @@ async def send_commissioner_message(
     require_commissioner(league, current_user)
     recipients = await send_message(league, body.content, db)
     return {"recipients": recipients}
+
+
+# ═══════════════════════════════════════════════
+#  9. AI CO-COMMISSIONER CHAT (deferred item 7)
+# ═══════════════════════════════════════════════
+# One ongoing conversation per league, grounded fresh on every turn in
+# the same computed data already powering Sections 5-7 -- see
+# chat_service.py. GET/DELETE are unrated (no LLM call); POST is
+# rate-limited higher than the one-shot digest/trade-review/message
+# generation endpoints (20/hour vs 10/hour) since a real back-and-forth
+# conversation is naturally higher-frequency than "generate once."
+
+def _chat_message_dict(m) -> dict:
+    return {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at}
+
+
+@router.get("/chat")
+async def get_chat(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    history = await get_chat_history(league_id, db)
+    return {"messages": [_chat_message_dict(m) for m in history]}
+
+
+@router.post("/chat")
+@limiter.limit("20/hour")
+async def post_chat(
+    request: Request,
+    league_id: str,
+    body: ChatMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not body.message or not body.message.strip():
+        raise HTTPException(status_code=422, detail="message must not be empty")
+
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    reply = await send_chat_message(league, body.message, db)
+    return _chat_message_dict(reply)
+
+
+@router.delete("/chat")
+async def delete_chat(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    await clear_chat_history(league_id, db)
+    return {"status": "cleared"}
