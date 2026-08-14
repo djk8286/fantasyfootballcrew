@@ -18,6 +18,12 @@ class NotificationType(str, enum.Enum):
     JOIN_REQUEST_RECEIVED = "join_request_received"
     JOIN_REQUEST_DECIDED = "join_request_decided"
     TEAM_ELIMINATED = "team_eliminated"
+    # AI Co-Commissioner v1, Phase 2 -- Communication Helpers. A
+    # commissioner-drafted-and-sent broadcast (trade deadline reminder,
+    # playoff explanation, inactivity warning, general announcement),
+    # delivered via notify_league_teams. Distinct from every other
+    # value here, which are all system-generated from a state change.
+    COMMISSIONER_MESSAGE = "commissioner_message"
 
 
 class Notification(Base):

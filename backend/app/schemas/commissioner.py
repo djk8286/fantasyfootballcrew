@@ -51,3 +51,16 @@ class TradeRead(BaseModel):
 
 class DraftOrderUpdate(BaseModel):
     team_order: list[str]  # Array of team IDs in desired order
+
+
+# AI Co-Commissioner v1, Phase 2 -- Communication Helpers.
+
+class MessageDraftRequest(BaseModel):
+    message_type: str
+    tone: str = "professional"
+    custom_context: Optional[str] = None
+
+
+class MessageSendRequest(BaseModel):
+    message_type: str
+    content: str

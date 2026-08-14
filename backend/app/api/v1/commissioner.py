@@ -13,6 +13,7 @@ from app.services.best_ball_service import get_best_ball_settings, is_window_ope
 from app.schemas.commissioner import (
     ScoreAdjustmentCreate, ScoreAdjustmentRead,
     TradeReview, TradeRead, DraftOrderUpdate,
+    MessageDraftRequest, MessageSendRequest,
 )
 from app.api.deps import get_current_user, require_commissioner
 from app.services.notification_service import notify_team_owners
@@ -24,6 +25,7 @@ from app.services.trade_review_service import generate_and_save_trade_review
 from app.services.league_health_service import compute_league_health
 from app.services.insights_service import compute_scoring_insights
 from app.services.schedule_insights_service import compute_strength_of_schedule
+from app.services.message_service import MESSAGE_TYPES, draft_message, send_message
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -574,3 +576,55 @@ async def get_schedule_insights(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     return await compute_strength_of_schedule(league, db)
+
+
+# ═══════════════════════════════════════════════
+#  8. COMMUNICATION HELPERS (AI Co-Commissioner v1, Phase 2)
+# ═══════════════════════════════════════════════
+# Draft (LLM, real spend) -> commissioner reviews/edits -> Send
+# (fans out via the existing Notification system, no LLM call). The
+# two are separate endpoints on purpose: sending never re-generates,
+# it delivers exactly the content the commissioner submits, which may
+# be their edited version of the draft.
+
+_VALID_MESSAGE_TYPES = set(MESSAGE_TYPES.keys())
+
+
+@router.post("/messages/draft")
+@limiter.limit("10/hour")
+async def draft_commissioner_message(
+    request: Request,
+    league_id: str,
+    body: MessageDraftRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if body.message_type not in _VALID_MESSAGE_TYPES:
+        raise HTTPException(status_code=422, detail=f"message_type must be one of {sorted(_VALID_MESSAGE_TYPES)}")
+    if body.tone not in _VALID_TONES:
+        raise HTTPException(status_code=422, detail=f"tone must be one of {sorted(_VALID_TONES)}")
+
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    content = await draft_message(league, body.message_type, body.tone, body.custom_context, db)
+    return {"content": content}
+
+
+@router.post("/messages/send")
+@limiter.limit("20/hour")  # spam guard on fanning out to every team, not an LLM-cost limit -- no LLM call happens here at all
+async def send_commissioner_message(
+    request: Request,
+    league_id: str,
+    body: MessageSendRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if body.message_type not in _VALID_MESSAGE_TYPES:
+        raise HTTPException(status_code=422, detail=f"message_type must be one of {sorted(_VALID_MESSAGE_TYPES)}")
+    if not body.content or not body.content.strip():
+        raise HTTPException(status_code=422, detail="content must not be empty")
+
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    recipients = await send_message(league, body.content, db)
+    return {"recipients": recipients}

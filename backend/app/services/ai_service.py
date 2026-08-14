@@ -30,6 +30,17 @@ LENGTH_INSTRUCTIONS: Dict[str, str] = {
     "full": "Write the full, detailed digest as specified below.",
 }
 
+# AI Co-Commissioner v1 Phase 2: Communication Helpers. message_type
+# drives which fixed instructional framing COMMISSIONER_MESSAGE_PROMPT
+# uses -- an unrecognized value falls back to "general" rather than
+# raising, same degrade-gracefully convention as TONE_INSTRUCTIONS.
+MESSAGE_TYPE_INSTRUCTIONS: Dict[str, str] = {
+    "trade_deadline": "Write a reminder that the trade deadline is approaching -- encourage managers to finish any deals before it passes.",
+    "playoff_explanation": "Explain how the playoffs work for this league, using the actual playoff settings provided below -- who makes it, how seeding works, and when it starts.",
+    "inactivity_warning": "Write a gentle-but-clear warning about inactive teams in the league, using the specific at-risk team names provided below -- encourage them to get engaged without naming-and-shaming or being harsh.",
+    "general": "Write a general announcement to the league based on the additional context provided below.",
+}
+
 
 # Default analysis prompts
 LINEUP_ANALYSIS_PROMPT = """
@@ -166,6 +177,26 @@ After the RECOMMENDATION line, cover in plain text:
 1. FAIRNESS -- is the trade roughly balanced under this league's actual scoring?
 2. LEAGUE IMPACT -- how does this affect competitive balance/standings?
 3. PATTERN CHECK -- anything about the history between these two teams worth flagging (or explicitly say nothing stands out)?
+"""
+
+COMMISSIONER_MESSAGE_PROMPT = """
+You are a fantasy football league commissioner's assistant, drafting a
+message the commissioner will review, optionally edit, and send to
+every team in the league. Plain text only, no markdown syntax -- this
+gets read as-is, not rendered.
+
+{message_type_instruction}
+
+{tone_instruction}
+
+**League:** {league_name}
+
+**Additional context:**
+{context}
+
+Write ONLY the message itself -- no preamble, no "Here's a draft:",
+no sign-off unless it feels natural. This is a broadcast to the whole
+league, not a private note to the commissioner.
 """
 
 BET_ANALYSIS_PROMPT = """
@@ -309,6 +340,27 @@ class AIService:
             standings=json.dumps(standings or [], indent=2),
             recent_trades_between_teams=json.dumps(recent_trades_between_teams or [], indent=2),
             scoring_config=json.dumps(scoring_config or {}, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_commissioner_message(
+        self,
+        league_name: str,
+        message_type: str,
+        tone: str = "professional",
+        context: Optional[dict] = None,
+    ) -> str:
+        """Drafts a commissioner broadcast message (trade deadline
+        reminder, playoff explanation, inactivity warning, general
+        announcement) -- see message_service.py for how context is
+        assembled per message_type and how the draft gets sent via
+        notify_league_teams. Never sends anything itself -- this only
+        returns the drafted text for the commissioner to review/edit."""
+        prompt = COMMISSIONER_MESSAGE_PROMPT.format(
+            message_type_instruction=MESSAGE_TYPE_INSTRUCTIONS.get(message_type, MESSAGE_TYPE_INSTRUCTIONS["general"]),
+            tone_instruction=TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["professional"]),
+            league_name=league_name,
+            context=json.dumps(context or {}, indent=2),
         )
         return await self._call_llm(prompt)
 

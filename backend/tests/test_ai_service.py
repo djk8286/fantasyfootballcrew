@@ -331,3 +331,46 @@ async def test_trade_review_no_api_key_never_calls_network_path():
     service = AIService(api_key=None)
     result = await service.generate_trade_review(league_name="X", proposer_name="A", target_name="B")
     assert "not configured" in result
+
+
+# ─── Communication Helpers (AI Co-Commissioner v1, Phase 2) ────────────
+
+@pytest.mark.asyncio
+async def test_commissioner_message_prompt_uses_correct_message_type_framing():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_commissioner_message(
+        league_name="Test League", message_type="inactivity_warning",
+        context={"at_risk_teams": ["Ghost Team"]},
+    )
+    assert "Test League" in captured["prompt"]
+    assert "inactive" in captured["prompt"].lower()
+    assert "Ghost Team" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_commissioner_message_prompt_unrecognized_type_falls_back_to_general():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    # Must never KeyError, even with a nonsense message_type.
+    await service.generate_commissioner_message(league_name="X", message_type="nonsense")
+    assert "general announcement" in captured["prompt"].lower()
+
+
+@pytest.mark.asyncio
+async def test_commissioner_message_no_api_key_never_calls_network_path():
+    service = AIService(api_key=None)
+    result = await service.generate_commissioner_message(league_name="X", message_type="general")
+    assert "not configured" in result
