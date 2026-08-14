@@ -80,6 +80,7 @@ const features = [
       "Scoring & Rule Balance Insights — flags scoring categories, coach bonuses, or positions that are creating outsized swings, as suggestions with the data behind them",
       "Schedule Insights — see which teams have an unusually easy or hard run of remaining opponents",
       "Communication Helpers — AI-drafted trade deadline reminders, playoff explanations, and inactivity warnings you can edit before sending to the whole league",
+      "AI Co-Commissioner Chat — ask \"how healthy is the league?\" or \"summarize the last two weeks\" and get answers grounded in your league's real data",
     ],
   },
   {
