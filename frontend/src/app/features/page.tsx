@@ -77,6 +77,9 @@ const features = [
       "Weekly AI-generated commissioner digests — power rankings, storylines, and a waiver/trade recap, with tone and length control",
       "AI Trade Review Assistant — a fairness/collusion check with a clear Approve, Review Closely, or Veto recommendation for the commissioner",
       "League Health Dashboard — engagement and parity at a glance, with plain-language explanations for every flagged team",
+      "Scoring & Rule Balance Insights — flags scoring categories, coach bonuses, or positions that are creating outsized swings, as suggestions with the data behind them",
+      "Schedule Insights — see which teams have an unusually easy or hard run of remaining opponents",
+      "Communication Helpers — AI-drafted trade deadline reminders, playoff explanations, and inactivity warnings you can edit before sending to the whole league",
     ],
   },
   {
