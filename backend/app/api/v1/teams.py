@@ -247,6 +247,16 @@ async def delete_team(
     if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
         raise HTTPException(status_code=403, detail="Commissioner access required")
 
+    # Dual-Squad (Phase 7): clear the partner's pointer first so deleting
+    # one half of a pair doesn't leave a dangling partner_team_id (or hit
+    # an FK error on Postgres, which has no ondelete configured here,
+    # same as every other FK column in this codebase).
+    if team.partner_team_id:
+        partner_result = await db.execute(select(Team).where(Team.id == team.partner_team_id))
+        partner = partner_result.scalar_one_or_none()
+        if partner:
+            partner.partner_team_id = None
+
     await db.delete(team)
     await db.commit()
     return None

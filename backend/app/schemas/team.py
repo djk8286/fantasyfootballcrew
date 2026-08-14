@@ -25,6 +25,7 @@ class TeamRead(BaseModel):
     name: str
     owner_id: Optional[str] = None
     co_owner_id: Optional[str] = None
+    partner_team_id: Optional[str] = None
     league_id: str
     avatar_url: Optional[str] = None
     is_cpu: bool = False

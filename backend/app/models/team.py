@@ -14,6 +14,16 @@ class Team(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     owner_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     co_owner_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    # Dual-Squad/Mirror (Phase 7). Self-referential, symmetric -- if
+    # A.partner_team_id == B.id then B.partner_team_id == A.id is also
+    # set, in the same transaction (see teams.bulk_add_cpu_teams/
+    # claim_team). Only meaningful for League.league_type == "dual_squad"
+    # (None everywhere else), same "meaningless but harmless" precedent
+    # Team.conference already follows for non-CONFERENCE leagues. See
+    # standings_service._effective_matchups for how this keeps a
+    # manager's own two teams from ever being scheduled against each
+    # other, and get_combined_standings for the paired standings view.
+    partner_team_id: Mapped[str | None] = mapped_column(String, ForeignKey("teams.id"), nullable=True, index=True)
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_cpu: Mapped[bool] = mapped_column(default=False)

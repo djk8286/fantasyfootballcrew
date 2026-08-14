@@ -13,6 +13,7 @@ class LeagueType(str, enum.Enum):
     TWO_MAN = "two_man"
     CONFERENCE = "conference"
     GUILLOTINE = "guillotine"
+    DUAL_SQUAD = "dual_squad"
 
 
 class DraftStatus(str, enum.Enum):
