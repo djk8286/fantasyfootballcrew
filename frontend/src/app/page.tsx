@@ -48,7 +48,7 @@ const features = [
     icon: Bot,
     title: "AI-Powered Analysis",
     description:
-      "Lineup optimization, trade evaluation, bet analysis — all powered by AI that considers matchups, weather, and trends.",
+      "Lineup optimization, trade evaluation, bet analysis, and weekly AI-generated commissioner digests — all powered by AI that considers matchups, weather, and trends.",
     gradient: "from-purple-400 to-pink-500",
   },
   {

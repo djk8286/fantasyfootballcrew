@@ -74,6 +74,7 @@ const features = [
       "Start/sit recommendations based on your actual scoring config",
       "Trade grades that account for both sides of the deal",
       "Freeform betting-angle analysis for any matchup you ask about",
+      "Weekly AI-generated commissioner digests — power rankings, storylines, and a waiver/trade recap, on demand",
     ],
   },
   {
