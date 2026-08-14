@@ -75,10 +75,10 @@ class DraftPick(Base):
     __tablename__ = "draft_picks"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    draft_id: Mapped[str] = mapped_column(String, ForeignKey("drafts.id"), nullable=False)
-    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
-    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False)
-    player_id: Mapped[str] = mapped_column(String, ForeignKey("players.id"), nullable=False)
+    draft_id: Mapped[str] = mapped_column(String, ForeignKey("drafts.id"), nullable=False, index=True)
+    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
+    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False, index=True)
+    player_id: Mapped[str] = mapped_column(String, ForeignKey("players.id"), nullable=False, index=True)
     round: Mapped[int] = mapped_column(Integer, nullable=False)
     pick_number: Mapped[int] = mapped_column(Integer, nullable=False)
     drafted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

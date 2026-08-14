@@ -56,7 +56,7 @@ class PlayoffMatchup(Base):
     __tablename__ = "playoff_matchups"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    playoff_id: Mapped[str] = mapped_column(String, ForeignKey("playoffs.id"), nullable=False)
+    playoff_id: Mapped[str] = mapped_column(String, ForeignKey("playoffs.id"), nullable=False, index=True)
     # "combined" | "A" | "B" -- which sub-bracket this belongs to.
     bracket: Mapped[str] = mapped_column(String, nullable=False, default="combined")
     round: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based

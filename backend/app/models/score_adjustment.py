@@ -9,8 +9,8 @@ class ScoreAdjustment(Base):
     __tablename__ = "score_adjustments"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
-    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False)
+    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
+    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False, index=True)
     week: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)  # positive=add, negative=deduct

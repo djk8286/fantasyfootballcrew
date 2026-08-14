@@ -25,8 +25,8 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
-    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False)
+    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
+    team_id: Mapped[str] = mapped_column(String, ForeignKey("teams.id"), nullable=False, index=True)
     type: Mapped[TransactionType] = mapped_column(Enum(TransactionType), nullable=False)
     status: Mapped[TransactionStatus] = mapped_column(Enum(TransactionStatus), default=TransactionStatus.PENDING)
     details: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)

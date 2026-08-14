@@ -50,7 +50,14 @@ EASY_STRETCH_RATIO = 0.85
 NEXT_STRETCH_WEEKS = 3
 
 
-async def compute_strength_of_schedule(league: League, db: AsyncSession) -> dict[str, Any]:
+async def compute_strength_of_schedule(
+    league: League, db: AsyncSession, standings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """standings: pass a pre-computed get_standings(league.id, db) result
+    when the caller already has one in hand -- see
+    league_health_service.compute_league_health's identical parameter
+    for why (chat_service.build_chat_context is the caller that needs
+    this)."""
     playoff_settings = get_playoff_settings(league)
     season_weeks = playoff_settings["regular_season_weeks"] if playoff_settings["enabled"] else DEFAULT_SEASON_WEEKS
 
@@ -88,7 +95,7 @@ async def compute_strength_of_schedule(league: League, db: AsyncSession) -> dict
             "teams": [],
         }
 
-    strength_by_team = await _opponent_strength_by_team(league, db)
+    strength_by_team = await _opponent_strength_by_team(league, db, standings)
     league_avg_strength = statistics.mean(strength_by_team.values()) if strength_by_team else 0.0
 
     opponents_by_team: dict[str, list[str | None]] = {t.id: [] for t in alive_teams}
@@ -115,7 +122,9 @@ async def compute_strength_of_schedule(league: League, db: AsyncSession) -> dict
     }
 
 
-async def _opponent_strength_by_team(league: League, db: AsyncSession) -> dict[str, float]:
+async def _opponent_strength_by_team(
+    league: League, db: AsyncSession, standings: list[dict[str, Any]] | None = None,
+) -> dict[str, float]:
     """Points-for-per-game as the team-strength proxy (no power ranking
     or projection model exists anywhere in this app to reuse instead).
     Dual-Squad leagues use each team's PARTNER-PAIR combined points
@@ -137,7 +146,7 @@ async def _opponent_strength_by_team(league: League, db: AsyncSession) -> dict[s
         # weeks, so either partner's own game count is the pair's real
         # "games played as a unit"). Using individual get_standings
         # rows directly, summed per pair, avoids that trap.
-        individual = await get_standings(league.id, db)
+        individual = standings if standings is not None else await get_standings(league.id, db)
         by_team_id = {row["team_id"]: row for row in individual}
         partner_of = {tid: pid for tid, pid in (await db.execute(
             select(Team.id, Team.partner_team_id).where(Team.league_id == league.id)
@@ -149,7 +158,7 @@ async def _opponent_strength_by_team(league: League, db: AsyncSession) -> dict[s
             combined_points = row["points_for"] + (partner_row["points_for"] if partner_row else 0.0)
             strength[team_id] = round(combined_points / games, 2) if games else 0.0
     else:
-        for row in await get_standings(league.id, db):
+        for row in (standings if standings is not None else await get_standings(league.id, db)):
             games = row["wins"] + row["losses"] + row["ties"]
             strength[row["team_id"]] = round(row["points_for"] / games, 2) if games else 0.0
     return strength

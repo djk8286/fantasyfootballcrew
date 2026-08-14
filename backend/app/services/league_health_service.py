@@ -45,7 +45,15 @@ AT_RISK_LINEUP_RATE = 0.5   # below this fraction of weeks with a set lineup...
 AT_RISK_MAX_TRANSACTIONS = 0  # ...and this few transactions all season -> at-risk
 
 
-async def compute_league_health(league: League, db: AsyncSession) -> dict[str, Any]:
+async def compute_league_health(
+    league: League, db: AsyncSession, standings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """standings: pass a pre-computed get_standings(league.id, db) result
+    when the caller already has one in hand (chat_service.build_chat_context
+    calls this + compute_strength_of_schedule + get_standings itself on
+    every chat turn -- without this, that's 3 full standings recomputes
+    for one message). None (default) computes it fresh, unchanged for
+    every other caller (this endpoint's own direct GET, message_service)."""
     teams_result = await db.execute(select(Team).where(Team.league_id == league.id))
     teams = teams_result.scalars().all()
 
@@ -84,7 +92,8 @@ async def compute_league_health(league: League, db: AsyncSession) -> dict[str, A
     )
     transaction_counts = dict(tx_result.all())
 
-    standings = await get_standings(league.id, db)
+    if standings is None:
+        standings = await get_standings(league.id, db)
     points = [s["points_for"] for s in standings] or [0.0]
     avg_points = sum(points) / len(points) if points else 0.0
     parity_spread = (

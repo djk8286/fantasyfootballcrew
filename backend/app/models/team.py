@@ -24,7 +24,7 @@ class Team(Base):
     # manager's own two teams from ever being scheduled against each
     # other, and get_combined_standings for the paired standings view.
     partner_team_id: Mapped[str | None] = mapped_column(String, ForeignKey("teams.id"), nullable=True, index=True)
-    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
+    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_cpu: Mapped[bool] = mapped_column(default=False)
     # Only meaningful for League.league_type == "conference" -- which of the

@@ -825,21 +825,47 @@ async def get_ai_mock_pick(
     db: AsyncSession,
     draft_id: str,
     team_id: str,
+    current_round: Optional[int] = None,
+    total_rounds: Optional[int] = None,
+    available_players: Optional[list[Player]] = None,
 ) -> Optional[Player]:
     """
     AI-powered mock draft pick with smart tier-based ranking.
     Uses known NFL player tiers, position scarcity, and team needs.
-    """
-    result = await db.execute(select(Draft).where(Draft.id == draft_id))
-    draft = result.scalar_one_or_none()
-    if not draft:
-        return None
 
-    # Get already drafted player IDs
-    result = await db.execute(
-        select(DraftPick.player_id).where(DraftPick.draft_id == draft_id)
-    )
-    drafted_ids = {row[0] for row in result.all()}
+    current_round/total_rounds/available_players: pass these when the
+    caller (run_mock_draft) already has them in hand -- avoids
+    re-fetching the Draft row and the full undrafted-eligible-position
+    player pool (up to ~9,400 rows in production) on every single pick
+    of what can be a 180-pick mock draft. All default to None
+    (self-fetch, unchanged), which is what the standalone
+    POST /drafts/{id}/auto-pick endpoint (one pick at a time, no loop
+    state to reuse) still gets.
+    """
+    if current_round is None or total_rounds is None:
+        result = await db.execute(select(Draft).where(Draft.id == draft_id))
+        draft = result.scalar_one_or_none()
+        if not draft:
+            return None
+        current_round = draft.current_round
+        total_rounds = draft.total_rounds
+
+    if available_players is None:
+        # Get already drafted player IDs
+        result = await db.execute(
+            select(DraftPick.player_id).where(DraftPick.draft_id == draft_id)
+        )
+        drafted_ids = {row[0] for row in result.all()}
+        # Filtered to FANTASY_POSITIONS at the query level -- the scoring
+        # loop below already skipped anything outside pos_rank's keys, so
+        # this is a pure efficiency change (less loaded from the DB and
+        # iterated in Python), not a behavior change.
+        result = await db.execute(
+            select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
+        )
+        available = result.scalars().all()
+    else:
+        available = available_players
 
     # Get the team's existing picks this draft
     result = await db.execute(
@@ -861,24 +887,15 @@ async def get_ai_mock_pick(
     # this used to rebuild the tier dict and linearly substring-scan it for
     # every available player (up to ~9,400 in production) on every call.
 
-    # Get available players. Filtered to FANTASY_POSITIONS at the query level
-    # now -- the scoring loop below already skipped anything outside
-    # pos_rank's keys, so this is a pure efficiency change (less loaded from
-    # the DB and iterated in Python), not a behavior change.
-    result = await db.execute(
-        select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
-    )
-    available = result.scalars().all()
-
     # Position priority by round
-    if draft.current_round <= 2:
+    if current_round <= 2:
         # Early: elite RBs, WRs, top QBs
         pos_rank = {"RB": 0, "WR": 1, "TE": 2, "QB": 3, "DEF": 10, "K": 10}
-    elif draft.current_round <= 5:
+    elif current_round <= 5:
         pos_rank = {"RB": 0, "WR": 0, "QB": 1, "TE": 2, "DEF": 10, "K": 10}
-    elif draft.current_round <= 8:
+    elif current_round <= 8:
         pos_rank = {"RB": 0, "WR": 0, "TE": 1, "QB": 1, "DEF": 8, "K": 10}
-    elif draft.current_round <= 12:
+    elif current_round <= 12:
         pos_rank = {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 5, "K": 8}
     else:
         pos_rank = {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 0, "K": 0}
@@ -894,7 +911,7 @@ async def get_ai_mock_pick(
     # gap against a deep bench of ranked skill players -- confirmed
     # empirically: 0 kickers drafted across 36 sampled CPU teams in full
     # 12-team/15-round mock drafts before this rule was added.
-    rounds_left = draft.total_rounds - draft.current_round + 1
+    rounds_left = total_rounds - current_round + 1
     unfilled_starters = {p for p, need in CPU_STARTER_SLOTS.items() if team_positions.get(p, 0) < need}
     must_fill_now = len(unfilled_starters) >= rounds_left
 
@@ -961,7 +978,7 @@ async def get_ai_mock_pick(
     if scored_players:
         best_score = scored_players[0][0]
         # Pick from top contenders with some randomness
-        top_tier_count = 3 if draft.current_round <= 5 else 5
+        top_tier_count = 3 if current_round <= 5 else 5
         top_tier = [p for s, p in scored_players if s <= best_score + 40]
         candidates = top_tier[:max(top_tier_count * 2, 6)]
         return random.choice(candidates)
@@ -971,14 +988,28 @@ async def get_ai_mock_pick(
 
 async def run_mock_draft(db: AsyncSession, draft_id: str, skip_team_ids: list[str] | None = None) -> list[dict]:
     """Run a mock draft with AI auto-picks.
-    
+
     If skip_team_ids is provided, those teams' picks are left open
     for manual drafting (hybrid mock mode).
+
+    Performance note: this used to re-fetch the Draft row AND the full
+    undrafted-eligible-position player pool (up to ~9,400 rows in
+    production) on every single iteration -- ~2,000+ queries for one
+    12-team/15-round (180-pick) mock draft. make_pick itself (the actual
+    write path, shared with real human drafts) is untouched below --
+    still the sole writer of Draft/DraftPick/Team.roster, still fully
+    CAS-protected. What changed is that this loop no longer re-reads
+    state make_pick just wrote a moment ago in the same process: round/
+    pick/status are tracked locally using the EXACT same advance formula
+    make_pick's own CAS update uses (so they stay perfectly in sync with
+    what make_pick independently re-reads from the DB on its next call),
+    and the undrafted-player pool is fetched once and trimmed in memory
+    as each pick is made.
     """
     if skip_team_ids is None:
         skip_team_ids = []
     skip_set = set(skip_team_ids)
-    
+
     result = await db.execute(select(Draft).where(Draft.id == draft_id))
     draft = result.scalar_one_or_none()
     if not draft:
@@ -987,25 +1018,41 @@ async def run_mock_draft(db: AsyncSession, draft_id: str, skip_team_ids: list[st
     # Start draft if pending
     if draft.status == DraftRunStatus.PENDING:
         await start_draft(db, draft_id)
-    
+
     team_order_list = json.loads(draft.team_order)
     team_result = await db.execute(select(Team).where(Team.league_id == draft.league_id))
     teams_by_id = {t.id: t for t in team_result.scalars().all()}
+    num_teams = len(teams_by_id)
+
+    # Local mirror of Draft's own state, captured AFTER the possible
+    # start_draft() call above (which mutates this same session-identity-
+    # mapped `draft` object in place, so these reads already reflect it).
+    # Never written back to the DB or the `draft` ORM object from here --
+    # make_pick remains the only writer, via its own CAS update.
+    current_round = draft.current_round
+    current_pick = draft.current_pick
+    total_rounds = draft.total_rounds
+    status = draft.status
+
+    # Fetch the undrafted eligible-position player pool ONCE -- was the
+    # single biggest cost in the old per-iteration query (see docstring).
+    drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
+    drafted_ids = {row[0] for row in drafted_result.all()}
+    available_result = await db.execute(
+        select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
+    )
+    available_players = list(available_result.scalars().all())
 
     all_picks = []
     max_picks = len(team_order_list)
-    
-    for _ in range(max_picks):
-        # Re-fetch draft to get current state
-        result = await db.execute(select(Draft).where(Draft.id == draft_id))
-        draft = result.scalar_one_or_none()
 
-        if draft.status != DraftRunStatus.IN_PROGRESS:
+    for _ in range(max_picks):
+        if status != DraftRunStatus.IN_PROGRESS:
             break
 
-        # Get who's picking
-        num_teams = len(teams_by_id)
-        pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
+        pick_index = (current_round - 1) * num_teams + (current_pick - 1)
+        if pick_index >= len(team_order_list):
+            break
         current_team_id = team_order_list[pick_index]
 
         # If it's a user team's turn — STOP and let them pick manually
@@ -1013,11 +1060,23 @@ async def run_mock_draft(db: AsyncSession, draft_id: str, skip_team_ids: list[st
             break
 
         # Get AI pick
-        player = await get_ai_mock_pick(db, draft_id, current_team_id)
+        player = await get_ai_mock_pick(
+            db, draft_id, current_team_id,
+            current_round=current_round, total_rounds=total_rounds, available_players=available_players,
+        )
         if not player:
             break
 
-        # Make the pick
+        # Make the pick (unchanged CAS-protected write path)
         pick = await make_pick(db, draft_id, current_team_id, player.id)
         all_picks.append(pick)
+        available_players = [p for p in available_players if p.id != player.id]
+
+        # Advance the local mirror using the identical formula make_pick's
+        # own CAS update just applied to the DB row.
+        if current_pick >= num_teams:
+            current_round, current_pick = current_round + 1, 1
+        else:
+            current_pick += 1
+        status = DraftRunStatus.COMPLETED if current_round > total_rounds else DraftRunStatus.IN_PROGRESS
     return all_picks

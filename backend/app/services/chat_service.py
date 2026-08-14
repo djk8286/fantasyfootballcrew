@@ -104,11 +104,21 @@ async def build_chat_context(league: League, db: AsyncSession) -> dict[str, Any]
         for t in tx_result.scalars().all()
     ]
 
+    # Computed once and threaded through -- league_health/schedule_insights
+    # each independently call get_standings themselves when not given one
+    # (their own direct GET endpoints still do exactly that), but chat
+    # needs all three in the same turn, and it's the identical
+    # get_standings(league.id, db) result every time. Was 3 full
+    # standings recomputes per chat message before this; now 1.
+    standings = await get_standings(league.id, db)
+
     return {
-        "standings": await get_standings(league.id, db),
-        "league_health": _compact_health(await compute_league_health(league, db)),
+        "standings": standings,
+        "league_health": _compact_health(await compute_league_health(league, db, standings=standings)),
         "scoring_insights": await compute_scoring_insights(league, db),
-        "schedule_insights": _compact_schedule_insights(await compute_strength_of_schedule(league, db)),
+        "schedule_insights": _compact_schedule_insights(
+            await compute_strength_of_schedule(league, db, standings=standings)
+        ),
         "recent_transactions": recent_transactions,
     }
 

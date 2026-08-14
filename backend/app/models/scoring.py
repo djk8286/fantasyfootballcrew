@@ -9,7 +9,7 @@ class ScoringConfig(Base):
     __tablename__ = "scoring_configs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False)
+    league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.id"), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String, nullable=False)  # passing, rushing, receiving, defense, kicking, bonus, custom
     stat_name: Mapped[str] = mapped_column(String, nullable=False)  # must match Sleeper's raw keys exactly: pass_yd, rush_td, rec, etc.
     points_per_unit: Mapped[float] = mapped_column(Float, nullable=False)

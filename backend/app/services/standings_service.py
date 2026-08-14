@@ -22,44 +22,54 @@ from app.models.notification import NotificationType
 from app.services.best_ball_service import get_best_ball_settings
 
 
-async def _weekly_adjustment_total(team_id: str, week: int, year: int, db: AsyncSession) -> float:
-    """Sum of commissioner-added manual point adjustments for a team's
-    week. Commissioner.create_adjustment stores these, but nothing was
-    ever reading them back out -- they showed up in the commissioner
-    panel's list but had zero effect on the team's actual score or the
-    league standings."""
+async def _weekly_adjustment_totals(team_ids: List[str], week: int, year: int, db: AsyncSession) -> Dict[str, float]:
+    """Sum of commissioner-added manual point adjustments per team, for
+    every team_id in one query (batched -- calculate_week runs on a
+    2-minute scheduler tick for every active league all season, so a
+    per-team query here used to mean N round trips per call). A team
+    with no adjustments simply has no key in the returned dict; look up
+    with .get(team_id, 0.0). Commissioner.create_adjustment stores
+    these, but nothing was ever reading them back out -- they showed up
+    in the commissioner panel's list but had zero effect on the team's
+    actual score or the league standings."""
+    if not team_ids:
+        return {}
     result = await db.execute(
-        select(ScoreAdjustment).where(
-            ScoreAdjustment.team_id == team_id,
+        select(ScoreAdjustment.team_id, sql_func.sum(ScoreAdjustment.amount)).where(
+            ScoreAdjustment.team_id.in_(team_ids),
             ScoreAdjustment.week == week,
             ScoreAdjustment.year == year,
-        )
+        ).group_by(ScoreAdjustment.team_id)
     )
-    return sum(a.amount for a in result.scalars().all())
+    return {team_id: total or 0.0 for team_id, total in result.all()}
 
 
-async def _coach_bonus_sum(team_id: str, bonus_type: str, db: AsyncSession) -> float:
+async def _coach_bonus_sums(team_ids: List[str], bonus_type: str, db: AsyncSession) -> Dict[str, float]:
     """
-    Sum bonus_value from a team's active coaching staff at a given
-    bonus_type. Generalized from the original flat_weekly-only version
-    (Phase 2 Step 2, "Front-Office finish-out") so "win_bonus" -- and any
-    future bonus_type -- can share this same query instead of a
-    copy-pasted near-duplicate.
+    Sum bonus_value from each team's active coaching staff at a given
+    bonus_type, for every team_id in one query (batched -- see
+    _weekly_adjustment_totals' docstring for why this matters at this
+    call frequency). Generalized from the original flat_weekly-only
+    version (Phase 2 Step 2, "Front-Office finish-out") so "win_bonus"
+    -- and any future bonus_type -- can share this same query instead of
+    a copy-pasted near-duplicate. A team with no matching coach simply
+    has no key in the returned dict; look up with .get(team_id, 0.0).
 
     "flat_weekly" is unconditional (see calculate_week's first pass).
     "win_bonus" depends on a week's win/loss outcome, which calculate_week
     now determines itself via a second pass before this ever gets called
     for that bonus_type -- see calculate_week's docstring.
     """
+    if not team_ids:
+        return {}
     result = await db.execute(
-        select(Coach).where(
-            Coach.team_id == team_id,
+        select(Coach.team_id, sql_func.sum(Coach.bonus_value)).where(
+            Coach.team_id.in_(team_ids),
             Coach.is_active == True,  # noqa: E712
             Coach.bonus_type == bonus_type,
-        )
+        ).group_by(Coach.team_id)
     )
-    coaches = result.scalars().all()
-    return sum(c.bonus_value or 0.0 for c in coaches)
+    return {team_id: total or 0.0 for team_id, total in result.all()}
 
 
 # Rivalry Week (Phase 3, "Enhanced Conference/Rivalry") -- a commissioner-
@@ -322,8 +332,16 @@ async def calculate_week(
     )
     starters_by_team: Dict[str, list] = {lu.team_id: (lu.starters or []) for lu in lineups_result.scalars().all()}
 
-    # Batch load player data (sleeper_id -> position mapping)
+    # Batch load player data ONCE for the whole league -- position,
+    # sleeper_id mapping (both directions), and the full row itself (so
+    # the per-team loop below never needs to re-query Player at all,
+    # even in the Sleeper-API-failed fallback path; see week_stats
+    # below). all_player_ids is already the union of every team's
+    # roster, so this single batch covers every team's roster_ids too.
     player_positions: Dict[str, str] = {}
+    players_by_id: Dict[str, Player] = {}
+    player_id_to_sleeper: Dict[str, str] = {}
+    sleeper_to_player_id: Dict[str, str] = {}
     if all_player_ids:
         players_result = await db.execute(
             select(Player).where(Player.id.in_(list(all_player_ids)))
@@ -331,6 +349,9 @@ async def calculate_week(
         players = players_result.scalars().all()
         for p in players:
             player_positions[p.id] = p.position
+            players_by_id[p.id] = p
+            player_id_to_sleeper[p.id] = p.sleeper_id
+            sleeper_to_player_id[p.sleeper_id] = p.id
 
     # Use the caller's pre-fetched stats if given; otherwise fetch our own
     # (falls back to Player.week_stats per-player below on failure either
@@ -353,6 +374,13 @@ async def calculate_week(
     # total is in hand.
     base_totals: Dict[str, float] = {}
     lineup_data_by_team: Dict[str, Dict[str, Any]] = {}
+
+    # Batched once for every team, instead of one query per team inside
+    # the loop below (calculate_week runs on a 2-minute scheduler tick
+    # for every active league -- see _coach_bonus_sums'/
+    # _weekly_adjustment_totals' own docstrings).
+    flat_weekly_bonuses = await _coach_bonus_sums(team_ids, "flat_weekly", db)
+    adjustment_totals = await _weekly_adjustment_totals(team_ids, week, year, db)
 
     for team in teams:
         full_roster = set(team.roster or [])
@@ -377,29 +405,21 @@ async def calculate_week(
             total_score = 0.0
             lineup_data = {"total": 0.0, "breakdown": {}}
         else:
-            # Build per-player stats dict
+            # Build per-player stats dict. player_id_to_sleeper/
+            # players_by_id are the league-wide batch built above --
+            # every roster_ids entry is already covered by it (roster_ids
+            # is always a subset of all_player_ids), so no query needed
+            # here at all, including in the fallback branch.
             week_stats: Dict[str, Dict[str, Any]] = {}
-            player_id_to_sleeper: Dict[str, str] = {}
-            sleeper_to_player_id: Dict[str, str] = {}
-
-            # Map player internal IDs to Sleeper IDs
-            if all_player_ids:
-                sleeper_result = await db.execute(
-                    select(Player).where(Player.id.in_(roster_ids))
-                )
-                sleeper_players = sleeper_result.scalars().all()
-                for sp in sleeper_players:
-                    player_id_to_sleeper[sp.id] = sp.sleeper_id
-                    sleeper_to_player_id[sp.sleeper_id] = sp.id
-
             for pid in roster_ids:
                 if use_sleeper and pid in player_id_to_sleeper:
                     sleeper_id = player_id_to_sleeper[pid]
                     stats = sleeper_stats.get(sleeper_id, {})
                 else:
-                    # Fallback: load player from DB for week_stats
-                    p_result = await db.execute(select(Player).where(Player.id == pid))
-                    player = p_result.scalar_one_or_none()
+                    # Fallback (Sleeper API call failed for this whole
+                    # run): use the already-batched Player row's own
+                    # week_stats instead of a per-player query.
+                    player = players_by_id.get(pid)
                     stats = (player.week_stats or {}).get(str(week), {}) if player else {}
                 week_stats[pid] = stats
 
@@ -455,13 +475,13 @@ async def calculate_week(
                 lineup_data["auto_lineup"] = True
                 lineup_data["auto_starters"] = auto_starter_ids
 
-        coach_bonus = await _coach_bonus_sum(team.id, "flat_weekly", db)
+        coach_bonus = flat_weekly_bonuses.get(team.id, 0.0)
         if coach_bonus:
             total_score = round(total_score + coach_bonus, 2)
             lineup_data["total"] = total_score
             lineup_data["coach_bonus"] = coach_bonus
 
-        adjustment_total = await _weekly_adjustment_total(team.id, week, year, db)
+        adjustment_total = adjustment_totals.get(team.id, 0.0)
         if adjustment_total:
             total_score = round(total_score + adjustment_total, 2)
             lineup_data["total"] = total_score
@@ -504,13 +524,30 @@ async def calculate_week(
     # then upsert. A team with no win_bonus coach and no active rivalry
     # bonus, or a bye team this week (not in `matchups` at all -- odd
     # team count), just carries its base total through unchanged.
+    # Batched for just the winners (the only teams that can ever use
+    # this), instead of one query per winning team.
+    win_bonuses = await _coach_bonus_sums(list(winners), "win_bonus", db)
+
+    # Batched existing-row lookup for the upsert below -- one query for
+    # every team's (league_id, week, year) WeeklyScore instead of one
+    # query per team.
+    existing_result = await db.execute(
+        select(WeeklyScore).where(
+            WeeklyScore.league_id == league_id,
+            WeeklyScore.team_id.in_(team_ids),
+            WeeklyScore.week == week,
+            WeeklyScore.year == year,
+        )
+    )
+    existing_by_team = {ws.team_id: ws for ws in existing_result.scalars().all()}
+
     results = []
     for team in teams:
         total_score = base_totals[team.id]
         lineup_data = lineup_data_by_team[team.id]
 
         if team.id in winners:
-            win_bonus = await _coach_bonus_sum(team.id, "win_bonus", db)
+            win_bonus = win_bonuses.get(team.id, 0.0)
             if win_bonus:
                 total_score = round(total_score + win_bonus, 2)
                 lineup_data["total"] = total_score
@@ -524,15 +561,7 @@ async def calculate_week(
                     lineup_data["rivalry_bonus"] = rivalry_bonus
 
         # Upsert WeeklyScore record
-        existing_result = await db.execute(
-            select(WeeklyScore).where(
-                WeeklyScore.league_id == league_id,
-                WeeklyScore.team_id == team.id,
-                WeeklyScore.week == week,
-                WeeklyScore.year == year,
-            )
-        )
-        existing = existing_result.scalar_one_or_none()
+        existing = existing_by_team.get(team.id)
 
         if existing:
             existing.total_score = total_score
