@@ -195,6 +195,49 @@ def _effective_matchups(league: Optional[League], teams: List[Team], week: int) 
         if pair not in matchups and (pair[1], pair[0]) not in matchups:
             matchups.append(pair)
 
+    # 3. Dual-Squad/Mirror (Phase 7): drop any pairing where both teams
+    #    are partners of each other (Team.partner_team_id) -- a
+    #    manager's own two teams should never be scheduled against each
+    #    other.
+    #
+    #    Verified by simulation (every week of a full round-robin
+    #    cycle, n = 4/6/8/10/12 teams, adjacent-index partner pairing)
+    #    that simply dropping these pairings is NOT safe alone: for
+    #    n=4 (the minimum allowed size), the classic round-robin has
+    #    exactly 3 rounds, which are exactly the 3 ways to split 4
+    #    teams into 2 disjoint pairs -- so one full week, BOTH
+    #    partner-pairs are scheduled against each other simultaneously,
+    #    and dropping them both leaves that week with zero games at
+    #    all. The same "more than one partner-pair drops in the same
+    #    week" case recurs occasionally at larger n too (e.g. n=8 week
+    #    7, n=12 week 11) -- it just never wipes the whole week once
+    #    more games per round dilute it.
+    #
+    #    Fix: whenever 2+ partner-pairs drop in the same week,
+    #    cross-wire them into new, guaranteed-non-partner matchups
+    #    instead of leaving everyone on a bye -- pair dropped-pair[i]'s
+    #    first team with dropped-pair[(i+1) mod n]'s second team, for
+    #    every i. Since team X_i's only forbidden partner is Y_i (not
+    #    any other pair's Y), and i+1 != i for n >= 2, this can never
+    #    reconstruct an excluded pairing. A single partner-pair
+    #    dropping alone (nothing to cross-wire against) still just
+    #    produces an ordinary 2-team bye -- the same "byes are a
+    #    normal seasonal occurrence" precedent this function's own
+    #    odd-team-count handling already established.
+    if league is not None and league.league_type == LeagueType.DUAL_SQUAD:
+        partner_of = {t.id: t.partner_team_id for t in teams}
+        dropped_pairs = [(a, b) for (a, b) in matchups if partner_of.get(a) == b]
+        if dropped_pairs:
+            matchups = [m for m in matchups if m not in dropped_pairs]
+            n = len(dropped_pairs)
+            if n >= 2:
+                xs = [p[0] for p in dropped_pairs]
+                ys = [p[1] for p in dropped_pairs]
+                for i in range(n):
+                    matchups.append(tuple(sorted((xs[i], ys[(i + 1) % n]))))
+            # n == 1: no other dropped pair to cross-wire against --
+            # both teams get a natural bye this week.
+
     return matchups
 
 
