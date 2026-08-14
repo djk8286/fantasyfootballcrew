@@ -8,6 +8,7 @@ from app.models.user import User
 from app.services.standings_service import (
     calculate_week,
     get_standings,
+    get_combined_standings,
     get_weekly_matchups,
     get_season_schedule,
     DEFAULT_SEASON_WEEKS,
@@ -42,6 +43,26 @@ async def get_league_standings(
         "league_type": league.league_type.value,
         "standings": standings,
     }
+
+
+@router.get("/combined")
+async def get_league_combined_standings(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Dual-Squad/Mirror (Phase 7) only -- each pair's two teams' records
+    summed into one combined row. 404s for any other league_type rather
+    than silently returning size-1 "pairs", since a caller building a
+    combined-view UI needs to know definitively it doesn't apply."""
+    league_result = await db.execute(select(League).where(League.id == league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    if league.league_type != LeagueType.DUAL_SQUAD:
+        raise HTTPException(status_code=400, detail="Combined standings only apply to Dual-Squad leagues")
+
+    combined = await get_combined_standings(league_id, db)
+    return {"league_id": league_id, "league_name": league.name, "combined_standings": combined}
 
 
 @router.get("/weekly")

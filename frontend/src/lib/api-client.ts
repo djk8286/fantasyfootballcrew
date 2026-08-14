@@ -338,6 +338,8 @@ export const draftsApi = {
 export const standingsApi = {
   getStandings: (leagueId: string) =>
     apiRequest(`/api/v1/leagues/${leagueId}/standings`),
+  getCombinedStandings: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/standings/combined`),
   getWeeklyScores: (leagueId: string, week: number, year: number) =>
     apiRequest(`/api/v1/leagues/${leagueId}/standings/weekly?week=${week}&year=${year}`),
   calculateWeek: (leagueId: string, week: number, year: number) =>

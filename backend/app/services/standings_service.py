@@ -687,6 +687,64 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
     return sorted_standings
 
 
+async def get_combined_standings(league_id: str, db: AsyncSession, through_week: int | None = None) -> List[Dict[str, Any]]:
+    """Dual-Squad/Mirror (Phase 7) combined view -- sums each partner
+    pair's two get_standings() rows into one combined row. Pure
+    aggregation over get_standings' existing flat output; does not
+    touch get_standings or calculate_week. Deliberately a backend
+    helper rather than a client-side computation, unlike how CONFERENCE
+    "separate" standings are handled (a pure client-side FILTER, no
+    arithmetic) -- there is no existing precedent anywhere in this
+    codebase for summing two teams' stats into one number, and the
+    closer structural analog (playoff_service's conference_bracket_mode
+    combined/separate branching) is backend-side too. Also lets
+    ai.py's _partner_summary reuse this directly instead of
+    re-deriving the same sums in TypeScript.
+
+    Only meaningful for league_type == DUAL_SQUAD -- callers are
+    expected to gate on that (same convention as
+    get_rivalry_week_settings), not enforced here. A team with no
+    partner (shouldn't happen once pair-creation is followed, but
+    defensive) is returned as its own single-team "combined" row.
+    """
+    flat = await get_standings(league_id, db, through_week=through_week)
+    if not flat:
+        return []
+
+    teams_result = await db.execute(select(Team.id, Team.partner_team_id).where(Team.league_id == league_id))
+    partner_of = {tid: pid for tid, pid in teams_result.all()}
+    by_id = {row["team_id"]: row for row in flat}
+
+    seen: set[str] = set()
+    combined: List[Dict[str, Any]] = []
+    for row in flat:
+        team_id = row["team_id"]
+        if team_id in seen:
+            continue
+        seen.add(team_id)
+        partner_id = partner_of.get(team_id)
+        if partner_id and partner_id in by_id and partner_id not in seen:
+            partner_row = by_id[partner_id]
+            seen.add(partner_id)
+            combined.append({
+                "team_ids": [team_id, partner_id],
+                "team_names": [row["team_name"], partner_row["team_name"]],
+                "wins": row["wins"] + partner_row["wins"],
+                "losses": row["losses"] + partner_row["losses"],
+                "ties": row["ties"] + partner_row["ties"],
+                "points_for": round(row["points_for"] + partner_row["points_for"], 2),
+                "points_against": round(row["points_against"] + partner_row["points_against"], 2),
+            })
+        else:
+            combined.append({
+                "team_ids": [team_id], "team_names": [row["team_name"]],
+                "wins": row["wins"], "losses": row["losses"], "ties": row["ties"],
+                "points_for": row["points_for"], "points_against": row["points_against"],
+            })
+
+    return sorted(combined, key=lambda x: (x["wins"], x["points_for"]), reverse=True)
+
+
 DEFAULT_SEASON_WEEKS = 14
 
 
