@@ -278,3 +278,65 @@ async def test_draft_interleaved_partner_teams_own_normal_snake_positions(db_ses
     for tid in setup["team_ids"]:
         assert team_order.count(tid) == 2
     assert len(team_order) == 8
+
+
+# ─── AI _partner_summary (Step 7) ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_partner_summary_empty_for_non_dual_squad_league(db_session_factory):
+    from app.api.v1.ai import _partner_summary
+
+    setup = await _make_league(db_session_factory, num_teams=2, extra_kwargs=None)
+    league_id = setup["league_id"]
+    async with db_session_factory() as db:
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        league.league_type = LeagueType.STANDARD
+        await db.commit()
+
+    async with db_session_factory() as db:
+        team = (await db.execute(select(Team).where(Team.id == setup["team_ids"][0]))).scalar_one()
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        result = await _partner_summary(team, league, db)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_partner_summary_empty_for_unpaired_team_in_dual_squad_league(db_session_factory):
+    from app.api.v1.ai import _partner_summary
+
+    setup = await _make_league(db_session_factory, num_teams=2)
+    league_id = setup["league_id"]
+    async with db_session_factory() as db:
+        team = (await db.execute(select(Team).where(Team.id == setup["team_ids"][0]))).scalar_one()
+        team.partner_team_id = None
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        await db.commit()
+
+    async with db_session_factory() as db:
+        team = (await db.execute(select(Team).where(Team.id == setup["team_ids"][0]))).scalar_one()
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        result = await _partner_summary(team, league, db)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_partner_summary_returns_combined_row_for_paired_team(db_session_factory):
+    from app.api.v1.ai import _partner_summary
+
+    setup = await _make_league(db_session_factory, num_teams=2)
+    league_id = setup["league_id"]
+    t0, t1 = setup["team_ids"]
+
+    async with db_session_factory() as db:
+        from app.models.weekly_score import WeeklyScore
+        db.add(WeeklyScore(league_id=league_id, team_id=t0, week=1, year=2026, total_score=10.0, lineup_data={}))
+        db.add(WeeklyScore(league_id=league_id, team_id=t1, week=1, year=2026, total_score=20.0, lineup_data={}))
+        await db.commit()
+
+    async with db_session_factory() as db:
+        team = (await db.execute(select(Team).where(Team.id == t0))).scalar_one()
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        result = await _partner_summary(team, league, db)
+
+    assert set(result["team_ids"]) == {t0, t1}
+    assert result["points_for"] == 30.0

@@ -7,13 +7,13 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.models.team import Team
-from app.models.league import League
+from app.models.league import League, LeagueType
 from app.models.player import Player
 from app.models.coach import Coach
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.services.ai_service import AIService
-from app.services.standings_service import get_standings
+from app.services.standings_service import get_standings, get_combined_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.api.deps import get_current_user
 
@@ -63,6 +63,20 @@ async def _salary_summary(team: Team, league: League, db: AsyncSession) -> dict:
     return await team_cap_summary(team, league, db)
 
 
+async def _partner_summary(team: Team, league: League, db: AsyncSession) -> dict:
+    """A team's linked-pair context, for threading into AI prompt
+    context (Phase 7, "Dual-Squad/Mirror") -- lets the AI factor a
+    manager's OTHER team's record into lineup/trade commentary (e.g.
+    "your pair is already locked into 1st combined, this trade is
+    low-stakes"). No-ops to {} for a non-paired team/league, same house
+    style as _salary_summary returning {} for a non-cap league."""
+    if not league or league.league_type != LeagueType.DUAL_SQUAD or not team.partner_team_id:
+        return {}
+    combined = await get_combined_standings(league.id, db)
+    row = next((r for r in combined if team.id in r["team_ids"]), None)
+    return row or {}
+
+
 class LineupAnalysisRequest(BaseModel):
     team_id: str
 
@@ -102,11 +116,13 @@ async def analyze_lineup(
     roster = await _roster_summary(team, db)
     coaching_staff = await _coach_summary(team, db)
     salary_context = await _salary_summary(team, league, db)
+    partner_context = await _partner_summary(team, league, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_lineup(
         roster=roster, opponent_roster={}, matchups={}, scoring=scoring,
         coaching_staff=coaching_staff, salary_context=salary_context,
+        partner_context=partner_context,
     )
     return {"analysis": analysis}
 
@@ -161,12 +177,15 @@ async def analyze_trade(
     team_b_coaching = await _coach_summary(target, db)
     team_a_salary = await _salary_summary(proposer, league, db)
     team_b_salary = await _salary_summary(target, league, db)
+    team_a_partner = await _partner_summary(proposer, league, db)
+    team_b_partner = await _partner_summary(target, league, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_trade(
         team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings},
         team_a_coaching=team_a_coaching, team_b_coaching=team_b_coaching,
         team_a_salary=team_a_salary, team_b_salary=team_b_salary,
+        team_a_partner=team_a_partner, team_b_partner=team_b_partner,
     )
     return {"analysis": analysis}
 

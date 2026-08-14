@@ -140,3 +140,72 @@ async def test_trade_prompt_renders_without_salary_context():
     service._call_llm = spy
     await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
     assert "Salary Cap" in captured["prompt"]
+
+
+# ─── Dual-Squad/Mirror awareness (Phase 7, "Dual-Squad/Mirror") ────────
+
+@pytest.mark.asyncio
+async def test_lineup_prompt_includes_partner_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_lineup(
+        roster={}, opponent_roster={}, matchups={}, scoring={},
+        partner_context={"wins": 7, "losses": 2, "team_ids": ["a", "b"]},
+    )
+    assert "Linked Pair" in captured["prompt"]
+    assert '"wins": 7' in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_lineup_prompt_renders_without_partner_context():
+    """No partner_context passed at all -- must not KeyError on the new
+    prompt field, same as every other optional prompt field here."""
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_lineup(roster={}, opponent_roster={}, matchups={}, scoring={})
+    assert "Linked Pair" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_prompt_includes_both_teams_partner_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_trade(
+        team_a_players=[], team_b_players=[], scoring={},
+        team_a_partner={"wins": 5, "team_ids": ["a", "b"]},
+        team_b_partner={"wins": 1, "team_ids": ["c", "d"]},
+    )
+    assert '"wins": 5' in captured["prompt"]
+    assert '"wins": 1' in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_prompt_renders_without_partner_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
+    assert "Linked Pair" in captured["prompt"]
