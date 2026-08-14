@@ -4,22 +4,38 @@ Avoids the passlib/bcrypt compatibility issue on Windows.
 Uses PyJWT for token generation.
 """
 import hashlib
-import secrets
 from datetime import datetime, timedelta
 from typing import Optional
+import bcrypt
 import jwt
 from app.core.config import settings
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256 with a random salt."""
-    salt = secrets.token_hex(16)
-    pwd_hash = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}:{pwd_hash}"
+    """bcrypt, cost factor 12 (library default). Replaces a previous
+    SHA-256 implementation -- see needs_rehash() for how existing
+    accounts transparently migrate to this on their next login."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def needs_rehash(hashed_password: str) -> bool:
+    """True for a hash still in the old SHA-256 `salt:hash` format --
+    bcrypt output always starts with a fixed `$2` prefix, so this is
+    an unambiguous format check, not a guess."""
+    return not hashed_password.startswith("$2")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
+    """Verify a password against its hash. Accepts both current
+    (bcrypt) and legacy (salted SHA-256) hash formats so existing
+    accounts keep working -- login() transparently rehashes to bcrypt
+    on successful verification of a legacy hash, so this legacy branch
+    stops being hit for that user going forward. No forced reset."""
+    if not needs_rehash(hashed_password):
+        try:
+            return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+        except ValueError:
+            return False
     try:
         salt, pwd_hash = hashed_password.split(":")
         check = hashlib.sha256((salt + plain_password).encode()).hexdigest()

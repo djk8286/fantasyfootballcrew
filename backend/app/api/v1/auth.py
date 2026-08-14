@@ -9,7 +9,7 @@ from app.core.limiter import limiter
 from app.models.user import User
 from app.models.password_reset_token import PasswordResetToken
 from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest
-from app.services.auth_service import hash_password, verify_password, create_access_token, hash_token
+from app.services.auth_service import hash_password, verify_password, needs_rehash, create_access_token, hash_token
 from app.services.email_service import send_password_reset_email
 from app.api.deps import get_current_user
 
@@ -57,6 +57,14 @@ async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depe
 
     if not verify_password(login_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if needs_rehash(user.hashed_password):
+        # Transparent migration off the legacy SHA-256 hash format --
+        # see auth_service.needs_rehash. No forced reset, no visible
+        # change; this just quietly happens on the next successful
+        # login for any account that hasn't logged in since the switch.
+        user.hashed_password = hash_password(login_data.password)
+        await db.commit()
 
     token = create_access_token({"sub": user.id, "email": user.email})
     return {"access_token": token, "token_type": "bearer", "user": UserRead.model_validate(user)}
