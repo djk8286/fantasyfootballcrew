@@ -206,6 +206,13 @@ export const leaguesApi = {
       method: "PUT",
       body: { best_ball_settings: bestBallSettings },
     }),
+  getAiSettings: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/ai-settings`),
+  updateAiSettings: (id: string, aiCommissionerSettings: Record<string, unknown>) =>
+    apiRequest(`/api/v1/leagues/${id}/ai-settings`, {
+      method: "PUT",
+      body: { ai_commissioner_settings: aiCommissionerSettings },
+    }),
   getManagementWindow: (id: string) =>
     apiRequest(`/api/v1/leagues/${id}/management-window`),
 };

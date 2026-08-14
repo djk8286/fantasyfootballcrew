@@ -34,6 +34,19 @@ import {
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
 
+// Explicit "AI-generated" labeling on every real LLM output (digest,
+// trade review, drafted messages, chat replies) -- distinct from the
+// computed-data tools (League Health/Scoring Insights/Schedule
+// Insights), which never carry this badge since no LLM is ever called
+// for them. Small and reused everywhere rather than four one-off spans.
+function AIBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-400/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">
+      <Bot className="w-2.5 h-2.5" /> AI-Generated
+    </span>
+  );
+}
+
 // ─── Types ───
 interface League {
   id: string;
@@ -196,22 +209,43 @@ export default function CommissionerPage() {
   const [activeTab, setActiveTab] = useState<Tab>("adjustments");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiToggling, setAiToggling] = useState(false);
 
   // ── Load league data ──
   useEffect(() => {
     Promise.all([
       leaguesApi.get(leagueId) as Promise<League>,
       teamsApi.getByLeague(leagueId) as Promise<Team[]>,
+      leaguesApi.getAiSettings(leagueId) as Promise<{ enabled: boolean }>,
     ])
-      .then(([l, t]) => {
+      .then(([l, t, ai]) => {
         setLeague(l);
         setTeams(t);
+        setAiEnabled(ai.enabled);
       })
       .catch(() => setError("Failed to load league"))
       .finally(() => setLoading(false));
   }, [leagueId]);
 
   const teamMap = Object.fromEntries(teams.map((t) => [t.id, t.name]));
+
+  const AI_TABS: Tab[] = ["digest", "health", "insights", "schedule-insights", "messages", "chat"];
+
+  const handleToggleAi = async () => {
+    setAiToggling(true);
+    const next = !aiEnabled;
+    try {
+      await leaguesApi.updateAiSettings(leagueId, { enabled: next });
+      setAiEnabled(next);
+      if (!next && AI_TABS.includes(activeTab)) {
+        setActiveTab("adjustments");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update AI Co-Commissioner setting");
+    }
+    setAiToggling(false);
+  };
 
   if (loading) {
     return (
@@ -239,6 +273,26 @@ export default function CommissionerPage() {
             <Crown className="w-5 h-5 text-gold-400" />
             <h1 className="text-lg font-bold text-white">Commissioner Settings</h1>
             {league && <span className="text-surface-400 text-sm">{league.name}</span>}
+            <button
+              onClick={handleToggleAi}
+              disabled={aiToggling}
+              title={aiEnabled ? "Disable AI Co-Commissioner features for this league" : "Enable AI Co-Commissioner features for this league"}
+              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all disabled:opacity-50 bg-surface-800 border-surface-700 hover:border-surface-600"
+            >
+              <Bot className={`w-3.5 h-3.5 ${aiEnabled ? "text-purple-400" : "text-surface-500"}`} />
+              <span className={aiEnabled ? "text-surface-300" : "text-surface-500"}>AI Co-Commissioner</span>
+              <span
+                className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+                  aiEnabled ? "bg-purple-500" : "bg-surface-600"
+                }`}
+              >
+                <span
+                  className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                    aiEnabled ? "translate-x-3.5" : "translate-x-0.5"
+                  }`}
+                />
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -266,7 +320,7 @@ export default function CommissionerPage() {
             { id: "schedule-insights" as Tab, label: "Schedule Insights", icon: CalendarClock },
             { id: "messages" as Tab, label: "Messages", icon: MessageSquare },
             { id: "chat" as Tab, label: "AI Chat", icon: MessageCircle },
-          ].map(({ id, label, icon: Icon }) => (
+          ].filter(({ id }) => aiEnabled || !AI_TABS.includes(id)).map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
@@ -291,7 +345,7 @@ export default function CommissionerPage() {
           <PointsAdjustments leagueId={leagueId} teams={teams} teamMap={teamMap} />
         )}
         {activeTab === "trades" && (
-          <TradesPanel leagueId={leagueId} teamMap={teamMap} />
+          <TradesPanel leagueId={leagueId} teamMap={teamMap} aiEnabled={aiEnabled} />
         )}
         {activeTab === "draft-order" && league && (
           <DraftOrderPanel leagueId={leagueId} teams={teams} league={league} />
@@ -585,9 +639,11 @@ function PointsAdjustments({
 function TradesPanel({
   leagueId,
   teamMap,
+  aiEnabled,
 }: {
   leagueId: string;
   teamMap: Record<string, string>;
+  aiEnabled: boolean;
 }) {
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -706,18 +762,20 @@ function TradesPanel({
                 </div>
                 {trade.status === "pending" && (
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleAnalyze(trade.id)}
-                      disabled={analyzing === trade.id}
-                      className="inline-flex items-center gap-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
-                    >
-                      {analyzing === trade.id ? (
-                        <div className="w-3 h-3 border border-purple-300 border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <Bot className="w-3 h-3" />
-                      )}
-                      {trade.details?.ai_review ? "Re-analyze" : "Analyze with AI"}
-                    </button>
+                    {aiEnabled && (
+                      <button
+                        onClick={() => handleAnalyze(trade.id)}
+                        disabled={analyzing === trade.id}
+                        className="inline-flex items-center gap-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                      >
+                        {analyzing === trade.id ? (
+                          <div className="w-3 h-3 border border-purple-300 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Bot className="w-3 h-3" />
+                        )}
+                        {trade.details?.ai_review ? "Re-analyze" : "Analyze with AI"}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleReview(trade.id, "approve")}
                       disabled={processing === trade.id}
@@ -757,6 +815,7 @@ function TradesPanel({
                     <div className="flex items-center gap-2 mb-2">
                       <Bot className="w-3.5 h-3.5 text-purple-400" />
                       <span className="text-xs font-semibold text-purple-300">AI Trade Review</span>
+                      <AIBadge />
                       {aiReview.recommendation && (
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${
                           recommendationColors[aiReview.recommendation] || "bg-surface-700 text-surface-400 border-surface-600"
@@ -1421,6 +1480,7 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
         <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>
       ) : digest ? (
         <div>
+          <div className="mb-2"><AIBadge /></div>
           {(digest.tone || digest.length) && (
             <p className="text-[10px] text-surface-500 mb-2">
               Generated with {DIGEST_TONES.find((t) => t.value === digest.tone)?.label || digest.tone} tone,{" "}
@@ -1766,6 +1826,11 @@ function MessagesPanel({ leagueId }: { leagueId: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [sentCount, setSentCount] = useState<number | null>(null);
+  // Only true right after a real AI draft -- distinguishes "this
+  // content came from the AI" from a commissioner typing their own
+  // message from scratch, so the AI-Generated badge is never
+  // misapplied to hand-written text.
+  const [aiDrafted, setAiDrafted] = useState(false);
 
   const handleDraft = async () => {
     setDrafting(true);
@@ -1774,6 +1839,7 @@ function MessagesPanel({ leagueId }: { leagueId: string }) {
     try {
       const result = (await commissionerApi.draftMessage(leagueId, messageType, tone, customContext)) as { content: string };
       setContent(result.content);
+      setAiDrafted(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to draft message");
     }
@@ -1854,7 +1920,10 @@ function MessagesPanel({ leagueId }: { leagueId: string }) {
         </div>
       )}
 
-      <label className="text-[10px] text-surface-500 uppercase tracking-wider">Message (editable before sending)</label>
+      <div className="flex items-center gap-2 mb-1">
+        <label className="text-[10px] text-surface-500 uppercase tracking-wider">Message (editable before sending)</label>
+        {aiDrafted && content && <AIBadge />}
+      </div>
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
@@ -1979,7 +2048,8 @@ function ChatPanel({ leagueId }: { leagueId: string }) {
           </div>
         ) : (
           messages.map((m) => (
-            <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={m.id} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+              {m.role === "assistant" && <div className="mb-1"><AIBadge /></div>}
               <div
                 className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
                   m.role === "user"
