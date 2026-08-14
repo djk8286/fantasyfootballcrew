@@ -39,6 +39,16 @@ interface Standing {
   last_words: string | null;
 }
 
+interface CombinedStanding {
+  team_ids: string[];
+  team_names: string[];
+  wins: number;
+  losses: number;
+  ties: number;
+  points_for: number;
+  points_against: number;
+}
+
 interface Matchup {
   home_team: string;
   home_team_id: string;
@@ -136,6 +146,7 @@ export default function StandingsPage() {
 
   const [league, setLeague] = useState<LeagueData | null>(null);
   const [standings, setStandings] = useState<Standing[]>([]);
+  const [combinedStandings, setCombinedStandings] = useState<CombinedStanding[]>([]);
   const [weeklyData, setWeeklyData] = useState<WeeklyScoresResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -256,6 +267,19 @@ export default function StandingsPage() {
         setWeeklyData(null);
       });
   }, [leagueId, selectedWeek]);
+
+  // Dual-Squad/Mirror (Phase 7) -- combined pairs view, only meaningful
+  // for a DUAL_SQUAD league. Fetched only once league_type is known.
+  useEffect(() => {
+    if (!leagueId || league?.league_type !== "dual_squad") return;
+    standingsApi
+      .getCombinedStandings(leagueId)
+      .then((data) => {
+        const combined = (data as { combined_standings?: CombinedStanding[] })?.combined_standings;
+        setCombinedStandings(Array.isArray(combined) ? combined : []);
+      })
+      .catch(() => setCombinedStandings([]));
+  }, [leagueId, league?.league_type]);
 
   // ─── Actions ────────────────────────────────────────────
 
@@ -430,6 +454,91 @@ export default function StandingsPage() {
                       <td className="px-4 py-4 text-right text-surface-400 font-mono tabular-nums">
                         {team.points_against?.toFixed(1) || "0.0"}
                       </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // Dual-Squad/Mirror (Phase 7) -- a lightweight variant of
+  // renderStandingsTable above: each row is a PAIR (team_ids: string[]),
+  // not a single team, so it can't reuse isMyTeam/getOwnerLabel/avatar
+  // rendering verbatim. Team names are joined with " & ".
+  function renderCombinedPairsTable() {
+    return (
+      <div>
+        <h3 className="text-xs font-bold text-gold-400 uppercase tracking-wider mb-2 px-1">
+          Combined Pairs
+        </h3>
+        <div className="overflow-x-auto rounded-xl border border-surface-700">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-800 border-b border-surface-700">
+                <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-12">
+                  Rank
+                </th>
+                <th className="text-left px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Pair
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  W
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  L
+                </th>
+                <th className="text-center px-3 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-10">
+                  T
+                </th>
+                <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Pts For
+                </th>
+                <th className="text-right px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">
+                  Pts Against
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-700">
+              {combinedStandings.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-center text-surface-500 text-sm">
+                    No combined standings yet.
+                  </td>
+                </tr>
+              ) : (
+                combinedStandings.map((pair, idx) => {
+                  const isMine = pair.team_ids.some((tid) => tid === myTeamId);
+                  return (
+                    <tr
+                      key={pair.team_ids.join("-")}
+                      className={`transition-colors ${
+                        isMine ? "bg-gold-400/5 border-l-2 border-l-gold-400" : "bg-surface-900 hover:bg-surface-800/80"
+                      }`}
+                    >
+                      <td className="px-4 py-4">
+                        <RankBadge rank={idx + 1} />
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-white truncate max-w-[240px]">
+                            {pair.team_names.join(" & ")}
+                          </span>
+                          {isMine && (
+                            <span className="text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded shrink-0">
+                              Your Pair
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-4 text-center text-white font-medium">{pair.wins}</td>
+                      <td className="px-3 py-4 text-center text-surface-400">{pair.losses}</td>
+                      <td className="px-3 py-4 text-center text-surface-400">{pair.ties}</td>
+                      <td className="px-4 py-4 text-right text-white font-medium">{pair.points_for?.toFixed(1) || "0.0"}</td>
+                      <td className="px-4 py-4 text-right text-surface-400">{pair.points_against?.toFixed(1) || "0.0"}</td>
                     </tr>
                   );
                 })
@@ -622,6 +731,11 @@ export default function StandingsPage() {
               ) : (
                 renderStandingsTable(sortedStandings)
               )}
+
+              {/* Dual-Squad/Mirror (Phase 7): the normal per-team table
+                  above stays exactly as-is; this adds a second view
+                  summing each linked pair's two teams into one row. */}
+              {league?.league_type === "dual_squad" && renderCombinedPairsTable()}
 
               {/* Guillotine (Phase 4): elimination history -- every
                   eliminated team, in the order they went out, with any

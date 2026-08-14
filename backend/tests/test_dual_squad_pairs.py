@@ -8,9 +8,10 @@ import uuid
 import pytest
 from sqlalchemy import select
 from app.models.user import User
-from app.models.league import League, LeagueType
+from app.models.league import League, LeagueType, DraftStatus
 from app.models.team import Team
 from app.services.auth_service import create_access_token
+from app.services.draft_manager import create_draft, get_draft_state
 
 
 async def _make_league(db_session_factory, league_type=LeagueType.DUAL_SQUAD, max_teams=6):
@@ -213,3 +214,24 @@ async def test_delete_team_clears_partner_link_via_api(client, db_session_factor
     async with db_session_factory() as db:
         survivor = (await db.execute(select(Team).where(Team.id == partner.id))).scalar_one()
         assert survivor.partner_team_id is None
+
+
+@pytest.mark.asyncio
+async def test_get_draft_state_includes_partner_team_id(client, db_session_factory):
+    setup = await _make_league(db_session_factory)
+    league_id = setup["league_id"]
+    client.headers["Authorization"] = f"Bearer {setup['token']}"
+    await client.post(f"/teams/bulk-add/{league_id}", json={"count": 4, "name_prefix": "CPU Team"})
+
+    async with db_session_factory() as db:
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one()
+        league.draft_status = DraftStatus.NOT_STARTED
+        await db.commit()
+
+    async with db_session_factory() as db:
+        draft = await create_draft(db, league_id, total_rounds=1)
+        state = await get_draft_state(db, draft.id)
+
+    for tid, info in state["teams"].items():
+        assert "partner_team_id" in info
+        assert info["partner_team_id"] is not None

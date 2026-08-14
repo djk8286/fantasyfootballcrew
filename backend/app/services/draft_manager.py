@@ -625,7 +625,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
         # owner already can submit a pick for this team_id (see
         # require_team_or_league_access), this is purely a display
         # signal, not new authorization.
-        "teams": {t.id: {"name": t.name, "owner_id": t.owner_id, "co_owner_id": t.co_owner_id} for t in teams},
+        "teams": {t.id: {"name": t.name, "owner_id": t.owner_id, "co_owner_id": t.co_owner_id, "partner_team_id": t.partner_team_id} for t in teams},
         "team_order": team_order,
         "claimed_teams": {t.id: t.owner_id for t in teams if t.owner_id is not None},
         "available_players": [

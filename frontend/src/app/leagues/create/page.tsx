@@ -10,6 +10,7 @@ const leagueTypes = [
   { value: "two_man", label: "2-Man Teams", desc: "Co-managed franchises" },
   { value: "conference", label: "Conference", desc: "6v6 conference battle" },
   { value: "guillotine", label: "Guillotine", desc: "Lowest score eliminated weekly" },
+  { value: "dual_squad", label: "Dual-Squad", desc: "Manage two linked teams at once" },
 ] as const;
 
 const draftTypes = [
@@ -63,27 +64,43 @@ export default function CreateLeaguePage() {
         scoring_config: {},
       }) as { id: string; name: string };
 
-      // Create the commissioner's team
-      const teamName = form.team_name.trim() || `${form.name} Team`;
-      const team = await teamsApi.create({
-        name: teamName,
-        league_id: league.id,
-      }) as { id: string };
+      let myTeamId: string;
+      if (form.league_type === "dual_squad") {
+        // Dual-Squad: no separate "create my team" call -- every team
+        // is pre-created as a linked CPU pair (bulk_add_cpu_teams
+        // cross-links partner_team_id when the league is DUAL_SQUAD),
+        // then the commissioner claims one via the same claim_team flow
+        // every other manager uses, which auto-claims its partner too.
+        const result = await teamsApi.bulkAddCpu(league.id, form.max_teams, `${form.name} Team`) as {
+          teams: { id: string; name: string; is_cpu: boolean }[];
+        };
+        const firstTeam = result.teams[0];
+        const claimed = await teamsApi.claim(firstTeam.id) as { id: string };
+        myTeamId = claimed.id;
+      } else {
+        // Create the commissioner's team
+        const teamName = form.team_name.trim() || `${form.name} Team`;
+        const team = await teamsApi.create({
+          name: teamName,
+          league_id: league.id,
+        }) as { id: string };
+        myTeamId = team.id;
+
+        // Auto-fill remaining slots with CPU teams (ready to draft immediately)
+        if (form.max_teams > 1) {
+          try {
+            await teamsApi.bulkAddCpu(league.id, form.max_teams - 1, `${form.name} Team`);
+          } catch {
+            // Non-fatal — user can add teams manually from the league page
+          }
+        }
+      }
 
       // Save team ID so draft page knows which team is yours
       if (typeof window !== "undefined") {
         const userTeams = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
-        userTeams[league.id] = team.id;
+        userTeams[league.id] = myTeamId;
         localStorage.setItem("ffc_user_teams", JSON.stringify(userTeams));
-      }
-
-      // Auto-fill remaining slots with CPU teams (ready to draft immediately)
-      if (form.max_teams > 1) {
-        try {
-          await teamsApi.bulkAddCpu(league.id, form.max_teams - 1, `${form.name} Team`);
-        } catch {
-          // Non-fatal — user can add teams manually from the league page
-        }
       }
 
       router.push(`/leagues/${league.id}`);
@@ -190,7 +207,7 @@ export default function CreateLeaguePage() {
               <label className="block text-sm font-medium text-surface-300 mb-3">
                 League Type <span className="text-red-400">*</span>
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 {leagueTypes.map((lt) => (
                   <button
                     key={lt.value}

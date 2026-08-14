@@ -40,6 +40,8 @@ import {
   Mail,
   DollarSign,
   Sparkles,
+  Skull,
+  Copy,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -105,6 +107,8 @@ const leagueTypeLabels: Record<string, string> = {
   standard: "Standard",
   two_man: "2-Man",
   conference: "Conference",
+  guillotine: "Guillotine",
+  dual_squad: "Dual-Squad",
 };
 
 const draftStatusConfig: Record<
@@ -132,6 +136,8 @@ const typeIcons: Record<string, typeof Users> = {
   standard: Users,
   two_man: Users,
   conference: Swords,
+  guillotine: Skull,
+  dual_squad: Copy,
 };
 
 // ─── Component ────────────────────────────────────────────────

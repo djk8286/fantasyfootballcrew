@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, Swords, Lock, Unlock, ShieldCheck, Skull, DollarSign, Sparkles } from "lucide-react";
+import { Users, Swords, Lock, Unlock, ShieldCheck, Skull, DollarSign, Sparkles, Copy } from "lucide-react";
 
 // Shared definitions used everywhere a league's type/visibility/open-spot
 // count needs to render -- the leagues grid, the Wanted Board, and the
@@ -13,6 +13,7 @@ export const LEAGUE_TYPE_LABELS: Record<string, string> = {
   two_man: "2-Man",
   conference: "Conference",
   guillotine: "Guillotine",
+  dual_squad: "Dual-Squad",
 };
 
 const LEAGUE_TYPE_ICONS: Record<string, typeof Users> = {
@@ -20,6 +21,7 @@ const LEAGUE_TYPE_ICONS: Record<string, typeof Users> = {
   two_man: Users,
   conference: Swords,
   guillotine: Skull,
+  dual_squad: Copy,
 };
 
 export function LeagueTypeBadge({ leagueType }: { leagueType: string }) {
@@ -116,6 +118,24 @@ export function BestBallBadge() {
       <Sparkles className="w-2.5 h-2.5" />
       Best-Ball
     </span>
+  );
+}
+
+// Dual-Squad/Mirror (Phase 7) -- shown on a team's own page/standings
+// row when it has a linked partner team. Unlike SalaryCapBadge/
+// BestBallBadge (bolt-on flags), DUAL_SQUAD is a real league_type, so
+// this badge specifically flags the PAIR relationship (clickable to
+// jump to the partner), not the league type itself (LeagueTypeBadge
+// already covers that).
+export function PartnerBadge({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 text-[10px] text-blue-400 font-semibold uppercase tracking-wider bg-blue-400/10 border border-blue-400/20 px-1.5 py-0.5 rounded shrink-0 hover:bg-blue-400/20 transition-colors"
+    >
+      <Copy className="w-2.5 h-2.5" />
+      Linked Pair
+    </button>
   );
 }
 

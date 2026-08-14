@@ -97,7 +97,7 @@ interface DraftState {
   current_team_id: string | null;
   current_team_name: string | null;
   available_players: Player[];
-  teams: Record<string, { name: string; owner_id: string | null; co_owner_id: string | null }>;
+  teams: Record<string, { name: string; owner_id: string | null; co_owner_id: string | null; partner_team_id: string | null }>;
   team_order: string[];
   claimed_teams: Record<string, string>;
 }
@@ -257,7 +257,11 @@ export default function DraftPage() {
   const handleRunMock = async () => {
     setActionLoading("mock");
     try {
-      const skipIds = myTeamId ? [myTeamId] : [];
+      // Dual-Squad (Phase 7): skip BOTH of a claimed pair's teams during
+      // mock-fill, not just the one stored in localStorage -- otherwise
+      // the mock draft would auto-pick for the manager's second team
+      // even though they're the human managing it too.
+      const skipIds = Array.from(myTeamIds);
       await draftsApi.runMock(id, skipIds.length > 0 ? skipIds : undefined);
       await fetchState();
     } catch (err: unknown) {
@@ -292,9 +296,22 @@ export default function DraftPage() {
   // potentially thousands-of-rows player list) to re-render twice a
   // second regardless of whose clock is running.
 
+  // Dual-Squad/Mirror (Phase 7): a claimed team's turn AND its linked
+  // partner's turn both count as "mine" -- only one of the pair is ever
+  // stored in localStorage (ffc_user_teams), so without this a claimed
+  // pair's own partner-team turns would never be recognized as the
+  // user's, even though claim_team already claimed both as owner.
+  const myTeamIds = useMemo(() => {
+    if (!myTeamId) return new Set<string>();
+    const ids = new Set([myTeamId]);
+    const partnerId = draft?.teams?.[myTeamId]?.partner_team_id;
+    if (partnerId) ids.add(partnerId);
+    return ids;
+  }, [myTeamId, draft?.teams]);
+
   const isUserOnClock = (): boolean => {
     if (!draft || !draft.current_team_id) return false;
-    return myTeamId === draft.current_team_id;
+    return myTeamIds.has(draft.current_team_id);
   };
 
   // CPU auto-pick: sequential, no racing

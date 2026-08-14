@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { teamsApi, leaguesApi, playersApi, standingsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
 import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
-import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
+import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge, PartnerBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import {
   ChevronLeft,
@@ -30,6 +30,7 @@ interface Team {
   name: string;
   owner_id: string | null;
   co_owner_id: string | null;
+  partner_team_id: string | null;
   league_id: string;
   avatar_url: string | null;
   is_cpu: boolean;
@@ -99,6 +100,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 
 export default function TeamPage() {
   const params = useParams();
+  const router = useRouter();
   const leagueId = params.id as string;
   const teamId = params.teamId as string;
 
@@ -317,6 +319,9 @@ export default function TeamPage() {
               {capEnabled && <SalaryCapBadge />}
               {bestBallEnabled && <BestBallBadge />}
               {bestBallEnabled && <ManagementWindowIndicator leagueId={leagueId} />}
+              {team.partner_team_id && (
+                <PartnerBadge onClick={() => router.push(`/leagues/${leagueId}/teams/${team.partner_team_id}`)} />
+              )}
             </div>
             <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
               {team.is_cpu ? (
