@@ -24,6 +24,16 @@ import json
 # email_service.py already established for outbound email.
 AI_TEMPORARILY_UNAVAILABLE = "AI Analysis: the AI service is temporarily unavailable right now. Please try again in a few minutes."
 
+# OpenAI's cost-tier model, confirmed directly against api.openai.com
+# (GET /v1/models) and openai.com's own docs: $0.20/1M input,
+# $1.20/1M output tokens -- "designed for cost-sensitive, high-volume
+# workloads," roughly the nano tier of the GPT-5.6 family. Every AI
+# Co-Commissioner call is a short analysis/chat-reply task, not
+# something needing frontier reasoning, so the cheapest tier is the
+# right default. Named constant, not a magic string repeated at every
+# call site -- swap this one line to change models everywhere at once.
+OPENAI_MODEL = "gpt-5.6-luna"
+
 
 # AI Co-Commissioner v1: tone/length are per-generation params on the
 # weekly digest (not a persisted league setting -- see
@@ -425,9 +435,13 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-4o-mini",
+                        # No "temperature" -- OPENAI_MODEL (gpt-5.6-luna)
+                        # rejects any non-default value with a 400
+                        # ("Only the default (1) value is supported"),
+                        # confirmed directly against the real API.
+                        # Omitting it just uses the provider's default.
+                        "model": OPENAI_MODEL,
                         "messages": [{"role": "system", "content": system}] + history,
-                        "temperature": 0.3,
                     },
                 )
                 response.raise_for_status()
@@ -502,7 +516,9 @@ class AIService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-4o-mini",
+                        # No "temperature" -- see _call_openai_chat's
+                        # comment; OPENAI_MODEL rejects any non-default value.
+                        "model": OPENAI_MODEL,
                         "messages": [
                             {
                                 "role": "system",
@@ -510,7 +526,6 @@ class AIService:
                             },
                             {"role": "user", "content": prompt},
                         ],
-                        "temperature": 0.3,
                     },
                 )
                 response.raise_for_status()
