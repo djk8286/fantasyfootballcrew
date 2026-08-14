@@ -199,6 +199,21 @@ no sign-off unless it feels natural. This is a broadcast to the whole
 league, not a private note to the commissioner.
 """
 
+CHAT_SYSTEM_PROMPT = """
+You are the AI Co-Commissioner assistant for {league_name}, a fantasy
+football league on FantasyFootballCrew. You help the commissioner
+understand what's happening in their league. Plain text only, no
+markdown syntax.
+
+You are ADVISORY ONLY -- you never take action, you only inform and
+suggest. If asked to do something (approve a trade, send a message,
+change a setting), explain that the commissioner needs to do that
+themselves elsewhere in the app.
+
+Current league snapshot (may not include very old history):
+{context}
+"""
+
 BET_ANALYSIS_PROMPT = """
 You are a sports betting analyst. Analyze these betting props/lines:
 
@@ -363,6 +378,68 @@ class AIService:
             context=json.dumps(context or {}, indent=2),
         )
         return await self._call_llm(prompt)
+
+    async def chat(self, league_name: str, context: dict, history: list) -> str:
+        """Multi-turn AI Co-Commissioner Chat -- distinct from every
+        other method on this class (all single-shot prompt-in/
+        string-out). `history` is the real conversation so far, a list
+        of {"role": "user"|"assistant", "content": str} dicts, NOT
+        collapsed into one prompt string -- a genuine back-and-forth
+        needs the LLM to see distinct turns. `context` is a fresh
+        league-data snapshot the caller (chat_service.py) rebuilds on
+        every call -- never stale, never persisted alongside the
+        conversation itself. See chat_service.py for how history is
+        capped and how context is assembled from the same compute
+        functions already powering the other commissioner tabs."""
+        system = CHAT_SYSTEM_PROMPT.format(league_name=league_name, context=json.dumps(context, indent=2))
+        if self.provider == "openai" and self.api_key:
+            return await self._call_openai_chat(system, history)
+        elif self.provider == "anthropic" and self.api_key:
+            return await self._call_anthropic_chat(system, history)
+        return "AI Analysis: LLM API not configured. Set OPENAI_API_KEY in your .env to enable AI features."
+
+    async def _call_openai_chat(self, system: str, history: list) -> str:
+        """OpenAI puts the system prompt as a {"role": "system", ...}
+        entry inside the messages array itself."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": system}] + history,
+                    "temperature": 0.3,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+
+    async def _call_anthropic_chat(self, system: str, history: list) -> str:
+        """Anthropic's Messages API takes `system` as a top-level
+        request field, separate from `messages` -- unlike OpenAI, it
+        is NOT a message with role "system" inside the array."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 1000,
+                    "system": system,
+                    "messages": history,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["content"][0]["text"]
 
     async def analyze_bet(
         self,

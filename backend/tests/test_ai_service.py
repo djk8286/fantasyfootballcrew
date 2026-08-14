@@ -374,3 +374,70 @@ async def test_commissioner_message_no_api_key_never_calls_network_path():
     service = AIService(api_key=None)
     result = await service.generate_commissioner_message(league_name="X", message_type="general")
     assert "not configured" in result
+
+
+# ─── AI Co-Commissioner Chat (deferred item 7) ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_chat_system_prompt_includes_league_name_and_context():
+    service = AIService(api_key="fake-key", provider="openai")
+    captured = {}
+
+    async def spy(system, history):
+        captured["system"] = system
+        captured["history"] = history
+        return "ok"
+
+    service._call_openai_chat = spy
+    await service.chat(
+        league_name="Test League",
+        context={"standings": [{"team_name": "The Contenders"}]},
+        history=[{"role": "user", "content": "How healthy is the league?"}],
+    )
+    assert "Test League" in captured["system"]
+    assert "The Contenders" in captured["system"]
+    assert captured["history"] == [{"role": "user", "content": "How healthy is the league?"}]
+
+
+@pytest.mark.asyncio
+async def test_chat_no_api_key_never_calls_network_path():
+    service = AIService(api_key=None)
+    result = await service.chat(league_name="X", context={}, history=[{"role": "user", "content": "hi"}])
+    assert "not configured" in result
+
+
+@pytest.mark.asyncio
+async def test_call_anthropic_chat_puts_system_at_top_level_not_in_messages(monkeypatch):
+    """Regression pin for the one real shape difference between the
+    two providers' chat APIs -- Anthropic's `system` is a top-level
+    request field, not a {"role": "system"} entry inside `messages`."""
+    service = AIService(api_key="fake-key", provider="anthropic")
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"content": [{"text": "ok"}]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = await service._call_anthropic_chat("SYSTEM PROMPT HERE", [{"role": "user", "content": "hi"}])
+
+    assert result == "ok"
+    assert captured["json"]["system"] == "SYSTEM PROMPT HERE"
+    assert captured["json"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert all(m.get("role") != "system" for m in captured["json"]["messages"])

@@ -18,6 +18,7 @@ from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.models.contract import Contract, DeadMoney
 from app.models.commissioner_digest import CommissionerDigest
+from app.models.chat_message import ChatMessage
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -30,4 +31,5 @@ __all__ = [
     "LeagueJoinRequest", "JoinRequestStatus",
     "Contract", "DeadMoney",
     "CommissionerDigest",
+    "ChatMessage",
 ]
