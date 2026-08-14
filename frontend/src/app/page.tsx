@@ -9,6 +9,7 @@ import {
   Infinity as InfinityIcon,
   Skull,
   DollarSign,
+  Zap,
 } from "lucide-react";
 import StatTile from "@/components/ui/StatTile";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
@@ -62,6 +63,13 @@ const features = [
     description:
       "Every drafted or signed player carries a real salary against a hard team cap. Trades and waiver claims that would blow the budget get blocked automatically — no spreadsheets required.",
     gradient: "from-green-500 to-emerald-700",
+  },
+  {
+    icon: Zap,
+    title: "Best-Ball Hybrid",
+    description:
+      "Your highest-scoring eligible lineup gets picked automatically every week from real per-player results -- no more forgetting to set your lineup. Trades and waivers settle on your league's own management-window schedule.",
+    gradient: "from-yellow-400 to-orange-500",
   },
   {
     icon: Sparkles,

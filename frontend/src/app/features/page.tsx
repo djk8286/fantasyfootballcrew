@@ -9,6 +9,7 @@ import {
   Check,
   Skull,
   DollarSign,
+  Zap,
 } from "lucide-react";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
@@ -100,6 +101,19 @@ const features = [
       "Trades and waiver claims that would push a team over the cap are blocked automatically",
       "Releasing a multi-year deal early charges dead money against your cap for the rest of the season",
       "1-4 year contracts, fully commissioner-configurable cap total and roster size",
+    ],
+  },
+  {
+    icon: Zap,
+    title: "Best-Ball Hybrid",
+    gradient: "from-yellow-400 to-orange-500",
+    description:
+      "No more forgetting to set your lineup. Every week, your highest-scoring eligible starters are chosen automatically from real per-player results, after the games happen -- not a season-average guess.",
+    points: [
+      "Starters are picked fresh every week from that week's actual stats -- true best-ball, always optimal",
+      "Zero manual lineup management: no Start/Bench toggles, nothing to remember",
+      "A commissioner-set weekly management window controls when trade approvals and waiver claims settle",
+      "Trade and waiver claims can still be submitted any time -- they just wait for the window to reopen",
     ],
   },
   {
