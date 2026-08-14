@@ -256,3 +256,47 @@ async def test_digest_no_api_key_never_calls_network_path():
     service = AIService(api_key=None)
     result = await service.generate_commissioner_digest(league_name="X", week=1, year=2026)
     assert "not configured" in result
+
+
+# ─── Trade Review Assistant (AI Co-Commissioner v1) ────────────────────
+
+@pytest.mark.asyncio
+async def test_trade_review_prompt_includes_teams_and_players():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_trade_review(
+        league_name="Test League", proposer_name="Team Alpha", target_name="Team Beta",
+        offered_players=["Player A (RB)"], requested_players=["Player B (WR)"],
+        standings=[{"team_name": "Team Alpha", "wins": 3}],
+    )
+    assert "Team Alpha" in captured["prompt"]
+    assert "Team Beta" in captured["prompt"]
+    assert "Player A (RB)" in captured["prompt"]
+    assert "RECOMMENDATION: APPROVE" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_review_prompt_renders_without_optional_context():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.generate_trade_review(league_name="X", proposer_name="A", target_name="B")
+    assert "FAIRNESS" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_review_no_api_key_never_calls_network_path():
+    service = AIService(api_key=None)
+    result = await service.generate_trade_review(league_name="X", proposer_name="A", target_name="B")
+    assert "not configured" in result

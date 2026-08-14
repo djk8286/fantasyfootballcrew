@@ -110,6 +110,41 @@ Write, in plain text with ALL-CAPS section titles:
 4. COMMISSIONER NOTES -- any fairness/rule-adjustment observations worth flagging (advisory only -- the commissioner decides, never phrase this as an instruction)
 """
 
+TRADE_REVIEW_PROMPT = """
+You are an expert fantasy football commissioner's assistant, reviewing
+a trade for FAIRNESS and LEAGUE IMPACT (not which side "wins" -- this
+is for the commissioner deciding whether to approve it, not either
+trading team). Plain text only, no markdown syntax.
+
+Your response MUST start with exactly one of these three lines, then a
+blank line, then your reasoning:
+RECOMMENDATION: APPROVE
+RECOMMENDATION: REVIEW CLOSELY
+RECOMMENDATION: VETO
+
+**League:** {league_name}
+
+**Proposing team ({proposer_name}) gives up:**
+{offered_players}
+
+**Target team ({target_name}) gives up:**
+{requested_players}
+
+**Current Standings:**
+{standings}
+
+**Recent trades between these two specific teams (collusion-pattern context):**
+{recent_trades_between_teams}
+
+**Scoring Settings:**
+{scoring_config}
+
+After the RECOMMENDATION line, cover in plain text:
+1. FAIRNESS -- is the trade roughly balanced under this league's actual scoring?
+2. LEAGUE IMPACT -- how does this affect competitive balance/standings?
+3. PATTERN CHECK -- anything about the history between these two teams worth flagging (or explicitly say nothing stands out)?
+"""
+
 BET_ANALYSIS_PROMPT = """
 You are a sports betting analyst. Analyze these betting props/lines:
 
@@ -214,6 +249,35 @@ class AIService:
             combined_standings=json.dumps(combined_standings or [], indent=2),
             recent_transactions=json.dumps(recent_transactions or [], indent=2),
             features=json.dumps(features or {}, indent=2),
+            scoring_config=json.dumps(scoring_config or {}, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_trade_review(
+        self,
+        league_name: str,
+        proposer_name: str,
+        target_name: str,
+        offered_players: Optional[list] = None,
+        requested_players: Optional[list] = None,
+        standings: Optional[list] = None,
+        recent_trades_between_teams: Optional[list] = None,
+        scoring_config: Optional[dict] = None,
+    ) -> str:
+        """Commissioner-facing trade review -- fairness/league-impact
+        analysis and an APPROVE/REVIEW CLOSELY/VETO recommendation, for
+        the commissioner deciding whether to approve a pending trade
+        (distinct from analyze_trade, which grades the trade for the
+        two trading parties' own benefit). See trade_review_service.py
+        for how the RECOMMENDATION first line is parsed out."""
+        prompt = TRADE_REVIEW_PROMPT.format(
+            league_name=league_name,
+            proposer_name=proposer_name,
+            target_name=target_name,
+            offered_players=json.dumps(offered_players or [], indent=2),
+            requested_players=json.dumps(requested_players or [], indent=2),
+            standings=json.dumps(standings or [], indent=2),
+            recent_trades_between_teams=json.dumps(recent_trades_between_teams or [], indent=2),
             scoring_config=json.dumps(scoring_config or {}, indent=2),
         )
         return await self._call_llm(prompt)
