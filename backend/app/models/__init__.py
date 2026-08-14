@@ -17,6 +17,7 @@ from app.models.playoff import Playoff, PlayoffMatchup, PlayoffStatus
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.models.contract import Contract, DeadMoney
+from app.models.commissioner_digest import CommissionerDigest
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -28,4 +29,5 @@ __all__ = [
     "LeagueInvite", "InviteStatus",
     "LeagueJoinRequest", "JoinRequestStatus",
     "Contract", "DeadMoney",
+    "CommissionerDigest",
 ]
