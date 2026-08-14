@@ -35,6 +35,7 @@ interface LineupResponse {
   week: number;
   year: number;
   roster_slots: Record<string, number>;
+  best_ball: boolean;
   has_lineup_set: boolean;
   starters: string[];
   roster: RosterPlayer[];
@@ -47,10 +48,12 @@ function PlayerRow({
   player,
   onToggle,
   toggleDisabled,
+  readOnly = false,
 }: {
   player: RosterPlayer;
   onToggle: (id: string) => void;
   toggleDisabled: boolean;
+  readOnly?: boolean;
 }) {
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/40 transition-colors">
@@ -82,21 +85,31 @@ function PlayerRow({
           )}
         </div>
       </div>
-      <button
-        onClick={() => onToggle(player.id)}
-        disabled={!player.is_starter && toggleDisabled}
-        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-          player.is_starter
-            ? "bg-surface-700 hover:bg-red-500/20 hover:text-red-400 text-surface-300"
-            : "bg-gold-400 hover:bg-gold-300 text-surface-900"
-        }`}
-      >
-        {player.is_starter ? (
-          <><Minus className="w-3 h-3" /> Bench</>
-        ) : (
-          <><Plus className="w-3 h-3" /> Start</>
-        )}
-      </button>
+      {readOnly ? (
+        <span
+          className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 ${
+            player.is_starter ? "bg-gold-400/15 text-gold-400" : "bg-surface-700 text-surface-400"
+          }`}
+        >
+          {player.is_starter ? "Starting" : "Bench"}
+        </span>
+      ) : (
+        <button
+          onClick={() => onToggle(player.id)}
+          disabled={!player.is_starter && toggleDisabled}
+          className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+            player.is_starter
+              ? "bg-surface-700 hover:bg-red-500/20 hover:text-red-400 text-surface-300"
+              : "bg-gold-400 hover:bg-gold-300 text-surface-900"
+          }`}
+        >
+          {player.is_starter ? (
+            <><Minus className="w-3 h-3" /> Bench</>
+          ) : (
+            <><Plus className="w-3 h-3" /> Start</>
+          )}
+        </button>
+      )}
     </div>
   );
 }
@@ -256,45 +269,61 @@ export default function LineupPage() {
           </div>
         )}
 
-        {data && !data.has_lineup_set && (
-          <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 text-sm">
-            No lineup set for week {week} yet -- this team is currently scoring its whole roster.
-            Set starters below and save to switch to starter-only scoring for this week.
+        {data?.best_ball ? (
+          <div className="mb-4 p-3 bg-gold-400/10 border border-gold-400/30 rounded-xl text-gold-300 text-sm">
+            This league uses Best-Ball auto-lineups -- your highest-scoring eligible starters are
+            selected automatically from real per-week results, no lineup management needed.
           </div>
+        ) : (
+          data && !data.has_lineup_set && (
+            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 text-sm">
+              No lineup set for week {week} yet -- this team is currently scoring its whole roster.
+              Set starters below and save to switch to starter-only scoring for this week.
+            </div>
+          )
         )}
 
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-surface-400">
-              Starters: <span className={`font-bold ${atCapacity ? "text-gold-400" : "text-white"}`}>{starterIds.size}</span> / {totalSlots}
-            </span>
+        {!data?.best_ball && (
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-surface-400">
+                Starters: <span className={`font-bold ${atCapacity ? "text-gold-400" : "text-white"}`}>{starterIds.size}</span> / {totalSlots}
+              </span>
+              <button
+                onClick={handleOptimize}
+                disabled={optimizing}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface-800 border border-surface-700 text-surface-300 hover:text-gold-400 hover:border-gold-400/40 transition-all disabled:opacity-50"
+              >
+                {optimizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                Auto-Fill Best Lineup
+              </button>
+            </div>
             <button
-              onClick={handleOptimize}
-              disabled={optimizing}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface-800 border border-surface-700 text-surface-300 hover:text-gold-400 hover:border-gold-400/40 transition-all disabled:opacity-50"
+              onClick={handleSave}
+              disabled={saving}
+              className={`inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold transition-all ${
+                saved
+                  ? "bg-green-500 text-white"
+                  : "bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-50"
+              }`}
             >
-              {optimizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              Auto-Fill Best Lineup
+              {saving ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+              ) : saved ? (
+                <><RefreshCw className="w-3.5 h-3.5" /> Saved!</>
+              ) : (
+                <><Save className="w-3.5 h-3.5" /> Save Lineup</>
+              )}
             </button>
           </div>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className={`inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold transition-all ${
-              saved
-                ? "bg-green-500 text-white"
-                : "bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-50"
-            }`}
-          >
-            {saving ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
-            ) : saved ? (
-              <><RefreshCw className="w-3.5 h-3.5" /> Saved!</>
-            ) : (
-              <><Save className="w-3.5 h-3.5" /> Save Lineup</>
-            )}
-          </button>
-        </div>
+        )}
+        {data?.best_ball && (
+          <div className="flex items-center justify-end mb-4">
+            <span className="text-sm text-surface-400">
+              Starters: <span className="font-bold text-gold-400">{starterIds.size}</span> / {totalSlots}
+            </span>
+          </div>
+        )}
 
         <div className="space-y-4">
           <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
@@ -308,7 +337,7 @@ export default function LineupPage() {
             ) : (
               <div className="divide-y divide-surface-700/50">
                 {starters.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: true }} onToggle={toggle} toggleDisabled={false} />
+                  <PlayerRow key={p.id} player={{ ...p, is_starter: true }} onToggle={toggle} toggleDisabled={false} readOnly={!!data?.best_ball} />
                 ))}
               </div>
             )}
@@ -323,7 +352,7 @@ export default function LineupPage() {
             ) : (
               <div className="divide-y divide-surface-700/50">
                 {bench.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: false }} onToggle={toggle} toggleDisabled={atCapacity} />
+                  <PlayerRow key={p.id} player={{ ...p, is_starter: false }} onToggle={toggle} toggleDisabled={atCapacity} readOnly={!!data?.best_ball} />
                 ))}
               </div>
             )}

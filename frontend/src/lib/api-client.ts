@@ -199,6 +199,15 @@ export const leaguesApi = {
     }),
   previewSigning: (id: string, playerId: string) =>
     apiRequest(`/api/v1/leagues/${id}/salary-cap/preview-signing?player_id=${encodeURIComponent(playerId)}`),
+  getBestBallSettings: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/best-ball-settings`),
+  updateBestBallSettings: (id: string, bestBallSettings: Record<string, unknown>) =>
+    apiRequest(`/api/v1/leagues/${id}/best-ball-settings`, {
+      method: "PUT",
+      body: { best_ball_settings: bestBallSettings },
+    }),
+  getManagementWindow: (id: string) =>
+    apiRequest(`/api/v1/leagues/${id}/management-window`),
 };
 
 // Teams

@@ -7,10 +7,12 @@ from app.models.team import Team
 from app.models.league import League
 from app.models.player import Player
 from app.models.lineup import Lineup
+from app.models.weekly_score import WeeklyScore
 from app.models.user import User
 from app.api.deps import get_current_user, require_team_or_league_access
 from app.services.scoring_engine import calculate_player_score, calculate_optimal_lineup, DEFAULT_ROSTER_SLOTS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
+from app.services.best_ball_service import get_best_ball_settings
 
 router = APIRouter(prefix="/teams", tags=["lineups"])
 
@@ -66,17 +68,36 @@ async def get_lineup(
     false, every player comes back as bench (not "started as a mistake") --
     the frontend/scoring both treat "never touched this" as "score the
     whole roster" (see standings_service.calculate_week), not as an empty
-    lineup, so this endpoint's shape shouldn't imply otherwise."""
+    lineup, so this endpoint's shape shouldn't imply otherwise.
+
+    Best-Ball (Phase 6): there is no manual starter selection at all in
+    this mode -- starters come from that week's WeeklyScore.lineup_data
+    (auto_starters, set by calculate_week's own optimizer call), not any
+    Lineup row. No WeeklyScore yet for this week (scoring hasn't run) ->
+    every player comes back as bench, same "nothing decided yet" shape
+    the non-best-ball no-Lineup-row case already uses."""
     team, league = await _get_team_league_or_404(team_id, db)
     roster_slots = dict(DEFAULT_ROSTER_SLOTS)
     roster_slots.update(league.roster_slots or {})
     scoring_config = league.scoring_config or {}
+    is_best_ball = get_best_ball_settings(league)["enabled"]
 
-    result = await db.execute(
-        select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
-    )
-    lineup = result.scalar_one_or_none()
-    starter_ids = set(lineup.starters or []) if lineup else set()
+    if is_best_ball:
+        ws_result = await db.execute(
+            select(WeeklyScore).where(
+                WeeklyScore.team_id == team_id, WeeklyScore.week == week, WeeklyScore.year == year,
+            )
+        )
+        weekly_score = ws_result.scalar_one_or_none()
+        starter_ids = set((weekly_score.lineup_data or {}).get("auto_starters") or []) if weekly_score else set()
+        has_lineup_set = weekly_score is not None and bool(starter_ids)
+    else:
+        result = await db.execute(
+            select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
+        )
+        lineup = result.scalar_one_or_none()
+        starter_ids = set(lineup.starters or []) if lineup else set()
+        has_lineup_set = lineup is not None
 
     roster = await _resolve_roster(team, db)
     return {
@@ -84,7 +105,8 @@ async def get_lineup(
         "week": week,
         "year": year,
         "roster_slots": roster_slots,
-        "has_lineup_set": lineup is not None,
+        "best_ball": is_best_ball,
+        "has_lineup_set": has_lineup_set,
         "starters": sorted(starter_ids),
         "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config) for p in roster],
     }
@@ -105,6 +127,11 @@ async def set_lineup(
 ):
     team, league = await _get_team_league_or_404(team_id, db)
     require_team_or_league_access(team, league, current_user)
+    if get_best_ball_settings(league)["enabled"]:
+        raise HTTPException(
+            status_code=400,
+            detail="This league uses Best-Ball auto-lineups -- starters are selected automatically each week.",
+        )
 
     roster_set = set(team.roster or [])
     starters = list(dict.fromkeys(data.starters))  # de-dupe, preserve order
@@ -149,6 +176,11 @@ async def optimize_lineup(
     app has no data source for). Saves the result, same as a manual set."""
     team, league = await _get_team_league_or_404(team_id, db)
     require_team_or_league_access(team, league, current_user)
+    if get_best_ball_settings(league)["enabled"]:
+        raise HTTPException(
+            status_code=400,
+            detail="This league uses Best-Ball auto-lineups -- starters are selected automatically each week.",
+        )
 
     roster_slots = dict(DEFAULT_ROSTER_SLOTS)
     roster_slots.update(league.roster_slots or {})
