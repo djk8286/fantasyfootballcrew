@@ -20,6 +20,7 @@ from app.models.notification import NotificationType
 from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.services.commissioner_digest_service import generate_and_save_digest, get_digest
+from app.services.trade_review_service import generate_and_save_trade_review
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -334,6 +335,50 @@ async def review_trade(
     await db.commit()
     await db.refresh(trade)
     return trade
+
+
+@router.post("/trades/{trade_id}/analyze")
+@limiter.limit("10/hour")
+async def analyze_trade_for_review(
+    request: Request,
+    league_id: str,
+    trade_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Smart Trade Review Assistant (AI Co-Commissioner v1) -- AI
+    fairness/league-impact/collusion-pattern analysis for a pending
+    trade, with a clear recommendation, to help the commissioner decide
+    whether to approve it. Rate-limited (real LLM spend), commissioner-
+    only. Never touches trade.status/reviewed_by -- review_trade's own
+    approve/deny flow is completely unaffected by whether this was
+    ever called."""
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.id == trade_id,
+            Transaction.league_id == league_id,
+            Transaction.type == TransactionType.TRADE,
+        )
+    )
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    if trade.status != TransactionStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only a pending trade can be analyzed")
+
+    target_team_id = (trade.details or {}).get("target_team_id")
+    proposer_result = await db.execute(select(Team).where(Team.id == trade.team_id))
+    proposer = proposer_result.scalar_one_or_none()
+    target_result = await db.execute(select(Team).where(Team.id == target_team_id))
+    target = target_result.scalar_one_or_none()
+    if not proposer or not target:
+        raise HTTPException(status_code=404, detail="One of the trading teams no longer exists")
+
+    review = await generate_and_save_trade_review(trade, league, proposer, target, current_user.id, db)
+    return review
 
 
 # ═══════════════════════════════════════════════
