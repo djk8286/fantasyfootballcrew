@@ -26,6 +26,7 @@ import {
   Bot,
   Loader2,
   HeartPulse,
+  BarChart3,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -74,7 +75,38 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights";
+
+interface CategoryVarianceObservation {
+  category: string;
+  coefficient_of_variation: number;
+  average_points: number;
+  summary: string;
+}
+
+interface CoachBonusObservation {
+  bonus_type: string;
+  average_bonus_points: number;
+  share_of_average_score: number;
+  summary: string;
+}
+
+interface PositionalBalanceObservation {
+  highest_position: string;
+  highest_average: number;
+  lowest_position: string;
+  lowest_average: number;
+  summary: string;
+}
+
+interface ScoringInsights {
+  available: boolean;
+  weeks_available: number;
+  weeks_required?: number;
+  category_variance?: CategoryVarianceObservation[];
+  coach_bonus_impact?: CoachBonusObservation[];
+  positional_balance?: PositionalBalanceObservation[];
+}
 
 interface TeamHealth {
   team_id: string;
@@ -195,6 +227,7 @@ export default function CommissionerPage() {
             { id: "invites" as Tab, label: "Invites", icon: Mail },
             { id: "digest" as Tab, label: "AI Digest", icon: Bot },
             { id: "health" as Tab, label: "League Health", icon: HeartPulse },
+            { id: "insights" as Tab, label: "Scoring Insights", icon: BarChart3 },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -236,6 +269,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "health" && (
           <HealthPanel leagueId={leagueId} />
+        )}
+        {activeTab === "insights" && (
+          <InsightsPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1487,6 +1523,88 @@ function HealthPanel({ leagueId }: { leagueId: string }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 8: SCORING & RULE INSIGHTS (AI Co-Commissioner v1, Phase 2)
+// ═══════════════════════════════════════════
+// Computed data, not AI-generated text -- same "zero LLM calls, real
+// arithmetic, plain-English explanations" pattern as HealthPanel
+// above. Presented as suggestions with supporting data, never phrased
+// as an instruction -- the commissioner decides what (if anything) is
+// worth acting on.
+
+function InsightsPanel({ leagueId }: { leagueId: string }) {
+  const [insights, setInsights] = useState<ScoringInsights | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    commissionerApi
+      .getScoringInsights(leagueId)
+      .then((data) => setInsights(data as ScoringInsights))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load scoring insights"))
+      .finally(() => setLoading(false));
+  }, [leagueId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!insights || !insights.available) {
+    const need = insights?.weeks_required ?? 3;
+    const have = insights?.weeks_available ?? 0;
+    return (
+      <div className="p-6 text-center text-surface-500 text-sm bg-surface-800/50 border border-surface-700 rounded-2xl">
+        Not enough data yet -- scoring insights need at least {need} scored weeks (this league has {have} so far).
+      </div>
+    );
+  }
+
+  const sections: { title: string; items: { summary: string }[] | undefined; emptyText: string }[] = [
+    { title: "Category Variance", items: insights.category_variance, emptyText: "No scoring categories stand out as unusually swingy right now." },
+    { title: "Coach Bonus Impact", items: insights.coach_bonus_impact, emptyText: "No coach bonuses stand out as over- or under-powered right now." },
+    { title: "Positional Balance", items: insights.positional_balance, emptyText: "No large scoring gap between positions right now." },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-surface-500">
+        Based on {insights.weeks_available} scored week{insights.weeks_available === 1 ? "" : "s"} so far. Suggestions only -- you decide what&apos;s worth changing.
+      </p>
+      {sections.map(({ title, items, emptyText }) => (
+        <div key={title} className="bg-surface-800/50 border border-surface-700 rounded-2xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">{title}</h3>
+          {items && items.length > 0 ? (
+            <ul className="space-y-2">
+              {items.map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-surface-300">
+                  <BarChart3 className="w-3.5 h-3.5 text-purple-400 shrink-0 mt-0.5" />
+                  <span>{item.summary}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-surface-500">{emptyText}</p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

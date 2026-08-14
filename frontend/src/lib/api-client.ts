@@ -430,6 +430,10 @@ export const commissionerApi = {
   // League Health Dashboard (AI Co-Commissioner v1)
   getLeagueHealth: (leagueId: string) =>
     apiRequest(`/api/v1/leagues/${leagueId}/commissioner/health`),
+
+  // Scoring & Rule Balance Insights (AI Co-Commissioner v1, Phase 2)
+  getScoringInsights: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/insights`),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)
