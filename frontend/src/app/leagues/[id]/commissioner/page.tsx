@@ -25,6 +25,7 @@ import {
   UserPlus,
   Bot,
   Loader2,
+  HeartPulse,
 } from "lucide-react";
 import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -73,7 +74,25 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest";
+type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health";
+
+interface TeamHealth {
+  team_id: string;
+  team_name: string;
+  is_co_owned: boolean;
+  lineup_rate: number | null;
+  transaction_count: number;
+  at_risk: boolean;
+  reason: string;
+}
+
+interface LeagueHealth {
+  teams: TeamHealth[];
+  parity_spread: number;
+  at_risk_count: number;
+  total_teams: number;
+  is_best_ball: boolean;
+}
 
 interface Invite {
   id: string;
@@ -175,6 +194,7 @@ export default function CommissionerPage() {
             { id: "coaches" as Tab, label: "Coaches", icon: Users },
             { id: "invites" as Tab, label: "Invites", icon: Mail },
             { id: "digest" as Tab, label: "AI Digest", icon: Bot },
+            { id: "health" as Tab, label: "League Health", icon: HeartPulse },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -213,6 +233,9 @@ export default function CommissionerPage() {
         )}
         {activeTab === "digest" && (
           <DigestPanel leagueId={leagueId} />
+        )}
+        {activeTab === "health" && (
+          <HealthPanel leagueId={leagueId} />
         )}
       </div>
     </div>
@@ -1336,6 +1359,134 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
           No digest generated for Week {week} yet -- click &quot;Generate This Week&apos;s Digest&quot; above.
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 7: LEAGUE HEALTH DASHBOARD (AI Co-Commissioner v1)
+// ═══════════════════════════════════════════
+// Computed data, not AI-generated text -- no LLM call anywhere in this
+// panel, just real arithmetic over existing rows (see
+// league_health_service.py). Recomputed fresh on every load, so a plain
+// "Refresh" button is enough -- no generate/regenerate distinction like
+// the digest above.
+
+function HealthPanel({ leagueId }: { leagueId: string }) {
+  const [health, setHealth] = useState<LeagueHealth | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    commissionerApi
+      .getLeagueHealth(leagueId)
+      .then((data) => setHealth(data as LeagueHealth))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load league health"))
+      .finally(() => setLoading(false));
+  }, [leagueId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!health || health.total_teams === 0) {
+    return (
+      <div className="p-6 text-center text-surface-500 text-sm bg-surface-800/50 border border-surface-700 rounded-2xl">
+        No teams yet -- health metrics will appear once the league has teams and at least one scored week.
+      </div>
+    );
+  }
+
+  const hasCoOwnedTeam = health.teams.some((t) => t.is_co_owned);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="px-4 py-2 bg-surface-800 border border-surface-700 rounded-xl">
+            <p className="text-[10px] text-surface-500 uppercase tracking-wider">At-Risk Teams</p>
+            <p className={`text-lg font-bold ${health.at_risk_count > 0 ? "text-red-400" : "text-green-400"}`}>
+              {health.at_risk_count} / {health.total_teams}
+            </p>
+          </div>
+          <div className="px-4 py-2 bg-surface-800 border border-surface-700 rounded-xl">
+            <p className="text-[10px] text-surface-500 uppercase tracking-wider">Parity Spread</p>
+            <p className="text-lg font-bold text-white">{health.parity_spread}</p>
+          </div>
+        </div>
+        <button
+          onClick={load}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-surface-800 hover:bg-surface-700 text-surface-300 border border-surface-700 transition-all"
+        >
+          <HeartPulse className="w-3.5 h-3.5" /> Refresh
+        </button>
+      </div>
+
+      {health.is_best_ball && (
+        <p className="text-xs text-surface-500 mb-3">
+          This is a Best-Ball league -- lineups are set automatically, so lineup-setting rate isn&apos;t a meaningful engagement signal here.
+        </p>
+      )}
+      {hasCoOwnedTeam && (
+        <p className="text-xs text-surface-500 mb-3">
+          Co-owned team activity shown below is combined for both managers -- this can flag a team&apos;s overall engagement, but not which specific co-owner is inactive.
+        </p>
+      )}
+
+      <div className="overflow-x-auto rounded-2xl border border-surface-700">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-800 text-surface-400 text-xs uppercase tracking-wider">
+            <tr>
+              <th className="text-left px-4 py-3">Team</th>
+              <th className="text-left px-4 py-3">Lineup Rate</th>
+              <th className="text-left px-4 py-3">Transactions</th>
+              <th className="text-left px-4 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {health.teams.map((t) => (
+              <tr key={t.team_id} className="border-t border-surface-800">
+                <td className="px-4 py-3 text-white font-medium">
+                  {t.team_name}
+                  {t.is_co_owned && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded bg-surface-700 text-[10px] text-surface-300 align-middle">
+                      Co-Owned
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-surface-300">
+                  {t.lineup_rate === null ? "N/A (Best-Ball)" : `${Math.round(t.lineup_rate * 100)}%`}
+                </td>
+                <td className="px-4 py-3 text-surface-300">{t.transaction_count}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1.5">
+                    {t.at_risk ? (
+                      <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                    ) : (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                    )}
+                    <span className="text-xs text-surface-400">{t.reason}</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -426,6 +426,10 @@ export const commissionerApi = {
     }),
   getDigest: (leagueId: string, week: number, year: number) =>
     apiRequest(`/api/v1/leagues/${leagueId}/commissioner/digest?week=${week}&year=${year}`),
+
+  // League Health Dashboard (AI Co-Commissioner v1)
+  getLeagueHealth: (leagueId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/commissioner/health`),
 };
 
 // Trades (proposing/listing — reviewing lives on commissionerApi)
