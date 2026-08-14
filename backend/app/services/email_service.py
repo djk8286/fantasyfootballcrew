@@ -56,6 +56,45 @@ async def send_password_reset_email(to_email: str, reset_link: str) -> None:
             print(f"[email send FAILED, falling back to log] {to_email}: {reset_link} -- {e}", flush=True)
 
 
+async def send_verification_email(to_email: str, verify_link: str) -> None:
+    """Sent once, right after registration -- track-only (Auth Security
+    Hardening, Step 3): nothing in the app blocks on this being clicked,
+    it just flips User.email_verified when it is. Same shape as
+    send_password_reset_email (graceful no-key stub, swallow-and-log
+    send failures)."""
+    subject = "Verify your email for FantasyFootballCrew"
+    text_body = (
+        f"Welcome to FantasyFootballCrew! Verify your email address:\n\n"
+        f"{verify_link}\n\n"
+        f"This link expires in 48 hours. Your account already works without "
+        f"verifying -- this is just so we have a confirmed way to reach you."
+    )
+
+    if not settings.RESEND_API_KEY:
+        print(
+            f"[email stub -- no RESEND_API_KEY configured] "
+            f"Verification email for {to_email}: {verify_link}",
+            flush=True,
+        )
+        return
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                json={
+                    "from": settings.RESEND_FROM_EMAIL,
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": text_body,
+                },
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[email send FAILED, falling back to log] {to_email}: {verify_link} -- {e}", flush=True)
+
+
 async def send_league_invite_email(
     to_email: str,
     league_name: str,

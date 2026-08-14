@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class UserCreate(BaseModel):
-    email: str
+    email: EmailStr
     username: str
     password: Optional[str] = Field(default=None, min_length=8)
     provider: str = "email"
@@ -22,6 +22,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(min_length=8)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
 
 
 class UserUpdate(BaseModel):

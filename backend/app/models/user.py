@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, func
+from sqlalchemy import String, DateTime, Integer, Boolean, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -22,5 +22,10 @@ class User(Base):
     # rejected -- closes the "a stolen token survives a password change"
     # gap without needing a dedicated logout-everywhere/session-list UI.
     token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Auth Security Hardening, Step 3 -- track-only, not yet enforced
+    # anywhere. No login/feature is gated on this; it's groundwork for
+    # enforcing it later, closer to a public launch, without a schema
+    # change at that point. See auth.py's register()/verify-email.
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

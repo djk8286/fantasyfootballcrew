@@ -20,6 +20,7 @@ from app.models.contract import Contract, DeadMoney
 from app.models.commissioner_digest import CommissionerDigest
 from app.models.chat_message import ChatMessage
 from app.models.ai_usage_event import AIUsageEvent
+from app.models.email_verification_token import EmailVerificationToken
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -34,4 +35,5 @@ __all__ = [
     "CommissionerDigest",
     "ChatMessage",
     "AIUsageEvent",
+    "EmailVerificationToken",
 ]

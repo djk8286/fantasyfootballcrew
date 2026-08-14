@@ -8,14 +8,20 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.user import User
 from app.models.password_reset_token import PasswordResetToken
-from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest
+from app.models.email_verification_token import EmailVerificationToken
+from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest, VerifyEmailRequest
 from app.services.auth_service import hash_password, verify_password, needs_rehash, create_access_token, hash_token
-from app.services.email_service import send_password_reset_email
+from app.services.email_service import send_password_reset_email, send_verification_email
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 RESET_TOKEN_LIFETIME = timedelta(hours=1)
+# Longer than the password-reset window on purpose -- verification is
+# track-only/low-stakes (nothing is gated on it), so there's no reason
+# to rush someone into clicking it the way a security-sensitive reset
+# link should expire fast.
+VERIFY_TOKEN_LIFETIME = timedelta(hours=48)
 
 
 # Registration is a rare, one-time action for a real user, so a tight limit
@@ -44,6 +50,21 @@ async def register(request: Request, user_data: UserCreate, db: AsyncSession = D
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    # Track-only email verification (Auth Security Hardening, Step 3) --
+    # nothing blocks on this being clicked; see VerifyEmailRequest/
+    # verify_email below. Fire-and-forget: a verification-email hiccup
+    # should never fail a registration that already succeeded.
+    raw_token = secrets.token_urlsafe(32)
+    db.add(EmailVerificationToken(
+        user_id=user.id,
+        token_hash=hash_token(raw_token),
+        expires_at=datetime.now(timezone.utc) + VERIFY_TOKEN_LIFETIME,
+    ))
+    await db.commit()
+    verify_link = f"{settings.FRONTEND_URL}/verify-email?token={raw_token}"
+    await send_verification_email(user.email, verify_link)
+
     return user
 
 
@@ -129,6 +150,34 @@ async def reset_password(request: Request, data: ResetPasswordRequest, db: Async
     await db.commit()
 
     return {"message": "Password updated. You can now log in with your new password."}
+
+
+@router.post("/verify-email")
+@limiter.limit("10/hour")
+async def verify_email(request: Request, data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """Track-only (Auth Security Hardening, Step 3) -- flips
+    User.email_verified. Nothing in the app is gated on this; it's
+    groundwork for enforcing it later, closer to a public launch."""
+    result = await db.execute(
+        select(EmailVerificationToken).where(EmailVerificationToken.token_hash == hash_token(data.token))
+    )
+    verify_token = result.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    expired = verify_token and verify_token.expires_at.replace(tzinfo=timezone.utc) < now
+    if not verify_token or verify_token.used_at is not None or expired:
+        raise HTTPException(status_code=400, detail="This verification link is invalid or has expired.")
+
+    user_result = await db.execute(select(User).where(User.id == verify_token.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="This verification link is invalid or has expired.")
+
+    user.email_verified = True
+    verify_token.used_at = now
+    await db.commit()
+
+    return {"message": "Email verified."}
 
 
 @router.get("/me", response_model=UserRead)

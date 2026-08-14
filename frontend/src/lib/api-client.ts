@@ -121,6 +121,11 @@ export const authApi = {
       method: "POST",
       body: { token, new_password: newPassword },
     }),
+  verifyEmail: (token: string) =>
+    apiRequest("/api/v1/auth/verify-email", {
+      method: "POST",
+      body: { token },
+    }),
 };
 
 // Users
