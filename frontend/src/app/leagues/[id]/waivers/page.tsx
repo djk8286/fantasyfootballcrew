@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
+import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 
 interface Team {
@@ -329,6 +330,7 @@ export default function WaiversPage() {
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <h1 className="text-lg font-semibold text-white">{league?.name} — Waivers</h1>
+          <ManagementWindowIndicator leagueId={leagueId} />
         </div>
       </div>
 

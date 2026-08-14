@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, Swords, Lock, Unlock, ShieldCheck, Skull, DollarSign } from "lucide-react";
+import { Users, Swords, Lock, Unlock, ShieldCheck, Skull, DollarSign, Sparkles } from "lucide-react";
 
 // Shared definitions used everywhere a league's type/visibility/open-spot
 // count needs to render -- the leagues grid, the Wanted Board, and the
@@ -102,6 +102,19 @@ export function SalaryCapBadge() {
     <span className="inline-flex items-center gap-1 text-[10px] text-green-400 font-semibold uppercase tracking-wider bg-green-400/10 border border-green-400/20 px-1.5 py-0.5 rounded shrink-0">
       <DollarSign className="w-2.5 h-2.5" />
       Salary Cap
+    </span>
+  );
+}
+
+// Best-Ball Hybrid (Phase 6) -- same bolt-on-flag placement rule as
+// SalaryCapBadge above (League.best_ball_settings.enabled, not a
+// league_type): rendered only where the dedicated settings resource is
+// already fetched directly, not the general /leagues discovery list.
+export function BestBallBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-purple-400 font-semibold uppercase tracking-wider bg-purple-400/10 border border-purple-400/20 px-1.5 py-0.5 rounded shrink-0">
+      <Sparkles className="w-2.5 h-2.5" />
+      Best-Ball
     </span>
   );
 }

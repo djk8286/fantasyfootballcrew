@@ -8,7 +8,8 @@ import { getAvatarStyle } from "@/lib/team-avatars";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
-import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge } from "@/components/LeagueBadges";
+import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
+import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import {
   ChevronLeft,
   Bot,
@@ -112,6 +113,7 @@ export default function TeamPage() {
   const [savingLastWords, setSavingLastWords] = useState(false);
   const [capEnabled, setCapEnabled] = useState(false);
   const [cap, setCap] = useState<CapSummary | null>(null);
+  const [bestBallEnabled, setBestBallEnabled] = useState(false);
 
   const currentUserId = getCurrentUserId();
 
@@ -167,6 +169,11 @@ export default function TeamPage() {
           teamsApi.getCap(teamId).then((c) => setCap(c as CapSummary)).catch(() => {});
         }
       })
+      .catch(() => {});
+
+    leaguesApi
+      .getBestBallSettings(leagueId)
+      .then((data) => setBestBallEnabled(!!(data as { enabled?: boolean })?.enabled))
       .catch(() => {});
   }, [leagueId, teamId]);
 
@@ -308,6 +315,8 @@ export default function TeamPage() {
                 displayName={conferenceShortLabel(team.conference, league?.conference_a_name, league?.conference_b_name)}
               />
               {capEnabled && <SalaryCapBadge />}
+              {bestBallEnabled && <BestBallBadge />}
+              {bestBallEnabled && <ManagementWindowIndicator leagueId={leagueId} />}
             </div>
             <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
               {team.is_cpu ? (

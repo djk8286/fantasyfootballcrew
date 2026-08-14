@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, ArrowLeftRight, Send } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId } from "@/lib/api-client";
+import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 
 interface Team {
   id: string;
@@ -151,6 +152,7 @@ export default function TradesPage() {
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <h1 className="text-lg font-semibold text-white">{league?.name} — Trades</h1>
+          <ManagementWindowIndicator leagueId={leagueId} />
         </div>
       </div>
 

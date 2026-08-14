@@ -5,7 +5,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
-import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge } from "@/components/LeagueBadges";
+import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
+import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -38,6 +39,7 @@ import {
   Clock,
   Mail,
   DollarSign,
+  Sparkles,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -208,6 +210,9 @@ export default function LeagueDetailPage() {
   // settings), purely to decide whether the SalaryCapBadge renders.
   const [capEnabled, setCapEnabled] = useState(false);
 
+  // Best-Ball Hybrid (Phase 6) -- same bolt-on-flag pattern as capEnabled.
+  const [bestBallEnabled, setBestBallEnabled] = useState(false);
+
   // ─── Data fetching ─────────────────────────────────────
 
   useEffect(() => {
@@ -241,6 +246,11 @@ export default function LeagueDetailPage() {
     leaguesApi
       .getSalaryCapSettings(id)
       .then((data) => setCapEnabled(!!(data as { enabled?: boolean })?.enabled))
+      .catch(() => {});
+
+    leaguesApi
+      .getBestBallSettings(id)
+      .then((data) => setBestBallEnabled(!!(data as { enabled?: boolean })?.enabled))
       .catch(() => {});
   }, [id]);
 
@@ -721,6 +731,8 @@ export default function LeagueDetailPage() {
                     </h1>
                     <VisibilityBadge visibility={league.visibility} />
                     {capEnabled && <SalaryCapBadge />}
+                    {bestBallEnabled && <BestBallBadge />}
+                    {bestBallEnabled && <ManagementWindowIndicator leagueId={id} />}
                     {isLeagueManager && (
                       <button
                         onClick={() => {
@@ -827,6 +839,13 @@ export default function LeagueDetailPage() {
               >
                 <DollarSign className="w-4 h-4" />
                 Salary Cap Settings
+              </Link>
+              <Link
+                href={`/leagues/${id}/best-ball-settings`}
+                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+              >
+                <Sparkles className="w-4 h-4" />
+                Best-Ball Settings
               </Link>
               <Link
                 href={`/leagues/${id}/standings`}
