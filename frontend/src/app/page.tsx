@@ -10,6 +10,7 @@ import {
   Skull,
   DollarSign,
   Zap,
+  Copy,
 } from "lucide-react";
 import StatTile from "@/components/ui/StatTile";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
@@ -72,6 +73,13 @@ const features = [
     gradient: "from-yellow-400 to-orange-500",
   },
   {
+    icon: Copy,
+    title: "Dual-Squad Leagues",
+    description:
+      "Run two teams, one manager. Claim a linked pair and draft, trade, and set lineups for both independently, with a combined standings view showing how your pair stacks up together.",
+    gradient: "from-blue-500 to-indigo-700",
+  },
+  {
     icon: Sparkles,
     title: "Everything Else You Love",
     description:
@@ -109,9 +117,9 @@ export default function Home() {
             </h1>
 
             <p className="text-lg md:text-xl text-surface-300 max-w-2xl mx-auto mb-10 leading-relaxed">
-              Custom scoring. 2-Man Teams. Conference Battles. Coaches &
-              Coordinators. AI-Powered Analysis. The only limit is your
-              imagination.
+              Custom scoring. 2-Man Teams. Conference Battles. Dual-Squad
+              Pairs. Coaches & Coordinators. AI-Powered Analysis. The only
+              limit is your imagination.
             </p>
 
             {/* CTA Buttons */}
@@ -133,7 +141,7 @@ export default function Home() {
             {/* Stats */}
             <div className="grid grid-cols-3 gap-8 mt-20 max-w-lg mx-auto py-6 border-y border-surface-700/60">
               <StatTile icon={InfinityIcon} value="∞" label="Scoring Combos" accent />
-              <StatTile icon={Trophy} value="4" label="League Types" accent />
+              <StatTile icon={Trophy} value="5" label="League Types" accent />
               <StatTile icon={Bot} value="AI" label="Powered Analysis" accent />
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   Skull,
   DollarSign,
   Zap,
+  Copy,
 } from "lucide-react";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
@@ -114,6 +115,20 @@ const features = [
       "Zero manual lineup management: no Start/Bench toggles, nothing to remember",
       "A commissioner-set weekly management window controls when trade approvals and waiver claims settle",
       "Trade and waiver claims can still be submitted any time -- they just wait for the window to reopen",
+    ],
+  },
+  {
+    icon: Copy,
+    title: "Dual-Squad Leagues",
+    gradient: "from-blue-500 to-indigo-700",
+    description:
+      "Run two teams, one manager. Draft, trade, and set lineups for both squads independently, with a combined standings view showing how your pair stacks up together.",
+    points: [
+      "Claim either team of a linked pair and you're automatically the owner of both",
+      "Your two teams draft in their own normal, independent snake positions -- never back-to-back on purpose",
+      "Your pair is never scheduled against itself -- that week becomes an automatic bye for both",
+      "Trades between your own two teams go through the same commissioner-approval pipeline as any other trade",
+      "See your combined win-loss record and points alongside every other pair's, plus each team's own standing",
     ],
   },
   {
