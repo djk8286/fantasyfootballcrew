@@ -21,6 +21,7 @@ from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.services.commissioner_digest_service import generate_and_save_digest, get_digest
 from app.services.trade_review_service import generate_and_save_trade_review
+from app.services.league_health_service import compute_league_health
 
 router = APIRouter(prefix="/leagues/{league_id}/commissioner", tags=["commissioner"])
 
@@ -518,3 +519,21 @@ async def get_digest_route(
         "week": digest.week, "year": digest.year, "content": digest.content,
         "created_at": digest.created_at, "tone": digest.tone, "length": digest.length,
     }
+
+
+# ═══════════════════════════════════════════════
+#  5. LEAGUE HEALTH DASHBOARD (AI Co-Commissioner v1)
+# ═══════════════════════════════════════════════
+# Pure computation, zero LLM calls -- see league_health_service.py.
+# Cheap and deterministic, so no rate limit and no persistence:
+# recomputed fresh on every request.
+
+@router.get("/health")
+async def get_league_health(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    league = await _get_league(league_id, db)
+    require_commissioner(league, current_user)
+    return await compute_league_health(league, db)
