@@ -263,7 +263,7 @@ export default function CommissionerPage() {
       {/* Header */}
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap gap-y-2">
             <Link
               href={`/leagues/${leagueId}`}
               className="text-surface-400 hover:text-white transition-colors"
@@ -305,9 +305,18 @@ export default function CommissionerPage() {
         </div>
       )}
 
-      {/* Tab bar */}
+      {/* Tab bar -- horizontally scrollable, not stretched-to-fit: with
+          11 tabs (grew from 5 over the course of this initiative),
+          flex-1-stretching every tab to equal width caused labels to
+          wrap to 2 lines and the whole strip to overflow unusably on
+          a phone screen (confirmed via a real mobile-viewport check --
+          only 3 of 11 tabs were reachable at all). Natural-width tabs
+          + overflow-x-auto is the standard mobile-safe tab-strip
+          pattern; on a wide desktop screen with room to spare, it just
+          reads as left-aligned instead of edge-to-edge, no functional
+          change there. */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <div role="tablist" aria-label="Commissioner sections" className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700">
+        <div role="tablist" aria-label="Commissioner sections" className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700 overflow-x-auto">
           {[
             { id: "adjustments" as Tab, label: "Points Adjustments", icon: Scale },
             { id: "trades" as Tab, label: "Trades", icon: Ban },
@@ -326,7 +335,7 @@ export default function CommissionerPage() {
               onClick={() => setActiveTab(id)}
               role="tab"
               aria-selected={activeTab === id}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+              className={`shrink-0 whitespace-nowrap flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                 activeTab === id
                   ? "bg-surface-700 text-white shadow-sm"
                   : "text-surface-400 hover:text-white"
