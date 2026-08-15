@@ -260,7 +260,7 @@ export default function TeamPage() {
     <div className="min-h-screen bg-surface-900">
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
-          <Link href={`/leagues/${leagueId}`} className="text-surface-400 hover:text-white transition-colors">
+          <Link href={`/leagues/${leagueId}`} aria-label="Back to league" className="text-surface-400 hover:text-white transition-colors">
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <h1 className="text-lg font-semibold text-white">{league?.name} — Team</h1>

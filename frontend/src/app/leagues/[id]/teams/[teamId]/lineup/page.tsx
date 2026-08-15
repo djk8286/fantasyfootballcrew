@@ -228,6 +228,7 @@ export default function LineupPage() {
             <div className="flex items-center gap-3 min-w-0">
               <Link
                 href={`/leagues/${leagueId}/teams/${teamId}`}
+                aria-label="Back to team"
                 className="text-surface-400 hover:text-white transition-colors shrink-0"
               >
                 <ArrowLeft className="w-5 h-5" />

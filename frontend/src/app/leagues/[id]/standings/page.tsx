@@ -633,6 +633,7 @@ export default function StandingsPage() {
               {/* Week selector */}
               <div className="relative">
                 <select
+                  aria-label="Select week"
                   value={selectedWeek}
                   onChange={(e) => setSelectedWeek(Number(e.target.value))}
                   className="appearance-none bg-surface-800 border border-surface-600 text-white rounded-lg pl-4 pr-10 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400/50 cursor-pointer"

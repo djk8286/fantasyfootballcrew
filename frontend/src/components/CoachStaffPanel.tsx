@@ -198,7 +198,7 @@ export default function CoachStaffPanel({ teamId, canManage }: { teamId: string;
         <div className="text-center text-surface-500 py-12">
           <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
           <p className="text-sm">No coaches yet</p>
-          <p className="text-xs text-surface-600 mt-1">Add HC/OC/DC/STC coaches with performance bonuses</p>
+          <p className="text-xs text-surface-500 mt-1">Add HC/OC/DC/STC coaches with performance bonuses</p>
         </div>
       ) : (
         <div className="space-y-2">

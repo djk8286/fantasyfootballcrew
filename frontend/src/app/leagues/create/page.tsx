@@ -262,11 +262,12 @@ export default function CreateLeaguePage() {
 
             {/* Team Count */}
             <div>
-              <label className="block text-sm font-medium text-surface-300 mb-3">
+              <label htmlFor="max_teams" className="block text-sm font-medium text-surface-300 mb-3">
                 Number of Teams <span className="text-red-400">*</span>
               </label>
               <input
                 type="range"
+                id="max_teams"
                 name="max_teams"
                 min={4}
                 max={32}

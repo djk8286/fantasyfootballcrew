@@ -139,8 +139,9 @@ export default function SettingsPage() {
 
           {requiresPassword && (
             <div className="mb-4">
-              <label className="text-xs text-surface-400 font-medium">Confirm your password</label>
+              <label htmlFor="delete-confirm-password" className="text-xs text-surface-400 font-medium">Confirm your password</label>
               <input
+                id="delete-confirm-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -151,10 +152,11 @@ export default function SettingsPage() {
           )}
 
           <div className="mb-4">
-            <label className="text-xs text-surface-400 font-medium">
+            <label htmlFor="delete-confirm-text" className="text-xs text-surface-400 font-medium">
               Type <span className="font-mono text-red-400">DELETE</span> to confirm
             </label>
             <input
+              id="delete-confirm-text"
               type="text"
               value={confirmText}
               onChange={(e) => setConfirmText(e.target.value)}
@@ -218,7 +220,7 @@ export default function SettingsPage() {
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="text-surface-400 hover:text-white transition-colors shrink-0">
+            <Link href="/dashboard" aria-label="Back to dashboard" className="text-surface-400 hover:text-white transition-colors shrink-0">
               <ArrowLeft className="w-5 h-5" />
             </Link>
             <h1 className="text-lg font-bold text-white">Account Settings</h1>
@@ -235,8 +237,9 @@ export default function SettingsPage() {
           </div>
           <div className="p-5 space-y-4">
             <div>
-              <label className="text-xs text-surface-400 font-medium">Username</label>
+              <label htmlFor="username" className="text-xs text-surface-400 font-medium">Username</label>
               <input
+                id="username"
                 type="text"
                 value={username}
                 onChange={(e) => { setUsername(e.target.value); setProfileSaved(false); }}
@@ -247,7 +250,7 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2 text-surface-400 text-sm">
               <Mail className="w-3.5 h-3.5 shrink-0" />
               <span>{me.email}</span>
-              <span className="text-surface-600 text-xs">(can't be changed here)</span>
+              <span className="text-surface-500 text-xs">(can't be changed here)</span>
             </div>
 
             <div className="flex items-center gap-2 text-surface-500 text-xs">
@@ -293,8 +296,9 @@ export default function SettingsPage() {
             </div>
             <div className="p-5 space-y-4">
               <div>
-                <label className="text-xs text-surface-400 font-medium">Current password</label>
+                <label htmlFor="current-password" className="text-xs text-surface-400 font-medium">Current password</label>
                 <input
+                  id="current-password"
                   type="password"
                   value={currentPassword}
                   onChange={(e) => { setCurrentPassword(e.target.value); setPasswordSaved(false); }}
@@ -303,8 +307,9 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-surface-400 font-medium">New password</label>
+                <label htmlFor="new-password" className="text-xs text-surface-400 font-medium">New password</label>
                 <input
+                  id="new-password"
                   type="password"
                   value={newPassword}
                   onChange={(e) => { setNewPassword(e.target.value); setPasswordSaved(false); }}
@@ -314,8 +319,9 @@ export default function SettingsPage() {
                 <p className="text-[11px] text-surface-500 mt-1">At least 8 characters.</p>
               </div>
               <div>
-                <label className="text-xs text-surface-400 font-medium">Confirm new password</label>
+                <label htmlFor="confirm-new-password" className="text-xs text-surface-400 font-medium">Confirm new password</label>
                 <input
+                  id="confirm-new-password"
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => { setConfirmPassword(e.target.value); setPasswordSaved(false); }}

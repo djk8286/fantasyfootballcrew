@@ -17,9 +17,21 @@
   --color-surface-100: #e9ecef;
   --color-surface-200: #ced4da;
   --color-surface-300: #adb5bd;
-  --color-surface-400: #6c757d;
-  --color-surface-500: #495057;
-  --color-surface-600: #343a40;
+  /* 400/500/600 lightened from their original #6c757d/#495057/#343a40 --
+     axe-core found these failing WCAG AA color-contrast (as low as
+     1.89:1 against the darkest surfaces) on every single page audited,
+     since they're the app-wide "muted/secondary text" tier, not just a
+     rare decorative accent -- 600 alone has 40+ real usages, most of
+     them genuine status/empty-state text ("No players drafted yet",
+     "Trades will appear here..."), not just icons. Recomputed against
+     the actual dark backgrounds these render on (surface-800/900, the
+     realistic worst cases -- surface-700 is used almost entirely as a
+     border color here, not a text background) to clear 4.5:1 (the AA
+     threshold for normal-size text) with a safety margin. Relative
+     lightness order (400 lighter than 500 lighter than 600) preserved. */
+  --color-surface-400: #9ea5ac;
+  --color-surface-500: #889098;
+  --color-surface-600: #818890;
   --color-surface-700: #212529;
   --color-surface-800: #1a1a2e;
   --color-surface-850: #12121f;
