@@ -34,6 +34,21 @@ AI_TEMPORARILY_UNAVAILABLE = "AI Analysis: the AI service is temporarily unavail
 # call site -- swap this one line to change models everywhere at once.
 OPENAI_MODEL = "gpt-5.6-luna"
 
+# httpx.AsyncClient()'s own default is a 5-second TOTAL timeout -- far
+# too tight for an LLM chat completion, whose whole point is generating
+# a non-trivial amount of text ("detailed, data-driven analysis" is the
+# literal system prompt). Confirmed directly: an identical real call
+# against the real API/key routinely took several seconds for a genuine
+# response, and every httpx timeout exception's str() is '' (empty) --
+# which is exactly what was showing up as the blank "[AI call FAILED]"
+# lines in production logs. This was hitting the 5s ceiling on most
+# calls, not a rare edge case, which is why every AI Analysis request
+# was coming back as "temporarily unavailable." email_service.py
+# already sets timeout=10 for its (much smaller) Resend API calls;
+# this is deliberately looser since a full LLM completion is a longer
+# request by nature.
+LLM_HTTP_TIMEOUT = 60.0
+
 
 # AI Co-Commissioner v1: tone/length are per-generation params on the
 # weekly digest (not a persisted league setting -- see
@@ -427,7 +442,7 @@ class AIService:
         """OpenAI puts the system prompt as a {"role": "system", ...}
         entry inside the messages array itself."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
@@ -456,7 +471,7 @@ class AIService:
         request field, separate from `messages` -- unlike OpenAI, it
         is NOT a message with role "system" inside the array."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
                 response = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -508,7 +523,7 @@ class AIService:
     async def _call_openai(self, prompt: str) -> str:
         """Call OpenAI API."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
@@ -538,7 +553,7 @@ class AIService:
     async def _call_anthropic(self, prompt: str) -> str:
         """Call Anthropic Claude API."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
                 response = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={

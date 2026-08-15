@@ -26,14 +26,18 @@ export default function Header() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // Header lives in the root layout, outside {children}, so it never
+  // remounts on navigation -- a mount-only check here would compute
+  // loggedIn once (whatever it was when the app first loaded) and then
+  // never update, even after the user logs in. login/register both set
+  // the token in localStorage and then router.push() to a different
+  // route (never a full page reload), so re-checking on every pathname
+  // change -- not just once -- is what actually catches that transition
+  // (was the "Log In"/"Get Started" buttons staying up after a real
+  // login" bug: reported, reproduced, fixed here). Also re-closes the
+  // mobile menu on route change, unchanged from before.
   useEffect(() => {
     setLoggedIn(isLoggedIn());
-  }, []);
-
-  // Header lives in the root layout, outside {children}, so it never
-  // remounts on navigation -- close the mobile menu on route change so it
-  // doesn't stay open over the new page.
-  useEffect(() => {
     setMenuOpen(false);
   }, [pathname]);
 

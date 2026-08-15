@@ -422,6 +422,9 @@ async def test_call_anthropic_chat_puts_system_at_top_level_not_in_messages(monk
             return {"content": [{"text": "ok"}]}
 
     class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass  # accepts timeout= like the real httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) call
+
         async def __aenter__(self):
             return self
 
