@@ -511,3 +511,98 @@ async def test_chat_end_to_end_degrades_gracefully_on_failure(monkeypatch):
     service = AIService(api_key="fake-key", provider="openai")
     result = await service.chat(league_name="X", context={}, history=[{"role": "user", "content": "hi"}])
     assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+# ─── Grounding preamble + Bet-tab player verification ───────────────────
+# Added investigating a David-reported "the AI gave a few answers that
+# were a little off on player movement/who's on what team" bug -- traced
+# to the system prompt never mentioning the real date or instructing the
+# model to prefer this app's own data over its (possibly stale) training
+# memory, and the Bet tab specifically having zero structured data behind
+# it at all (pure free text straight to the LLM). See ai_service.py's
+# _grounding_preamble and api/v1/ai.py's _verified_players_from_text.
+
+def test_grounding_preamble_includes_real_current_date():
+    import datetime
+    from app.services.ai_service import _grounding_preamble
+
+    preamble = _grounding_preamble()
+    today = datetime.date.today()
+    assert today.strftime("%B %d, %Y") in preamble
+    assert "UNVERIFIED" in preamble
+
+
+@pytest.mark.asyncio
+async def test_bet_prompt_includes_verified_players():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_bet(
+        matchup={"description": "Is Puka Nacua a good start this week?"},
+        lines={},
+        verified_players=[{"name": "Puka Nacua", "position": "WR", "current_team": "LAR", "injury_status": "none reported"}],
+    )
+    assert "Puka Nacua" in captured["prompt"]
+    assert "LAR" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_bet_prompt_renders_without_verified_players():
+    """No verified_players passed at all -- must not KeyError on the new
+    prompt field, same convention as every other optional field here."""
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_bet(matchup={"description": "Chiefs -3.5, good bet?"}, lines={})
+    assert "Verified current player data" in captured["prompt"]
+    assert captured["prompt"].count("[]") >= 1
+
+
+@pytest.mark.asyncio
+async def test_openai_system_message_includes_grounding_preamble(monkeypatch):
+    """The system message actually sent over the wire (not just the user
+    prompt) must carry the grounding preamble -- this is a different
+    layer than the prompt-rendering tests above, which spy on _call_llm
+    (before the system message is even built)."""
+    service = AIService(api_key="fake-key", provider="openai")
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    await service._call_openai("some prompt")
+
+    system_message = captured["json"]["messages"][0]["content"]
+    assert "UNVERIFIED" in system_message
+    assert "training data has a cutoff" in system_message

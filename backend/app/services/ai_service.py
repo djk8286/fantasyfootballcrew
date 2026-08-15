@@ -5,9 +5,35 @@ Provides fantasy football analysis using LLM API (OpenAI/Claude).
 Injects real-time context (player stats, matchups, weather) into prompts.
 """
 
+from datetime import date
 from typing import Dict, Any, Optional
 import httpx
 import json
+
+# Prepended to every LLM call's system message. Two concrete, real gaps
+# this closes (found investigating a David-reported "the AI gave a few
+# answers that were a little off on player movement/who's on what team"
+# bug): the model was never told what day it is, and was never told to
+# prefer the app's own data over its training memory -- so on anything
+# it wasn't explicitly handed, it silently guessed from (possibly
+# stale-by-now) training knowledge and stated it as fact. today is a
+# real server-computed date.today(), not hardcoded text -- this line is
+# accurate on every call, forever, unlike a prompt with a fixed date
+# baked into it.
+def _grounding_preamble() -> str:
+    # %-d (no leading zero) is a glibc/Linux-only strftime extension --
+    # not portable to Windows (this app runs on Railway/Linux in prod but
+    # is developed on Windows), so deliberately not used here.
+    today = date.today().strftime("%A, %B %d, %Y")
+    return (
+        f"Today's real date is {today}. Treat any roster, injury, trade, "
+        "or depth-chart detail you were not explicitly given below as "
+        "UNVERIFIED -- your training data has a cutoff and NFL rosters "
+        "change constantly (trades, cuts, signings, injuries), especially "
+        "close to or during a season. Never state a player's current team "
+        "or status as fact from memory alone; if it's not in the data "
+        "provided, say you're not certain rather than guessing."
+    )
 
 # Distinct from the "not configured" fallback -- this covers a
 # configured key that fails at call time (quota exhausted, provider
@@ -250,28 +276,56 @@ suggest. If asked to do something (approve a trade, send a message,
 change a setting), explain that the commissioner needs to do that
 themselves elsewhere in the app.
 
+{grounding}
+
 Current league snapshot (may not include very old history):
 {context}
 """
 
 BET_ANALYSIS_PROMPT = """
-You are a sports betting analyst. Analyze these betting props/lines:
+You are an expert NFL betting analyst and oddsmaker, giving sharp,
+realistic, data-driven betting analysis. Explicitly factor in what
+point in the season this is (preseason, early/mid/late regular season,
+playoffs) -- preseason especially is inherently noisy: limited starter
+snaps, heavy rotation, roster experimentation, and coaches prioritizing
+evaluation over winning, so confidence should be lower and hedged more
+than a regular-season take.
 
-**Matchup:**
+**The user's own description of the matchup/question:**
 {matchup}
 
-**Lines/Props:**
+**Verified current player data (from this app's own synced roster
+data, NOT the model's training memory -- trust this over anything you
+think you know about these specific players):**
+{verified_players}
+
+**Lines/Props the user provided (if empty, no live odds feed exists in
+this app yet -- say so explicitly and reason about the matchup
+qualitatively instead of inventing specific numbers):**
 {lines}
 
-**Key Factors:**
+**Other factors the user provided (if empty, you were not given this --
+do not invent specific injury news, weather, or historical results you
+don't actually have):**
 - Weather: {weather}
 - Injuries: {injuries}
 - Historical matchups: {history}
 
-Provide:
-1. Best bets with confidence level
-2. Player props to target
-3. Value picks vs trap lines
+Structure your answer:
+1. KEY CONTEXT -- season stage, expected starter/snap involvement if
+   knowable, anything relevant from the verified player data above
+2. MARKET ASSESSMENT -- only discuss specific lines/odds if they were
+   actually provided above; otherwise discuss the matchup qualitatively
+3. SHARP ANGLES -- situational edges, total lean, spread lean, each
+   with a confidence level (Low/Medium/High)
+4. BEST BET -- one primary play (or "Pass" if there's no real edge),
+   with a conservative 1-5 unit stake suggestion
+5. RISK FACTORS -- the biggest reasons this could be wrong, and what
+   would flip your lean
+
+Be honest about uncertainty -- real edges are usually small, and
+preseason ones especially so. Never invent specific injury/depth-chart
+details you weren't given; flag that uncertainty clearly instead.
 """
 
 
@@ -431,7 +485,9 @@ class AIService:
         conversation itself. See chat_service.py for how history is
         capped and how context is assembled from the same compute
         functions already powering the other commissioner tabs."""
-        system = CHAT_SYSTEM_PROMPT.format(league_name=league_name, context=json.dumps(context, indent=2))
+        system = CHAT_SYSTEM_PROMPT.format(
+            league_name=league_name, context=json.dumps(context, indent=2), grounding=_grounding_preamble(),
+        )
         if self.provider == "openai" and self.api_key:
             return await self._call_openai_chat(system, history)
         elif self.provider == "anthropic" and self.api_key:
@@ -500,10 +556,23 @@ class AIService:
         weather: Optional[Dict] = None,
         injuries: Optional[list] = None,
         history: Optional[Dict] = None,
+        verified_players: Optional[list] = None,
     ) -> str:
-        """Analyze betting lines and props."""
+        """Analyze betting lines and props.
+
+        verified_players: real, currently-synced roster data (name,
+        position, current NFL team, injury_status) for any players the
+        caller matched out of the user's own free-text prompt -- see
+        api/v1/ai.py's analyze_bet endpoint, which does that matching
+        against this app's own Player table (synced from Sleeper) before
+        calling this. Empty list means either no player names were
+        recognized in the prompt, or none matched -- the prompt template
+        itself instructs the model to treat that as "no verified data,"
+        not as "no players involved."
+        """
         prompt = BET_ANALYSIS_PROMPT.format(
             matchup=json.dumps(matchup, indent=2),
+            verified_players=json.dumps(verified_players or [], indent=2),
             lines=json.dumps(lines, indent=2),
             weather=json.dumps(weather or {}, indent=2),
             injuries=json.dumps(injuries or [], indent=2),
@@ -537,7 +606,11 @@ class AIService:
                         "messages": [
                             {
                                 "role": "system",
-                                "content": "You are an expert fantasy football analyst. Provide detailed, data-driven analysis with clear recommendations.",
+                                "content": (
+                                    "You are an expert fantasy football analyst. Provide detailed, "
+                                    "data-driven analysis with clear recommendations. "
+                                    + _grounding_preamble()
+                                ),
                             },
                             {"role": "user", "content": prompt},
                         ],
@@ -564,6 +637,16 @@ class AIService:
                     json={
                         "model": "claude-haiku-4-5-20251001",
                         "max_tokens": 1000,
+                        # Was missing entirely before -- this call had zero
+                        # system framing (unlike _call_anthropic_chat, which
+                        # already used Anthropic's top-level "system" field
+                        # correctly). Now matches _call_openai's system
+                        # message above.
+                        "system": (
+                            "You are an expert fantasy football analyst. Provide detailed, "
+                            "data-driven analysis with clear recommendations. "
+                            + _grounding_preamble()
+                        ),
                         "messages": [
                             {
                                 "role": "user",

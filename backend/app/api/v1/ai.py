@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -26,6 +27,53 @@ def _get_ai_service() -> AIService:
     if settings.ANTHROPIC_API_KEY:
         return AIService(api_key=settings.ANTHROPIC_API_KEY, provider="anthropic")
     return AIService(api_key=None)
+
+
+# Two-or-three consecutive Capitalized words -- "Justin Fields", "Odell
+# Beckham Jr" -- as a lightweight, no-NLP-dependency way to spot likely
+# player names in a Bet tab's free-text prompt (the ONLY AI Analysis
+# feature with zero structured input, see analyze_bet below). Deliberately
+# loose: false positives (matching a phrase that isn't actually a player)
+# just mean the DB lookup below finds nothing and it's silently dropped;
+# there's no cost to over-triggering here, only to under-triggering.
+_NAME_CANDIDATE_RE = re.compile(r"\b[A-Z][a-zA-Z'\-]+(?:\s+[A-Z][a-zA-Z'\-]+){1,2}\b")
+
+
+async def _verified_players_from_text(text: str, db: AsyncSession) -> list[dict]:
+    """Extract candidate player names from free text and look each up
+    against this app's own synced Player data (real current team/
+    position/injury_status from Sleeper, not the LLM's training
+    memory) -- see analyze_bet's docstring for why this exists.
+
+    A regex match can be 2-3 capitalized words, and the FIRST word isn't
+    reliably the first name -- a sentence-initial capital ("Is Puka
+    Nacua a good start?") gets swept into the same match as a real name,
+    and a suffix ("Odell Beckham Jr") puts the real last name in the
+    middle, not last. Rather than guess which word is which, try every
+    consecutive 2-word window inside each match as a (first, last)
+    candidate pair -- cheap (matches are short) and side-effect-free
+    (an extra wrong pairing just finds zero rows in the DB and is
+    silently dropped, same as any other false positive here)."""
+    seen_ids: set[str] = set()
+    verified: list[dict] = []
+    for candidate in set(_NAME_CANDIDATE_RE.findall(text)):
+        words = candidate.split()
+        for i in range(len(words) - 1):
+            first, last = words[i], words[i + 1]
+            result = await db.execute(
+                select(Player).where(Player.first_name.ilike(first), Player.last_name.ilike(last))
+            )
+            for p in result.scalars().all():
+                if p.id in seen_ids:
+                    continue
+                seen_ids.add(p.id)
+                verified.append({
+                    "name": f"{p.first_name} {p.last_name}",
+                    "position": p.position,
+                    "current_team": p.team or "Free Agent",
+                    "injury_status": p.injury_status or "none reported",
+                })
+    return verified
 
 
 async def _roster_summary(team: Team, db: AsyncSession) -> dict:
@@ -195,10 +243,20 @@ async def analyze_trade(
 async def analyze_bet(
     request: Request,
     body: BetAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Freeform betting-angle analysis. No live odds/weather data source exists yet,
-    so this passes the user's own description straight to the LLM."""
+    """Freeform betting-angle analysis. No live odds/weather data source
+    exists yet, so the matchup/lines themselves are still whatever the
+    user typed -- but any player names mentioned get looked up against
+    this app's own synced roster data first (see
+    _verified_players_from_text), so the model has real current team/
+    position/injury data to ground against instead of guessing from
+    training memory alone (a real, reported inaccuracy -- see
+    ai_service.py's _grounding_preamble for the full context)."""
+    verified_players = await _verified_players_from_text(body.prompt, db)
     service = _get_ai_service()
-    analysis = await service.analyze_bet(matchup={"description": body.prompt}, lines={})
+    analysis = await service.analyze_bet(
+        matchup={"description": body.prompt}, lines={}, verified_players=verified_players,
+    )
     return {"analysis": analysis}
