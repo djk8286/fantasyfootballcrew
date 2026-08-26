@@ -21,6 +21,10 @@ from app.models.commissioner_digest import CommissionerDigest
 from app.models.chat_message import ChatMessage
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.email_verification_token import EmailVerificationToken
+from app.models.team_weekly_recap import TeamWeeklyRecap
+from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
+from app.models.weekly_scores_recap import WeeklyScoresRecap
+from app.models.nfl_game import NFLGame
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -36,4 +40,8 @@ __all__ = [
     "ChatMessage",
     "AIUsageEvent",
     "EmailVerificationToken",
+    "TeamWeeklyRecap",
+    "WeeklyTopPlayersSummary",
+    "WeeklyScoresRecap",
+    "NFLGame",
 ]

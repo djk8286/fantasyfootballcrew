@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { leaguesApi, playersApi, isLoggedIn } from "@/lib/api-client";
-import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles } from "lucide-react";
+import { leaguesApi, playersApi, dashboardApi, isLoggedIn } from "@/lib/api-client";
+import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles, Flame, Radio, Bot } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import PositionBadge from "@/components/PositionBadge";
 import RankBadge from "@/components/ui/RankBadge";
@@ -359,6 +359,134 @@ function TopProspectsWidget() {
   );
 }
 
+function AIBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-400/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">
+      <Bot className="w-2.5 h-2.5" /> AI-Generated
+    </span>
+  );
+}
+
+interface TopPerformer {
+  name: string;
+  position: string;
+  team: string;
+  points: number;
+}
+
+function TopPerformersWidget() {
+  const [data, setData] = useState<{ content: string; top_players: TopPerformer[]; week: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    dashboardApi
+      .getTopPerformers()
+      .then((d) => setData(d as { content: string; top_players: TopPerformer[]; week: number }))
+      .catch(() => setData(null)) // 404 just means nothing generated yet -- not an error banner
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-40">
+        <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  return (
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <Flame className="w-4 h-4 text-gold-400" />
+          Top Performers -- Week {data.week}
+        </h2>
+        <AIBadge />
+      </div>
+      <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
+        {data.content}
+      </div>
+      {data.top_players?.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+          {data.top_players.slice(0, 10).map((p, i) => (
+            <div key={`${p.name}-${i}`} className="flex items-center justify-between py-1.5 border-b border-surface-800/50 text-sm">
+              <span className="text-white truncate">
+                <span className="text-surface-500 mr-1.5">{i + 1}.</span>
+                {p.name} <span className="text-surface-500">({p.position} - {p.team})</span>
+              </span>
+              <span className="text-gold-400 font-semibold shrink-0 ml-2">{p.points} pts</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface NflGame {
+  home_team: string;
+  home_team_name: string;
+  home_score: number | null;
+  away_team: string;
+  away_team_name: string;
+  away_score: number | null;
+  status_detail: string;
+  completed: boolean;
+}
+
+function NFLScoresWidget() {
+  const [data, setData] = useState<{ week: number; games: NflGame[]; recap: string | null } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    dashboardApi
+      .getNflScores()
+      .then((d) => setData(d as { week: number; games: NflGame[]; recap: string | null }))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-40">
+        <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  return (
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <Radio className="w-4 h-4 text-gold-400" />
+          NFL Scores -- Week {data.week}
+        </h2>
+        {data.recap && <AIBadge />}
+      </div>
+      {data.recap && (
+        <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
+          {data.recap}
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {data.games.map((g, i) => (
+          <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-900 border border-surface-700 text-sm">
+            <div className="min-w-0">
+              <div className="text-white truncate">{g.away_team} @ {g.home_team}</div>
+              <div className="text-surface-500 text-[10px]">{g.status_detail}</div>
+            </div>
+            {g.home_score !== null && g.away_score !== null && (
+              <div className="text-gold-400 font-semibold shrink-0 ml-2">{g.away_score} - {g.home_score}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Dashboard Page ---------- */
 
 export default function DashboardPage() {
@@ -421,8 +549,14 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* Dashboard AI Summaries -- top real performers + NFL scores recap */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <TopPerformersWidget />
+        <NFLScoresWidget />
+      </section>
+
       {/* Top Draft Prospects */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <TopProspectsWidget />
       </section>
 

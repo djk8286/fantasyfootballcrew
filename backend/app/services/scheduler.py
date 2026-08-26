@@ -45,6 +45,10 @@ from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.services.waiver_service import process_league_waivers
 from app.models.league import League, DraftStatus, LeagueType
+from app.core.config import settings
+from app.services import top_performers_service, team_recap_service, nfl_schedule_service
+from app.services.ai_service import AIService
+from app.models.weekly_scores_recap import WeeklyScoresRecap
 
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
 STATS_SYNC_INTERVAL = 2 * 60    # 2 minutes -- as live as practical without hammering Sleeper's free API
@@ -179,6 +183,13 @@ async def _process_all_league_guillotines_once(season: int, week: int) -> None:
 # correctness issue for anything else in this file).
 _last_seen_week: tuple[int, int] | None = None
 
+# Dashboard AI Summaries: same in-memory-only tradeoff, but tracked
+# separately from _last_seen_week above -- this one updates every tick
+# regardless of season_type (see _generate_nfl_wide_dashboard_summaries_once's
+# docstring for why it can't share _last_seen_week's regular-season-only
+# update). (season_type, season, week).
+_last_seen_dashboard_week: tuple[str, int, int] | None = None
+
 # Best-Ball (Phase 6): same in-memory-only tradeoff as _last_seen_week
 # above, deliberately NOT the correctness gate itself (is_window_open is
 # pure wall-clock math, recomputed fresh every tick -- a redeploy just
@@ -249,6 +260,99 @@ async def _notify_matchup_results_for_all_leagues_once(season: int, week: int) -
     print(f"[scheduler] Notified matchup results for {notified} league(s), week {week} {season}" + (f", {failed} failed" if failed else ""))
 
 
+async def _generate_team_recaps_for_all_leagues_once(season: int, week: int) -> None:
+    """Dashboard AI Summaries: auto-generates every real league's
+    per-team weekly recap once a week goes final -- same one-time
+    signal/call shape as the guillotine/matchup-notify passes above.
+    Deliberately inside the SAME regular-season-gated week-transition
+    block those use (not the separate dashboard-summaries check below)
+    -- WeeklyScore rows (what this recap summarizes) only ever get
+    created by _calculate_all_league_scores_once, which is itself
+    gated to real regular season, so there's nothing to summarize
+    outside it anyway. generate_and_save_recap no-ops (returns None)
+    for a league with no scored data yet, rather than erroring."""
+    async with async_session() as db:
+        result = await db.execute(select(League))
+        leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
+
+        generated, failed = 0, 0
+        for league in leagues:
+            try:
+                recap = await team_recap_service.generate_and_save_recap(league, week, season, None, db)
+                if recap:
+                    generated += 1
+            except Exception as e:
+                failed += 1
+                print(f"[scheduler] Team recap generation failed for league {league.id}: {e}")
+
+    if generated or failed:
+        print(f"[scheduler] Generated team recaps for {generated} league(s), week {week} {season}" + (f", {failed} failed" if failed else ""))
+
+
+def _get_ai_service_for_scheduler() -> AIService:
+    """Same factory ai.py/commissioner_digest_service.py/
+    top_performers_service.py use -- duplicated (it's 3 lines) rather
+    than shared."""
+    if settings.OPENAI_API_KEY:
+        return AIService(api_key=settings.OPENAI_API_KEY, provider="openai")
+    if settings.ANTHROPIC_API_KEY:
+        return AIService(api_key=settings.ANTHROPIC_API_KEY, provider="anthropic")
+    return AIService(api_key=None)
+
+
+_ESPN_SEASON_TYPE = {"pre": 1, "regular": 2, "post": 3}
+
+
+async def _generate_nfl_wide_dashboard_summaries_once(season_type: str, season: int, week: int) -> None:
+    """Dashboard AI Summaries: the two NFL-wide panels (top real
+    performers, NFL scores + funny recap) -- deliberately NOT gated to
+    regular season the way _sync_stats_once/_calculate_all_league_scores_once
+    are. That gate exists because preseason FANTASY stats are noise for
+    real league SCORING; neither of these panels is fantasy scoring --
+    "who had a big real game" and "what happened in real NFL games" are
+    both just as real and fun to read about in preseason. Called from
+    its own independent week-transition check (see run_scheduler),
+    using Sleeper's live state directly rather than _last_seen_week
+    (which only ever updates during regular season, since it's set from
+    _sync_stats_once's return value)."""
+    espn_season_type = _ESPN_SEASON_TYPE.get(season_type, 2)
+
+    async with async_session() as db:
+        try:
+            await top_performers_service.generate_and_save_summary(week, season, db)
+        except Exception as e:
+            print(f"[scheduler] Top-performers summary generation failed: {e}")
+
+        try:
+            synced = await nfl_schedule_service.sync_week_scoreboard(season, week, espn_season_type, db)
+            if synced:
+                games = await nfl_schedule_service.get_week_games(season, week, espn_season_type, db)
+                games_payload = [
+                    {
+                        "home_team_name": g.home_team_name, "home_score": g.home_score,
+                        "away_team_name": g.away_team_name, "away_score": g.away_score,
+                        "completed": g.completed, "status_detail": g.status_detail,
+                    }
+                    for g in games
+                ]
+                service = _get_ai_service_for_scheduler()
+                content = await service.generate_nfl_scores_recap(week=week, year=season, games=games_payload)
+
+                existing = await db.execute(
+                    select(WeeklyScoresRecap).where(WeeklyScoresRecap.week == week, WeeklyScoresRecap.year == season)
+                )
+                recap = existing.scalar_one_or_none()
+                if recap:
+                    recap.content = content
+                else:
+                    db.add(WeeklyScoresRecap(week=week, year=season, content=content))
+                await db.commit()
+        except Exception as e:
+            print(f"[scheduler] NFL scores recap generation failed: {e}")
+
+    print(f"[scheduler] Generated dashboard summaries for week {week}, {season} ({season_type})")
+
+
 async def _sync_players_once() -> None:
     async with async_session() as db:
         count = await sync_players_to_db(db)
@@ -262,7 +366,7 @@ async def run_scheduler() -> None:
         f"[scheduler] Starting -- stats every {STATS_SYNC_INTERVAL}s "
         f"(regular season only), players every {PLAYER_SYNC_INTERVAL}s"
     )
-    global _last_seen_week
+    global _last_seen_week, _last_seen_dashboard_week
     loop = asyncio.get_event_loop()
     last_player_sync = 0.0
 
@@ -316,7 +420,31 @@ async def run_scheduler() -> None:
                     await _notify_matchup_results_for_all_leagues_once(prev_season, prev_week)
                 except Exception as e:
                     print(f"[scheduler] Matchup-result notify pass failed: {e}")
+                try:
+                    await _generate_team_recaps_for_all_leagues_once(prev_season, prev_week)
+                except Exception as e:
+                    print(f"[scheduler] Team recap generation pass failed: {e}")
             _last_seen_week = (season, week)
+
+        # Dashboard AI Summaries (NFL-wide panels): independent of the
+        # regular-season-gated block above -- see
+        # _generate_nfl_wide_dashboard_summaries_once's own docstring for
+        # why. Own state, own live-state fetch (cheap, no-auth endpoint),
+        # since _last_seen_week only ever updates when synced is not None
+        # (regular season), which would silently never fire this during
+        # preseason/postseason otherwise.
+        try:
+            state = await fetch_nfl_state()
+            dash_key = (state.get("season_type"), int(state["season"]), int(state["week"]))
+            if _last_seen_dashboard_week is not None and _last_seen_dashboard_week != dash_key:
+                prev_type, prev_season2, prev_week2 = _last_seen_dashboard_week
+                try:
+                    await _generate_nfl_wide_dashboard_summaries_once(prev_type, prev_season2, prev_week2)
+                except Exception as e:
+                    print(f"[scheduler] Dashboard summaries pass failed: {e}")
+            _last_seen_dashboard_week = dash_key
+        except Exception as e:
+            print(f"[scheduler] Dashboard summaries week-check failed: {e}")
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:

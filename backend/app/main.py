@@ -19,7 +19,7 @@ from app.api.v1 import (
     ai_router, drafts_router, standings_router,
     commissioner_router, trades_router, waivers_router,
     coaches_router, lineups_router, notifications_router,
-    playoffs_router, invites_router,
+    playoffs_router, invites_router, dashboard_router,
 )
 
 # Before the FastAPI app is constructed, so instrumentation covers
@@ -115,6 +115,7 @@ app.include_router(lineups_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(playoffs_router, prefix="/api/v1")
 app.include_router(invites_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -210,6 +210,65 @@ Write, in plain text with ALL-CAPS section titles:
 4. COMMISSIONER NOTES -- any fairness/rule-adjustment observations worth flagging (advisory only -- the commissioner decides, never phrase this as an instruction)
 """
 
+TOP_PLAYERS_SUMMARY_PROMPT = """
+You are an expert NFL analyst. Write a short, engaging recap of this
+week's best real-world NFL performances, using ONLY plain text -- no
+markdown syntax, this is displayed as-is.
+
+**Week:** {week}, {year}
+
+**Top performers this week (ranked by a standard fantasy scoring
+system, real per-player stat lines -- trust this list over anything
+you think you know about these players' recent performances):**
+{top_players}
+
+Write 2-4 short paragraphs: who had standout weeks and why (cite the
+actual stat lines given), any notable trend across positions, and one
+or two players worth watching next week based on this week's showing.
+Do not invent stats, injuries, or context beyond what's given above.
+"""
+
+NFL_SCORES_RECAP_PROMPT = """
+You are a witty NFL recap writer. Write a fun recap of this week's
+real NFL games, using ONLY plain text -- no markdown syntax, this is
+displayed as-is.
+
+{tone_instruction}
+
+**Week:** {week}, {year}
+
+**This week's real games and final/current scores (trust this over
+anything you think you know -- these are the actual synced results):**
+{games}
+
+Write 2-4 short paragraphs covering the week's biggest storylines --
+upsets, blowouts, any standout team performances -- using ONLY the
+scores/results given above. If a game hasn't finished yet (not marked
+completed), don't state its outcome as final. Don't invent stats,
+injuries, or storylines beyond what the scores themselves tell you.
+"""
+
+TEAM_RECAPS_PROMPT = """
+You are a fantasy football beat writer. Write a SHORT (2-3 sentences
+each) recap blurb for EVERY team below, covering their week. Plain
+text only, no markdown. Format each team as:
+
+TEAM NAME: <blurb>
+
+one per line/paragraph, in the same order given below -- no extra
+commentary before or after the list of blurbs.
+
+**League:** {league_name} -- Week {week}, {year}
+
+**Every team's week (result, score, opponent, top performer):**
+{teams}
+
+Keep it light and specific -- reference the actual score/result/top
+performer given for each team, don't invent details. A "bye" result
+means no matchup this week (schedule quirk, not eliminated) -- note it
+briefly, don't treat it as a loss.
+"""
+
 TRADE_REVIEW_PROMPT = """
 You are an expert fantasy football commissioner's assistant, reviewing
 a trade for FAIRNESS and LEAGUE IMPACT (not which side "wins" -- this
@@ -420,6 +479,37 @@ class AIService:
             recent_transactions=json.dumps(recent_transactions or [], indent=2),
             features=json.dumps(features or {}, indent=2),
             scoring_config=json.dumps(scoring_config or {}, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_top_players_summary(self, week: int, year: int, top_players: Optional[list] = None) -> str:
+        """Dashboard AI Summaries: NFL-wide (not per-league) recap of
+        the week's best real performances -- see top_performers_service.py
+        for how top_players is ranked (DEFAULT_SCORING, not any one
+        league's custom rules)."""
+        prompt = TOP_PLAYERS_SUMMARY_PROMPT.format(
+            week=week, year=year, top_players=json.dumps(top_players or [], indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_nfl_scores_recap(self, week: int, year: int, games: Optional[list] = None, tone: str = "sarcastic") -> str:
+        """Dashboard AI Summaries: funny recap of the week's real NFL
+        games -- reuses the existing "sarcastic" tone (TONE_INSTRUCTIONS
+        above) rather than inventing a new one; it already covers
+        "funny" well. games comes from nfl_schedule_service.py's
+        ESPN-synced NFLGame rows."""
+        prompt = NFL_SCORES_RECAP_PROMPT.format(
+            tone_instruction=TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["sarcastic"]),
+            week=week, year=year, games=json.dumps(games or [], indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_team_recaps(self, league_name: str, week: int, year: int, teams: Optional[list] = None) -> str:
+        """Dashboard AI Summaries: one LLM call producing a short blurb
+        for every team in a league at once -- see team_recap_service.py
+        for why (N times cheaper than one call per team)."""
+        prompt = TEAM_RECAPS_PROMPT.format(
+            league_name=league_name, week=week, year=year, teams=json.dumps(teams or [], indent=2),
         )
         return await self._call_llm(prompt)
 

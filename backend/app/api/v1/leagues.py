@@ -18,6 +18,7 @@ from app.models.player import Player
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.api.deps import get_current_user, get_current_user_optional, require_commissioner, user_can_join_league
+from app.services import team_recap_service
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
@@ -746,3 +747,25 @@ async def get_league(
     if current_user is not None:
         league_dict.viewer_join_status = await _compute_viewer_join_status(db, league, current_user)
     return league_dict
+
+
+@router.get("/{league_id}/team-recap")
+async def get_team_weekly_recap(
+    league_id: str, week: int | None = None, year: int | None = None, db: AsyncSession = Depends(get_db),
+):
+    """The AI-generated per-team weekly recap (Dashboard AI Summaries) --
+    open read, no auth required, same as standings/schedule: this is
+    meant to be visible to every manager on the league's own dashboard
+    page, not gated behind commissioner access like the AI Digest is.
+    week/year omitted (the normal case -- this is an ambient panel, no
+    week-picker UI) returns the most recently generated recap, same
+    "most recent" shape the NFL-wide dashboard panels use. Auto-generated
+    by the scheduler once the week's scores are final; see
+    commissioner.py's generate_team_recap for the manual fallback."""
+    if week is not None and year is not None:
+        recap = await team_recap_service.get_recap(league_id, week, year, db)
+    else:
+        recap = await team_recap_service.get_latest_recap(league_id, db)
+    if not recap:
+        raise HTTPException(status_code=404, detail="No team recap generated for this week yet")
+    return {"week": recap.week, "year": recap.year, "content": recap.content, "created_at": recap.created_at}
