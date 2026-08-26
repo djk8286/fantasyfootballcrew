@@ -388,7 +388,7 @@ function TopPerformersWidget() {
 
   if (loading) {
     return (
-      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-40">
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-130">
         <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -396,30 +396,32 @@ function TopPerformersWidget() {
   if (!data) return null;
 
   return (
-    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6">
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex flex-col h-130">
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <Flame className="w-4 h-4 text-gold-400" />
           Top Performers -- Week {data.week}
         </h2>
         <AIBadge />
       </div>
-      <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
-        {data.content}
-      </div>
-      {data.top_players?.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-          {data.top_players.slice(0, 10).map((p, i) => (
-            <div key={`${p.name}-${i}`} className="flex items-center justify-between py-1.5 border-b border-surface-800/50 text-sm">
-              <span className="text-white truncate">
-                <span className="text-surface-500 mr-1.5">{i + 1}.</span>
-                {p.name} <span className="text-surface-500">({p.position} - {p.team})</span>
-              </span>
-              <span className="text-gold-400 font-semibold shrink-0 ml-2">{p.points} pts</span>
-            </div>
-          ))}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
+          {data.content}
         </div>
-      )}
+        {data.top_players?.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+            {data.top_players.slice(0, 10).map((p, i) => (
+              <div key={`${p.name}-${i}`} className="flex items-center justify-between py-1.5 border-b border-surface-800/50 text-sm">
+                <span className="text-white truncate">
+                  <span className="text-surface-500 mr-1.5">{i + 1}.</span>
+                  {p.name} <span className="text-surface-500">({p.position} - {p.team})</span>
+                </span>
+                <span className="text-gold-400 font-semibold shrink-0 ml-2">{p.points} pts</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -449,7 +451,7 @@ function NFLScoresWidget() {
 
   if (loading) {
     return (
-      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-40">
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-130">
         <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -457,31 +459,33 @@ function NFLScoresWidget() {
   if (!data) return null;
 
   return (
-    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6">
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex flex-col h-130">
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <Radio className="w-4 h-4 text-gold-400" />
           NFL Scores -- Week {data.week}
         </h2>
         {data.recap && <AIBadge />}
       </div>
-      {data.recap && (
-        <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
-          {data.recap}
-        </div>
-      )}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {data.games.map((g, i) => (
-          <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-900 border border-surface-700 text-sm">
-            <div className="min-w-0">
-              <div className="text-white truncate">{g.away_team} @ {g.home_team}</div>
-              <div className="text-surface-500 text-[10px]">{g.status_detail}</div>
-            </div>
-            {g.home_score !== null && g.away_score !== null && (
-              <div className="text-gold-400 font-semibold shrink-0 ml-2">{g.away_score} - {g.home_score}</div>
-            )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {data.recap && (
+          <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap mb-4">
+            {data.recap}
           </div>
-        ))}
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {data.games.map((g, i) => (
+            <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-900 border border-surface-700 text-sm">
+              <div className="min-w-0">
+                <div className="text-white truncate">{g.away_team} @ {g.home_team}</div>
+                <div className="text-surface-500 text-[10px]">{g.status_detail}</div>
+              </div>
+              {g.home_score !== null && g.away_score !== null && (
+                <div className="text-gold-400 font-semibold shrink-0 ml-2">{g.away_score} - {g.home_score}</div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
