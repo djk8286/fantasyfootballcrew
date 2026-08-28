@@ -45,4 +45,17 @@ class Player(Base):
     projected_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Sleeper's own overall fantasy-relevance rank (lower = better), synced
+    # from the SAME /players/nfl payload sync_players_to_db already fetches
+    # (was previously fetched and discarded) -- a real, live, year-round
+    # ADP-style signal that reflects THIS season's expectations (rookies
+    # included, declining veterans deprioritized), confirmed directly
+    # against the real API before wiring this up: Bijan Robinson=1,
+    # Ashton Jeanty (2025 rookie)=12, Aaron Rodgers (declining vet)=196.
+    # Unlike Sleeper's weekly projections endpoint, this is populated even
+    # during the preseason, so it's the primary input for draft_manager.
+    # build_rank_by_id now, not last season's box-score production (see
+    # that function for the fallback used when a player has none -- team
+    # DEF entries in particular never carry this field at all).
+    search_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

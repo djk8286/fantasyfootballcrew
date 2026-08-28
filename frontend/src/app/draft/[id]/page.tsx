@@ -116,7 +116,11 @@ export default function DraftPage() {
   const [cpuingPick, setCpuingPick] = useState(false);
   const [showTimerSettings, setShowTimerSettings] = useState(false);
   const [viewMode, setViewMode] = useState<"draft" | "board" | "history">("draft");
-  const [expandedTeams, setExpandedTeams] = useState<Record<string, boolean>>({});
+  // Which team's roster the roster sidebar (desktop TeamRosters) / roster
+  // tab (mobile MobileDraftRoom) currently shows -- shared across both via
+  // the same desktop/mobile draft-train tap-to-select circles. Defaults
+  // to (and resets to, on claim/unclaim) your own team below.
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const cpuingRef = useRef(false);
 
   // Fixed hover card state
@@ -219,6 +223,13 @@ export default function DraftPage() {
     localStorage.setItem("ffc_user_teams", JSON.stringify(userTeams));
     setMyTeamId(null);
   };
+
+  // Reset the roster-view selection to your own team whenever it changes
+  // (claim, unclaim, or the localStorage-load effect above resolving) --
+  // same default-to-your-team behavior on both mobile and desktop.
+  useEffect(() => {
+    setSelectedTeamId(myTeamId);
+  }, [myTeamId]);
 
   const fetchState = useCallback(async () => {
     try {
@@ -687,6 +698,8 @@ export default function DraftPage() {
         currentPickGlobalIndex={currentPickIndex}
         numTeams={draftInfo.num_teams}
         myTeamId={myTeamId}
+        selectedTeamId={selectedTeamId}
+        onSelectTeamId={setSelectedTeamId}
       />
 
       {/* BODY — Two modes */}
@@ -717,6 +730,8 @@ export default function DraftPage() {
             availablePlayers={available}
             myRosterByPos={myRosterByPos}
             teamRosters={teamRosters}
+            selectedTeamId={selectedTeamId}
+            onSelectTeamId={setSelectedTeamId}
             filteredPlayers={filteredPlayers}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
@@ -752,17 +767,11 @@ export default function DraftPage() {
               />
               <TeamRosters
                 myTeamId={myTeamId}
-                myPicks={myPicks}
-                myRosterByPos={myRosterByPos}
                 team_order={team_order}
                 teams={draft?.teams || {}}
                 teamRosters={teamRosters}
-                isCompleted={isCompleted}
-                currentTeamId={draft?.current_team_id || null}
-                expandedTeams={expandedTeams}
-                onToggleExpand={(teamId) =>
-                  setExpandedTeams((prev) => ({ ...prev, [teamId]: !prev[teamId] }))
-                }
+                selectedTeamId={selectedTeamId}
+                onSelectTeamId={setSelectedTeamId}
                 onClaimTeam={claimTeam}
                 onUnclaimTeam={unclaimTeam}
                 onPlayerHover={handlePlayerHover}
@@ -817,17 +826,31 @@ export default function DraftPage() {
 
         {/* BOARD MODE: Team Column × Round Row Grid */}
         {viewMode === "board" && (
-          <BoardView
-            isCompleted={isCompleted}
-            draftInfo={draftInfo}
-            team_order={team_order}
-            teams={draft?.teams || {}}
-            allPicks={allPicks}
-            currentPick={currentPick}
-            myTeamId={myTeamId}
-            firstRoundTeams={firstRoundTeams}
-            onPlayerHover={handlePlayerHover}
-          />
+          <>
+            {/* Large, prominent, top-of-page -- board grids can run long
+                (many rounds x many teams), and the old bottom-only mobile
+                button required scrolling all the way through it first.
+                Shown on both mobile and desktop now (desktop previously
+                had no dedicated back-to-draft control at all outside the
+                small header view-mode tabs). */}
+            <button
+              onClick={() => setViewMode("draft")}
+              className="w-full mb-4 py-4 bg-gold-400 hover:bg-gold-300 text-surface-900 rounded-xl text-base font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-gold-400/10"
+            >
+              <List className="w-5 h-5" /> Back to Draft
+            </button>
+            <BoardView
+              isCompleted={isCompleted}
+              draftInfo={draftInfo}
+              team_order={team_order}
+              teams={draft?.teams || {}}
+              allPicks={allPicks}
+              currentPick={currentPick}
+              myTeamId={myTeamId}
+              firstRoundTeams={firstRoundTeams}
+              onPlayerHover={handlePlayerHover}
+            />
+          </>
         )}
 
         {/* PICK HISTORY MODE: full chronological list -- desktop-only entry
@@ -842,18 +865,6 @@ export default function DraftPage() {
           />
         )}
 
-        {/* Mobile: Draft Board access lives in MobileDraftRoom's own header
-            (onShowBoard) now -- a standalone button here would render behind
-            MobileDraftRoom's fixed bottom action bar. */}
-        {viewMode === "board" && (
-          <div className="mt-4 xl:hidden">
-            <button onClick={() => setViewMode("draft")}
-              className="w-full py-3 bg-surface-800 border border-surface-700 rounded-xl text-sm font-semibold text-surface-300 hover:text-white transition-all flex items-center justify-center gap-2"
-            >
-              <List className="w-4 h-4" /> Back to Draft
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Fixed hover card overlay — escapes all containers */}

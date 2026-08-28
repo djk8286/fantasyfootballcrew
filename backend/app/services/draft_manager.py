@@ -651,32 +651,64 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
 IDP_POSITIONS = {"DB", "DL", "LB"}
 
 
-def build_rank_by_id(players, scoring_config: dict) -> dict[str, int]:
-    """Real, data-driven overall rank (1 = best) for every given player,
-    across ALL positions -- replaces the old hand-maintained static
-    ~194-name tier list (get_tier_names, removed) that caused the exact
-    bug it was replaced for: it read like a 2024-offseason snapshot
-    (zero 2025-draft-class players), still carried declining/retired-
-    adjacent veterans in its top tiers, and gave anyone simply never
-    manually added to the list a fixed fallback rank of 1000 -- worse
-    than every listed player, including deep bench. A current breakout
-    star not yet hand-added would rank below a listed retired veteran.
+# Sleeper's own sentinel for "not really ranked" (an inactive/irrelevant
+# player still carries a search_rank field, but set to something like
+# 9999999 -- several orders of magnitude past any real rank, confirmed
+# directly against the live API). Treated the same as no search_rank at
+# all (None): falls through to the production-based fallback below
+# rather than being trusted as a real ADP-style signal.
+_SEARCH_RANK_SENTINEL = 500_000
 
-    Ranked by real production (effective_season_stats + calculate_player_score
-    -- the same pipeline season_points and the old IDP-only build_idp_rank_by_id
-    already used), best first. effective_season_stats prefers this year's
-    live synced stats once the season has started, falling back to last
-    season's archived totals otherwise -- so this rank self-corrects as a
-    real season progresses instead of ever going stale again the way the
-    static list did. players only needs .id/.position/.stats/.stats_year/
-    .last_season_stats/.last_season_year -- real Player rows or anything
-    duck-typed the same way."""
+
+def build_rank_by_id(players, scoring_config: dict) -> dict[str, int]:
+    """Real, current-season overall rank (1 = best) for every given
+    player, across ALL positions -- replaces the old hand-maintained
+    static ~194-name tier list (get_tier_names, removed) that read like a
+    2024-offseason snapshot (zero 2025-draft-class players, still-elevated
+    declining veterans, an unranked fallback of 1000 -- worse than every
+    listed player).
+
+    Primary signal: Player.search_rank -- Sleeper's own overall
+    fantasy-relevance rank, synced from the SAME /players/nfl payload
+    sync_players_to_db already fetches (previously fetched and discarded).
+    This is a real, live, year-round ADP-style number that reflects THIS
+    season's expectations, not last year's box score -- confirmed directly
+    against the real API before wiring this up (e.g. Bijan Robinson=1,
+    Ashton Jeanty [2025 rookie]=12, Aaron Rodgers [declining vet]=196), and
+    critically it's populated even during the preseason, unlike Sleeper's
+    weekly projections endpoint (empty until the regular season actually
+    starts publishing them).
+
+    Fallback, for anyone with no usable search_rank at all -- confirmed:
+    team DEF entries never carry one, and some deep-roster IDP players
+    don't either: real last-season production (effective_season_stats +
+    calculate_player_score -- the same pipeline season_points and the
+    original version of this function used), best first, placed strictly
+    AFTER every search_rank-ranked player so a real ADP-informed rank
+    always outranks a fallback one. players only needs .id/.position/
+    .search_rank/.stats/.stats_year/.last_season_stats/.last_season_year --
+    real Player rows or anything duck-typed the same way."""
+    with_rank: list = []
+    without_rank: list = []
+    for p in players:
+        if p.search_rank is not None and p.search_rank < _SEARCH_RANK_SENTINEL:
+            with_rank.append(p)
+        else:
+            without_rank.append(p)
+
+    with_rank.sort(key=lambda p: p.search_rank)
+    rank_by_id: dict[str, int] = {p.id: i + 1 for i, p in enumerate(with_rank)}
+
     scored = [
         (p.id, calculate_player_score(effective_season_stats(p)[0], scoring_config, p.position))
-        for p in players
+        for p in without_rank
     ]
     scored.sort(key=lambda ps: -ps[1])
-    return {pid: i + 1 for i, (pid, _) in enumerate(scored)}
+    offset = len(with_rank)
+    for i, (pid, _) in enumerate(scored):
+        rank_by_id[pid] = offset + i + 1
+
+    return rank_by_id
 
 
 def get_rank_score(player, rank_by_id: dict[str, int]) -> int:

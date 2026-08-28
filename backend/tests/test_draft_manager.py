@@ -1,13 +1,19 @@
 """
-Tests for the real, data-driven player ranking that replaced
-draft_manager's old static ~194-name tier list (get_tier_names, removed
--- it read like a stale 2024-offseason snapshot with zero 2025-class
-players and still-ranked declining/retired-adjacent veterans; anyone not
-manually added fell to a fixed fallback rank of 1000, worse than every
-listed player). build_rank_by_id/get_rank_score/get_percentile_tier now
-rank every player by real production (effective_season_stats +
-calculate_player_score), across ALL positions including the DB/DL/LB
-individual-defense ones the old system had zero coverage for at all.
+Tests for the real player ranking that replaced draft_manager's old
+static ~194-name tier list (get_tier_names, removed -- it read like a
+stale 2024-offseason snapshot with zero 2025-class players and
+still-ranked declining/retired-adjacent veterans; anyone not manually
+added fell to a fixed fallback rank of 1000, worse than every listed
+player).
+
+build_rank_by_id/get_rank_score/get_percentile_tier now rank primarily
+by Player.search_rank -- Sleeper's own real, live, year-round overall
+fantasy-relevance rank (confirmed directly against the real API: a true
+ADP-style signal reflecting the CURRENT season, unlike last season's box
+score), falling back to real last-season production
+(effective_season_stats + calculate_player_score) only for players with
+no usable search_rank at all (confirmed: team DEF entries never carry
+one).
 
 Only the pure ranking logic is covered here (no DB/network involved,
 Player() objects are just plain attribute holders, never persisted); the
@@ -23,7 +29,7 @@ from app.services.draft_manager import build_rank_by_id, get_rank_score, get_per
 
 
 def _player(id_, position, first="Test", last="Player", stats=None, stats_year=None,
-            last_season_stats=None, last_season_year=None):
+            last_season_stats=None, last_season_year=None, search_rank=None):
     return Player(
         id=id_,
         sleeper_id=id_,
@@ -34,64 +40,66 @@ def _player(id_, position, first="Test", last="Player", stats=None, stats_year=N
         stats_year=stats_year,
         last_season_stats=last_season_stats or {},
         last_season_year=last_season_year,
+        search_rank=search_rank,
     )
 
 
-def test_players_ranked_best_production_first_across_any_position():
-    # Fitzpatrick's real 2025 line scores 107 (see test_scoring_engine.py),
-    # Bosa's scores 41 -- the better real season should get the lower
-    # (better, rank 1) number, regardless of position.
-    good_db = _player(
-        "p1", "DB", last="Fitzpatrick",
-        last_season_stats={"idp_tkl_solo": 56, "idp_tkl_ast": 18, "idp_tkl_loss": 4,
-                            "idp_sack": 1, "idp_int": 1, "idp_ff": 1, "idp_fum_rec": 2, "idp_pass_def": 6},
-        last_season_year=2025,
-    )
-    weaker_dl = _player(
-        "p2", "DL", last="Bosa",
-        last_season_stats={"idp_tkl_solo": 9, "idp_tkl_ast": 8, "idp_tkl_loss": 4,
-                            "idp_sack": 2, "idp_ff": 2, "idp_fum_rec": 1},
-        last_season_year=2025,
-    )
-    ranks = build_rank_by_id([good_db, weaker_dl], DEFAULT_SCORING)
-    assert ranks[good_db.id] < ranks[weaker_dl.id]
-    assert ranks[good_db.id] == 1  # best real production in the pool ranks first
+def test_players_ranked_by_search_rank_first():
+    # A real ADP-style rank should decide ordering directly, regardless
+    # of last-season production either player happens to have.
+    better = _player("p1", "RB", last="BetterRank", search_rank=5,
+                      last_season_stats={"rush_yd": 100})  # weak production
+    worse = _player("p2", "RB", last="WorseRank", search_rank=50,
+                     last_season_stats={"rush_yd": 2000, "rush_td": 20})  # strong production
+    ranks = build_rank_by_id([better, worse], DEFAULT_SCORING)
+    assert ranks[better.id] == 1
+    assert ranks[worse.id] == 2
 
 
-def test_a_current_star_outranks_a_stale_veteran_with_lesser_real_production():
-    """Direct regression test for the reported bug: under the old static
-    list, a name simply not on it (e.g. any 2025-class rookie) fell to a
-    fixed fallback rank of 1000 -- worse than every listed player, even a
-    declining veteran still sitting in a top tier purely because the list
-    was never updated. Real production must decide this instead."""
-    breakout_rookie = _player(
-        "p10", "RB", first="Breakout", last="Rookie",
-        last_season_stats={"rush_yd": 1400, "rush_td": 14, "rec": 40, "rec_yd": 300, "rec_td": 2},
-        last_season_year=2025,
-    )
-    declining_veteran = _player(
-        "p11", "RB", first="Declining", last="Veteran",
-        last_season_stats={"rush_yd": 400, "rush_td": 2, "rec": 10, "rec_yd": 60, "rec_td": 0},
-        last_season_year=2025,
-    )
+def test_a_current_rookie_outranks_a_stale_veteran_via_search_rank():
+    """Direct regression test for the reported bug: under both the old
+    static list AND last session's production-based-only fix, a name/
+    player simply not accounted for could rank below a name that
+    happened to be tracked. A real 2025-class rookie's low (good)
+    search_rank must outrank a declining veteran's high (bad) one."""
+    breakout_rookie = _player("p10", "RB", first="Breakout", last="Rookie", search_rank=12)
+    declining_veteran = _player("p11", "QB", first="Declining", last="Veteran", search_rank=196)
     ranks = build_rank_by_id([breakout_rookie, declining_veteran], DEFAULT_SCORING)
     assert ranks[breakout_rookie.id] < ranks[declining_veteran.id]
 
 
-def test_all_given_positions_included_not_just_skill_positions():
-    qb = _player("p3", "QB", last="Someone", last_season_stats={"pass_yd": 4000, "pass_td": 30})
-    lb = _player("p4", "LB", last="Somebody", last_season_stats={"idp_tkl_solo": 10}, last_season_year=2025)
-    ranks = build_rank_by_id([qb, lb], DEFAULT_SCORING)
-    assert qb.id in ranks
-    assert lb.id in ranks
+def test_players_without_search_rank_fall_back_to_production_and_rank_after_ranked_players():
+    ranked = _player("p1", "RB", last="Ranked", search_rank=1)
+    unranked_strong = _player("p2", "RB", last="UnrankedStrong", search_rank=None,
+                               last_season_stats={"rush_yd": 2000, "rush_td": 20})
+    unranked_weak = _player("p3", "RB", last="UnrankedWeak", search_rank=None,
+                             last_season_stats={"rush_yd": 100})
+    ranks = build_rank_by_id([ranked, unranked_strong, unranked_weak], DEFAULT_SCORING)
+    # The search_rank-ranked player always wins, even over strong fallback production.
+    assert ranks[ranked.id] == 1
+    # Among the fallback pool, real production still decides order.
+    assert ranks[unranked_strong.id] < ranks[unranked_weak.id]
 
 
-def test_zero_production_player_still_gets_a_real_rank():
-    """No real stats at all -- still gets a real (if last-place) rank,
-    not silently dropped."""
-    no_stats_lb = _player("p5", "LB", last="Unknown")
-    ranks = build_rank_by_id([no_stats_lb], DEFAULT_SCORING)
-    assert ranks[no_stats_lb.id] == 1
+def test_search_rank_sentinel_treated_as_unranked():
+    """Sleeper's own 'not really ranked' sentinel (e.g. an inactive
+    player) must not be trusted as a real rank -- falls through to the
+    production fallback like search_rank=None would."""
+    sentinel = _player("p1", "RB", last="Sentinel", search_rank=9_999_999,
+                        last_season_stats={"rush_yd": 500})
+    real_rank = _player("p2", "RB", last="RealRank", search_rank=250)
+    ranks = build_rank_by_id([sentinel, real_rank], DEFAULT_SCORING)
+    assert ranks[real_rank.id] < ranks[sentinel.id]
+
+
+def test_team_defense_has_no_search_rank_and_uses_production_fallback():
+    """Confirmed directly against the real API: team DEF entries never
+    carry a search_rank field at all -- must still get a real (if
+    fallback) rank, not crash or get silently dropped."""
+    defense = _player("p1", "DEF", first="Denver", last="Broncos", search_rank=None,
+                       last_season_stats={"def_sack": 40, "def_int": 15})
+    ranks = build_rank_by_id([defense], DEFAULT_SCORING)
+    assert ranks[defense.id] == 1
 
 
 def test_get_rank_score_returns_computed_rank_when_present():

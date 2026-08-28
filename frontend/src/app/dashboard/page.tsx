@@ -374,7 +374,7 @@ interface TopPerformer {
   points: number;
 }
 
-function TopPerformersWidget() {
+function TopPerformersWidget({ onHasData }: { onHasData?: (hasData: boolean) => void }) {
   const [data, setData] = useState<{ content: string; top_players: TopPerformer[]; week: number } | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -385,6 +385,15 @@ function TopPerformersWidget() {
       .catch(() => setData(null)) // 404 just means nothing generated yet -- not an error banner
       .finally(() => setLoading(false));
   }, []);
+
+  // Reports up once loading settles -- lets the parent grid collapse to a
+  // single, full-width column when this widget has nothing to show (e.g.
+  // all preseason, before any real weekly stats are synced) instead of
+  // leaving its sibling stuck at half-width/off-center in an otherwise-
+  // empty 2-column grid. See NFLScoresWidget's matching effect.
+  useEffect(() => {
+    if (!loading) onHasData?.(data !== null);
+  }, [loading, data, onHasData]);
 
   if (loading) {
     return (
@@ -437,7 +446,7 @@ interface NflGame {
   completed: boolean;
 }
 
-function NFLScoresWidget() {
+function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void }) {
   const [data, setData] = useState<{ week: number; games: NflGame[]; recap: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -448,6 +457,11 @@ function NFLScoresWidget() {
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, []);
+
+  // See TopPerformersWidget's matching effect.
+  useEffect(() => {
+    if (!loading) onHasData?.(data !== null);
+  }, [loading, data, onHasData]);
 
   if (loading) {
     return (
@@ -498,6 +512,21 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loggedIn, setLoggedIn] = useState(true);
+
+  // null = still loading / not yet reported -- defaults the grid to its
+  // normal 2-column shape so the common case (both widgets have data)
+  // never flashes single-column first. Once both have reported in,
+  // collapses to 1 column (full width) if only one of them actually has
+  // anything to show -- see TopPerformersWidget/NFLScoresWidget's
+  // onHasData effects for why this can legitimately happen (e.g. no real
+  // weekly stats synced yet during the preseason).
+  const [topPerformersHasData, setTopPerformersHasData] = useState<boolean | null>(null);
+  const [nflScoresHasData, setNflScoresHasData] = useState<boolean | null>(null);
+  const bothReported = topPerformersHasData !== null && nflScoresHasData !== null;
+  const summariesGridCols =
+    bothReported && (topPerformersHasData ? 1 : 0) + (nflScoresHasData ? 1 : 0) <= 1
+      ? "grid-cols-1"
+      : "grid-cols-1 lg:grid-cols-2";
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -553,11 +582,18 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Dashboard AI Summaries -- top real performers + NFL scores recap */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <TopPerformersWidget />
-        <NFLScoresWidget />
+      {/* Dashboard AI Summaries -- top real performers + NFL scores recap.
+          Hidden outright once both widgets have confirmed they have
+          nothing to show (rather than rendering an empty, padded section)
+          -- summariesGridCols above handles the "only one has data" case
+          by collapsing to a single full-width column instead of leaving
+          the other stuck at half-width in an otherwise-empty grid slot. */}
+      {topPerformersHasData !== false || nflScoresHasData !== false ? (
+      <section className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 grid ${summariesGridCols} gap-6`}>
+        <TopPerformersWidget onHasData={setTopPerformersHasData} />
+        <NFLScoresWidget onHasData={setNflScoresHasData} />
       </section>
+      ) : null}
 
       {/* Top Draft Prospects */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

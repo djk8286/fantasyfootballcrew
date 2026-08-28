@@ -28,15 +28,14 @@ interface TeamRosterPick {
 
 interface TeamRostersProps {
   myTeamId: string | null;
-  myPicks: TeamRosterPick[];
-  myRosterByPos: Record<string, TeamRosterPick[]>;
   team_order: string[];
   teams: Record<string, { name: string }>;
   teamRosters: Record<string, TeamRosterPick[]>;
-  isCompleted: boolean;
-  currentTeamId: string | null;
-  expandedTeams: Record<string, boolean>;
-  onToggleExpand: (teamId: string) => void;
+  // Which single team's roster is shown -- shared with the desktop
+  // draft-train's tap-to-select circles (DraftHeader.tsx) and mobile's
+  // own equivalent, so switching teams from either place stays in sync.
+  selectedTeamId: string | null;
+  onSelectTeamId: (teamId: string) => void;
   onClaimTeam: (teamId: string) => void;
   onUnclaimTeam: () => void;
   onPlayerHover: (player: any, el: HTMLElement | null) => void;
@@ -44,19 +43,24 @@ interface TeamRostersProps {
 
 export default function TeamRosters({
   myTeamId,
-  myPicks,
-  myRosterByPos,
   team_order,
   teams,
   teamRosters,
-  isCompleted,
-  currentTeamId,
-  expandedTeams,
-  onToggleExpand,
+  selectedTeamId,
+  onSelectTeamId,
   onClaimTeam,
   onUnclaimTeam,
   onPlayerHover,
 }: TeamRostersProps) {
+  const selectedTeamPicks = (selectedTeamId && teamRosters[selectedTeamId]) || [];
+  const selectedTeamByPos: Record<string, TeamRosterPick[]> = {};
+  selectedTeamPicks.forEach((p) => {
+    const pos = p.player?.position || "UNKNOWN";
+    if (!selectedTeamByPos[pos]) selectedTeamByPos[pos] = [];
+    selectedTeamByPos[pos].push(p);
+  });
+  const isViewingMyTeam = selectedTeamId !== null && selectedTeamId === myTeamId;
+  const selectedTeamName = selectedTeamId ? teams[selectedTeamId]?.name || "Team" : null;
   return (
     // w-full, not a fixed width -- this only ever renders inside
     // draft/[id]/page.tsx's left column, which is itself already fixed at
@@ -67,55 +71,24 @@ export default function TeamRosters({
     // reported "left panel overlaps center panel" bug.
     <div className="w-full shrink-0">
       <div className="xl:sticky xl:top-20 space-y-4">
-        {/* My Team */}
+        {/* Single-team roster view -- defaults to (and resets to, on
+            claim/unclaim, via draft/[id]/page.tsx's effect) your own
+            team; tap a circle in the desktop draft-train above
+            (DraftHeader.tsx) to switch which team's picks show here.
+            Same pattern as the mobile draft room's roster tab, replacing
+            the old "My Team fixed + accordion of every other team" layout
+            David called too congested. */}
         <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-surface-700 flex items-center justify-between">
             <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-2">
-              <Star className="w-3.5 h-3.5 text-gold-400" />
-              {myTeamId
-                ? teams[myTeamId]?.name || "My Team"
-                : "Your Team"}
+              {isViewingMyTeam && <Star className="w-3.5 h-3.5 text-gold-400" />}
+              {selectedTeamName || "Select a Team"}
             </h2>
             <span className="text-surface-500 text-xs">
-              {myPicks.length} players
+              {selectedTeamPicks.length} players
             </span>
           </div>
-          {myTeamId ? (
-            myPicks.length === 0 ? (
-              <div className="p-6 text-center text-surface-500 text-sm">
-                No picks yet. Your team will appear here as you draft.
-              </div>
-            ) : (
-              <div className="divide-y divide-surface-800">
-                {POSITION_ORDER.filter((pos) => myRosterByPos[pos]).map((pos) => (
-                  <div key={pos}>
-                    <div className="px-4 py-1.5 bg-surface-900/30 text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
-                      {pos} ({myRosterByPos[pos].length})
-                    </div>
-                    {myRosterByPos[pos].map((p) => (
-                      <div
-                        key={p.id}
-                        className="flex items-center gap-2 px-4 py-1.5"
-                        onMouseEnter={(e) => p.player && onPlayerHover(p.player, e.currentTarget)}
-                        onMouseLeave={() => onPlayerHover(null, null)}
-                      >
-                        <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">
-                          {p.pick_number}
-                        </span>
-                        {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
-                        <span className="text-sm text-white truncate flex-1">
-                          {p.player?.full_name}
-                        </span>
-                        <span className="text-[10px] text-surface-500 shrink-0">
-                          {p.player?.team}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )
-          ) : (
+          {!selectedTeamId ? (
             <div className="p-4 text-center">
               <p className="text-surface-400 text-sm mb-4">
                 Claim a team to start drafting
@@ -142,118 +115,66 @@ export default function TeamRosters({
                   })}
               </div>
             </div>
-          )}
-          {myTeamId && (
-            <div className="px-4 py-2 border-t border-surface-700/50 flex justify-end">
-              <button
-                onClick={onUnclaimTeam}
-                className="text-[10px] text-surface-500 hover:text-red-400 transition-colors"
-              >
-                Unclaim Team
-              </button>
+          ) : selectedTeamPicks.length === 0 ? (
+            <div className="p-6 text-center text-surface-500 text-sm">
+              No picks yet. {isViewingMyTeam ? "Your" : `${selectedTeamName}'s`} picks will appear here as the draft goes.
+            </div>
+          ) : (
+            <div className="divide-y divide-surface-800 max-h-130 overflow-y-auto">
+              {POSITION_ORDER.filter((pos) => selectedTeamByPos[pos]).map((pos) => (
+                <div key={pos}>
+                  <div className="px-4 py-1.5 bg-surface-900/30 text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
+                    {pos} ({selectedTeamByPos[pos].length})
+                  </div>
+                  {selectedTeamByPos[pos].map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-2 px-4 py-1.5"
+                      onMouseEnter={(e) => p.player && onPlayerHover(p.player, e.currentTarget)}
+                      onMouseLeave={() => onPlayerHover(null, null)}
+                    >
+                      <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">
+                        {p.pick_number}
+                      </span>
+                      {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
+                      <span className="text-sm text-white truncate flex-1">
+                        {p.player?.full_name}
+                      </span>
+                      <PositionBadge pos={p.player?.position || ""} />
+                      <span className="text-[10px] text-surface-500 shrink-0">
+                        {p.player?.team}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
             </div>
           )}
-        </div>
-
-        {/* Team Rosters */}
-        <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-surface-700">
-            <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
-              League · {Object.keys(teamRosters).length || "?"} Teams
-            </h2>
-          </div>
-          <div className="divide-y divide-surface-800 max-h-[400px] overflow-y-auto">
-            {Object.entries(teamRosters).map(([teamId, picks]) => {
-              const isCurrent = !isCompleted && currentTeamId === teamId;
-              const isMine = myTeamId === teamId;
-              const expanded = expandedTeams[teamId] || false;
-              return (
-                <div
-                  key={teamId}
-                  className={`${
-                    isCurrent
-                      ? "bg-gold-400/5"
-                      : isMine
-                        ? "bg-surface-800/30"
-                        : ""
-                  }`}
-                >
-                  {/* Header */}
-                  <div
-                    className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-surface-800/30 transition-colors"
-                    onClick={() => onToggleExpand(teamId)}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={expanded}
-                    aria-label={`${expanded ? "Collapse" : "Expand"} ${picks[0]?.team.name || "team"} roster`}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onToggleExpand(teamId);
-                      }
-                    }}
+          {/* Claim/unclaim only make sense for your own slot -- shown
+              regardless of which team is currently selected for viewing
+              (unlike the roster body above), since claiming isn't tied to
+              what you're currently looking at. */}
+          <div className="px-4 py-2 border-t border-surface-700/50 flex items-center justify-between">
+            {myTeamId ? (
+              <>
+                {!isViewingMyTeam && (
+                  <button
+                    onClick={() => onSelectTeamId(myTeamId)}
+                    className="text-[10px] text-gold-400 hover:text-gold-300 transition-colors"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {isMine && (
-                        <Star className="w-3 h-3 text-gold-400 shrink-0" />
-                      )}
-                      <span
-                        className={`text-sm font-medium truncate ${
-                          isMine || isCurrent ? "text-gold-400" : "text-surface-300"
-                        }`}
-                      >
-                        {picks[0]?.team.name || "Unknown"}
-                      </span>
-                      {isCurrent && !isCompleted && (
-                        <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-pulse shrink-0" />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-surface-500 text-xs font-mono">
-                        {picks.length}
-                      </span>
-                      <span
-                        className="text-surface-600 text-[9px] transition-transform"
-                        style={{
-                          transform: expanded
-                            ? "rotate(180deg)"
-                            : "rotate(0deg)",
-                        }}
-                      >
-                        ▼
-                      </span>
-                    </div>
-                  </div>
-                  {/* Expanded roster */}
-                  {expanded && (
-                    <div className="border-t border-surface-800/50">
-                      {picks
-                        .sort((a, b) => a.pick_number - b.pick_number)
-                        .map((p) => (
-                          <div
-                            key={p.id}
-                            className="flex items-center gap-2 px-4 py-1.5 text-xs hover:bg-surface-800/20"
-                            onMouseEnter={(e) => p.player && onPlayerHover(p.player, e.currentTarget)}
-                            onMouseLeave={() => onPlayerHover(null, null)}
-                          >
-                            <span className="text-surface-500 text-[10px] font-mono w-5 shrink-0">
-                              {p.pick_number}
-                            </span>
-                            {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
-                            <span className="text-white truncate flex-1">
-                              {p.player?.full_name || "—"}
-                            </span>
-                            <PositionBadge pos={p.player?.position || ""} />
-                            <span className="text-[9px] text-surface-500 shrink-0">
-                              {p.player?.team || ""}
-                            </span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    ← Back to my team
+                  </button>
+                )}
+                <button
+                  onClick={onUnclaimTeam}
+                  className="text-[10px] text-surface-500 hover:text-red-400 transition-colors ml-auto"
+                >
+                  Unclaim Team
+                </button>
+              </>
+            ) : (
+              <span className="text-[10px] text-surface-600">Claim a team above to start drafting</span>
+            )}
           </div>
         </div>
       </div>

@@ -51,6 +51,11 @@ interface DraftHeaderProps {
   currentPickGlobalIndex: number;
   numTeams: number;
   myTeamId: string | null;
+  // Which team's roster the desktop sidebar (TeamRosters.tsx) currently
+  // shows -- tapping a circle here switches it, same interaction/shared
+  // state as MobileDraftRoom's own draft-train.
+  selectedTeamId: string | null;
+  onSelectTeamId: (teamId: string) => void;
 }
 
 export default function DraftHeader({
@@ -75,6 +80,8 @@ export default function DraftHeader({
   currentPickGlobalIndex,
   numTeams,
   myTeamId,
+  selectedTeamId,
+  onSelectTeamId,
 }: DraftHeaderProps) {
   const uniqueTeams = teamOrder.filter((tid, i, arr) => arr.indexOf(tid) === i);
   const picksAway = !isCompleted ? picksUntilMyTurn(teamOrder, currentPickGlobalIndex, myTeamId) : null;
@@ -251,6 +258,8 @@ export default function DraftHeader({
                   name={teams[tid]?.name || "Team"}
                   isCurrent={tid === currentTeamId && !isCompleted}
                   isMine={tid === myTeamId}
+                  isSelected={tid === selectedTeamId}
+                  onClick={() => onSelectTeamId(tid)}
                   size="sm"
                 />
               ))}

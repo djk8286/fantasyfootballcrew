@@ -96,6 +96,12 @@ interface MobileDraftRoomProps {
   // draft/[id]/page.tsx from the same get_draft_state response
   // myRosterByPos/availablePlayers come from -- no new API call.
   teamRosters: Record<string, TeamRosterPick[]>;
+  // Which team's roster the roster view shows -- lifted up to
+  // draft/[id]/page.tsx (not local state) so mobile and desktop's own
+  // draft-train team-circle selectors (DraftHeader.tsx) share the exact
+  // same "currently viewing" selection instead of drifting independently.
+  selectedTeamId: string | null;
+  onSelectTeamId: (teamId: string) => void;
 
   filteredPlayers: MobileDraftPlayer[];
   searchQuery: string;
@@ -140,6 +146,8 @@ function MobileDraftRoom({
   availablePlayers,
   myRosterByPos,
   teamRosters,
+  selectedTeamId,
+  onSelectTeamId,
   filteredPlayers,
   searchQuery,
   onSearchQueryChange,
@@ -164,15 +172,6 @@ function MobileDraftRoom({
   const [showQueuePanel, setShowQueuePanel] = useState(false);
   const currentTeamRef = useRef<HTMLDivElement>(null);
   const queueSheetRef = useFocusTrap<HTMLDivElement>(() => setShowQueuePanel(false), showQueuePanel);
-
-  // Which team's drafted-so-far roster is showing -- defaults to (and
-  // resets to, on claim/unclaim) your own team, per David's ask: "you see
-  // your team and can select other teams to see who they drafted", not
-  // the always-on full player pool this replaced as the default view.
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(myTeamId);
-  useEffect(() => {
-    setSelectedTeamId(myTeamId);
-  }, [myTeamId]);
 
   // "roster" (default) = the team roster view above; "pool" = the
   // original always-visible search/filter/full-player-list, now reached
@@ -237,7 +236,7 @@ function MobileDraftRoom({
                   isMine={tid === myTeamId}
                   isSelected={mobileView === "roster" && tid === selectedTeamId}
                   onClick={() => {
-                    setSelectedTeamId(tid);
+                    onSelectTeamId(tid);
                     setMobileView("roster");
                   }}
                 />

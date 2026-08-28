@@ -76,6 +76,15 @@ async def sync_players_to_db(db: AsyncSession) -> int:
         )
         existing = result.scalar_one_or_none()
 
+        # Sleeper's own overall fantasy-relevance rank (lower = better) --
+        # see Player.search_rank. Unconditional overwrite (not "or existing
+        # value" like team/injury_status above) since this is meant to
+        # track Sleeper's current live number exactly, including it going
+        # away (None) if Sleeper ever stops ranking a player who used to
+        # have one -- there's no "keep the last known value" case that
+        # makes sense for a rank the way there is for e.g. team.
+        search_rank = data.get("search_rank")
+
         if existing:
             # Update existing player
             existing.team = data.get("team") or existing.team
@@ -83,6 +92,7 @@ async def sync_players_to_db(db: AsyncSession) -> int:
             existing.bye_week = data.get("bye_week") or existing.bye_week
             if data.get("fantasy_positions"):
                 existing.fantasy_positions = data["fantasy_positions"]
+            existing.search_rank = search_rank
         else:
             # Create new player
             player = Player(
@@ -96,6 +106,7 @@ async def sync_players_to_db(db: AsyncSession) -> int:
                 fantasy_positions=data.get("fantasy_positions"),
                 age=data.get("age"),
                 number=data.get("number"),
+                search_rank=search_rank,
             )
             db.add(player)
 
