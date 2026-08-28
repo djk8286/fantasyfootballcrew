@@ -87,12 +87,26 @@ interface PlayerPoolPick {
   team: { name: string };
 }
 
+// Mirrors draft/[id]/page.tsx's DRAFT_SORT_OPTIONS -- kept here too since
+// this is the only place the desktop player pool renders (sorting itself
+// happens in the page, this component just needs the label list + the
+// current value to render the control and reflect its state).
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Default (Rank)" },
+  { value: "points", label: "Fantasy Points (last season)" },
+  { value: "yards", label: "Yards (last season)" },
+  { value: "touchdowns", label: "Touchdowns (last season)" },
+  { value: "projected", label: "Projected" },
+];
+
 interface PlayerPoolProps {
   filteredPlayers: PlayerPoolPlayer[];
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   positionFilter: string;
   onPositionFilterChange: (pos: string) => void;
+  sortBy: string;
+  onSortByChange: (sort: string) => void;
   positionCounts: Record<string, number>;
   availableCount: number;
   isUserOnClock: boolean;
@@ -132,6 +146,8 @@ function PlayerPool({
   onSearchQueryChange,
   positionFilter,
   onPositionFilterChange,
+  sortBy,
+  onSortByChange,
   positionCounts,
   availableCount,
   isUserOnClock: userOnClock,
@@ -166,7 +182,7 @@ function PlayerPool({
     visibleItems: visiblePlayers,
     paddingTop: playerListPaddingTop,
     paddingBottom: playerListPaddingBottom,
-  } = useVirtualList(filteredPlayers, PLAYER_ROW_HEIGHT, `${positionFilter}:${searchQuery}`);
+  } = useVirtualList(filteredPlayers, PLAYER_ROW_HEIGHT, `${positionFilter}:${searchQuery}:${sortBy}`);
 
   return (
     <div className="flex-1 min-w-0">
@@ -333,8 +349,8 @@ function PlayerPool({
                   autoFocus={userOnClock}
                 />
               </div>
-              {/* Position filters */}
-              <div className="flex flex-wrap gap-1.5">
+              {/* Position filters + sort */}
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   onClick={() => onPositionFilterChange("ALL")}
                   aria-pressed={positionFilter === "ALL"}
@@ -365,6 +381,20 @@ function PlayerPool({
                     </button>
                   );
                 })}
+                <label className="ml-auto flex items-center gap-1.5 text-xs text-surface-400">
+                  Sort by
+                  <select
+                    value={sortBy}
+                    onChange={(e) => onSortByChange(e.target.value)}
+                    className="bg-surface-900 border border-surface-700 rounded-lg text-xs text-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                  >
+                    {SORT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
             </>
           )}

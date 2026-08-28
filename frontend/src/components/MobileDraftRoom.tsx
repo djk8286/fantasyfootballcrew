@@ -36,6 +36,17 @@ interface MobileDraftPlayer {
   season_points_year?: number | null;
 }
 
+// Mirrors draft/[id]/page.tsx's DRAFT_SORT_OPTIONS (sorting itself
+// happens there -- this file just renders the control), and PlayerPool.tsx's
+// own copy of the same list for the desktop pool.
+const DRAFT_SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Default (Rank)" },
+  { value: "points", label: "Fantasy Points (last season)" },
+  { value: "yards", label: "Yards (last season)" },
+  { value: "touchdowns", label: "Touchdowns (last season)" },
+  { value: "projected", label: "Projected" },
+];
+
 interface MobileDraftPick {
   id: string;
   round: number;
@@ -108,6 +119,11 @@ interface MobileDraftRoomProps {
   onSearchQueryChange: (q: string) => void;
   positionFilter: string;
   onPositionFilterChange: (pos: string) => void;
+  // Sorting itself happens in draft/[id]/page.tsx (filteredPlayers already
+  // arrives pre-sorted) -- this just renders the control and reflects its
+  // current value, same split as PlayerPool.tsx's desktop equivalent.
+  sortBy: string;
+  onSortByChange: (sort: string) => void;
   positionCounts: Record<string, number>;
   availableCount: number;
 
@@ -153,6 +169,8 @@ function MobileDraftRoom({
   onSearchQueryChange,
   positionFilter,
   onPositionFilterChange,
+  sortBy,
+  onSortByChange,
   positionCounts,
   availableCount,
   isUserOnClock,
@@ -447,6 +465,20 @@ function MobileDraftRoom({
                 );
               })}
             </div>
+            <label className="flex items-center gap-1.5 text-xs text-surface-400 mt-2">
+              Sort by
+              <select
+                value={sortBy}
+                onChange={(e) => onSortByChange(e.target.value)}
+                className="flex-1 bg-surface-800 border border-surface-700 rounded-lg text-xs text-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gold-400"
+              >
+                {DRAFT_SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </>
         )}
       </div>

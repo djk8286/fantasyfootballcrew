@@ -52,6 +52,56 @@ interface Player {
   sleeper_id: string | null;
   rank_score: number;
   pos_rank: number;
+  // Present on the real get_draft_state response (PlayerPool.tsx's own
+  // PlayerPoolPlayer already declares these the same way) -- needed here
+  // now too since sortPlayers below actually reads them, not just passes
+  // them through opaquely.
+  headline_stats?: Record<string, number> | null;
+  season_points?: number | null;
+  season_points_year?: number | null;
+  projected_points?: number | null;
+}
+
+// Mirrors backend/app/api/v1/players.py's SORT_VALUES, adapted to the
+// fields the draft-state payload actually carries (headline_stats is a
+// compact, position-specific slice -- not the full raw stat dict the
+// standalone /players page's yards/touchdowns sort works from -- so
+// "yards"/"touchdowns" here sum whatever headline_stats keys end in
+// _yd/_td, which covers every position HEADLINE_STAT_KEYS gives a real
+// yard/TD stat to). Client-side only: the pool is already fully loaded
+// per poll, so re-sorting a few thousand rows in JS is cheap and needs
+// no new API call.
+const DRAFT_SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Default (Rank)" },
+  { value: "points", label: "Fantasy Points (last season)" },
+  { value: "yards", label: "Yards (last season)" },
+  { value: "touchdowns", label: "Touchdowns (last season)" },
+  { value: "projected", label: "Projected" },
+];
+
+function sumHeadlineStatsBySuffix(stats: Record<string, number> | null | undefined, suffix: string): number {
+  if (!stats) return 0;
+  return Object.entries(stats).reduce((sum, [k, v]) => (k.endsWith(suffix) ? sum + (v || 0) : sum), 0);
+}
+
+function sortPlayers<T extends Player>(players: T[], sortBy: string): T[] {
+  if (!sortBy) return players; // "" = keep the server-provided rank_score order as-is
+  const sorted = [...players];
+  switch (sortBy) {
+    case "points":
+      sorted.sort((a, b) => (b.season_points ?? -Infinity) - (a.season_points ?? -Infinity));
+      break;
+    case "projected":
+      sorted.sort((a, b) => (b.projected_points ?? -Infinity) - (a.projected_points ?? -Infinity));
+      break;
+    case "yards":
+      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_yd") - sumHeadlineStatsBySuffix(a.headline_stats, "_yd"));
+      break;
+    case "touchdowns":
+      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_td") - sumHeadlineStatsBySuffix(a.headline_stats, "_td"));
+      break;
+  }
+  return sorted;
 }
 
 interface DraftPickPlayer {
@@ -113,6 +163,7 @@ export default function DraftPage() {
   const [actionLoading, setActionLoading] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [positionFilter, setPositionFilter] = useState("ALL");
+  const [sortBy, setSortBy] = useState("");
   const [cpuingPick, setCpuingPick] = useState(false);
   const [showTimerSettings, setShowTimerSettings] = useState(false);
   const [viewMode, setViewMode] = useState<"draft" | "board" | "history">("draft");
@@ -162,7 +213,7 @@ export default function DraftPage() {
     () => new Set((draft?.picks || []).filter(p => p.player).map(p => p.player!.id)),
     [draft?.picks],
   );
-  const filteredPlayers = useMemo(() => available.filter((p) => {
+  const filteredPlayers = useMemo(() => sortPlayers(available.filter((p) => {
     if (positionFilter !== "ALL" && p.position !== positionFilter) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -173,7 +224,7 @@ export default function DraftPage() {
       );
     }
     return true;
-  }), [available, positionFilter, searchQuery]);
+  }), sortBy), [available, positionFilter, searchQuery, sortBy]);
 
   // Filter queue to only show still-available players
   const availableQueue = useMemo(
@@ -737,6 +788,8 @@ export default function DraftPage() {
             onSearchQueryChange={setSearchQuery}
             positionFilter={positionFilter}
             onPositionFilterChange={setPositionFilter}
+            sortBy={sortBy}
+            onSortByChange={setSortBy}
             positionCounts={positionCounts}
             availableCount={available.length}
             isUserOnClock={isUserOnClock()}
@@ -785,6 +838,8 @@ export default function DraftPage() {
               onSearchQueryChange={setSearchQuery}
               positionFilter={positionFilter}
               onPositionFilterChange={setPositionFilter}
+              sortBy={sortBy}
+              onSortByChange={setSortBy}
               positionCounts={positionCounts}
               availableCount={available.length}
               isUserOnClock={isUserOnClock()}
