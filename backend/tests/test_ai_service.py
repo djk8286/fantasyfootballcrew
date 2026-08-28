@@ -532,6 +532,149 @@ def test_grounding_preamble_includes_real_current_date():
     assert "UNVERIFIED" in preamble
 
 
+# ─── Bet analysis: real live web search (OpenAI Responses API) ─────────
+# David reported the Bet tab's analysis was "too restrictive" -- traced
+# to a prompt claiming live web search when nothing in this app actually
+# gave the model a search tool, so it kept honestly refusing to do what
+# it was told to do. Fixed by wiring up OpenAI's real hosted web_search
+# tool (Responses API) for this one feature specifically -- confirmed
+# directly against the real API before writing this (see ai_service.py's
+# _call_openai_search docstring) -- while every other AI Co-Commissioner
+# feature stays on the cheaper, faster, no-tools Chat Completions path.
+
+@pytest.mark.asyncio
+async def test_analyze_bet_routes_to_search_path_when_openai_configured():
+    service = AIService(api_key="fake-key", provider="openai")
+    captured = {}
+
+    async def spy(system: str, input_text: str) -> str:
+        captured["system"] = system
+        captured["input_text"] = input_text
+        return "ok"
+
+    service._call_openai_search = spy
+    await service.analyze_bet(
+        matchup={"description": "Is Puka Nacua a good start?"},
+        lines={},
+        verified_players=[{"name": "Puka Nacua", "position": "WR", "current_team": "LAR", "injury_status": "none reported"}],
+    )
+    assert "live web search" in captured["system"]
+    assert "Puka Nacua" in captured["input_text"]
+    assert "LAR" in captured["input_text"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_bet_falls_back_to_no_search_prompt_for_other_providers():
+    """Only OpenAI has the real search tool wired up (see
+    _call_openai_search) -- any other configured provider (or none)
+    must stay on the honest, no-search-claimed fallback prompt instead
+    of silently claiming a capability it doesn't have."""
+    service = AIService(api_key="fake-key", provider="anthropic")
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_bet(matchup={"description": "Chiefs -3.5, good bet?"}, lines={})
+    assert "prompt" in captured
+    assert "live web search" not in captured["prompt"]
+
+
+class _SearchFakeAsyncClient:
+    """Mimics the REAL shape of an OpenAI Responses API response
+    (confirmed directly against the live API before writing this test):
+    output is a list of typed items -- reasoning steps, web_search_call
+    records with their queries, and finally a message item whose
+    content holds the actual output_text."""
+
+    captured: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, headers, json):
+        _SearchFakeAsyncClient.captured["url"] = url
+        _SearchFakeAsyncClient.captured["json"] = json
+        return self
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {
+            "output": [
+                {"type": "reasoning", "content": []},
+                {"type": "web_search_call", "status": "completed", "action": {"query": "Puka Nacua injury report"}},
+                {"type": "reasoning", "content": []},
+                {
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Lean over, 1 unit. ([therams.com](https://www.therams.com))",
+                            "annotations": [{"type": "url_citation", "url": "https://www.therams.com"}],
+                        }
+                    ],
+                    "role": "assistant",
+                },
+            ],
+        }
+
+
+@pytest.mark.asyncio
+async def test_call_openai_search_extracts_final_message_text(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    _SearchFakeAsyncClient.captured = {}
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _SearchFakeAsyncClient)
+    service = AIService(api_key="fake-key", provider="openai")
+
+    result = await service._call_openai_search("system instructions", "user input")
+
+    assert result == "Lean over, 1 unit. ([therams.com](https://www.therams.com))"
+    sent = _SearchFakeAsyncClient.captured["json"]
+    assert sent["instructions"] == "system instructions"
+    assert sent["input"] == "user input"
+    assert sent["tools"] == [{"type": "web_search"}]
+    assert sent["max_tool_calls"] == ai_service_module.BET_SEARCH_MAX_TOOL_CALLS
+    assert _SearchFakeAsyncClient.captured["url"] == "https://api.openai.com/v1/responses"
+
+
+@pytest.mark.asyncio
+async def test_call_openai_search_degrades_gracefully_when_no_message_item(monkeypatch):
+    """Defensive parsing -- an unexpected response shape (e.g. only
+    reasoning/web_search_call items, no message) must not crash, just
+    fall back to the same unavailable string every other _call_* method
+    uses on failure."""
+    class _NoMessageClient(_SearchFakeAsyncClient):
+        def json(self):
+            return {"output": [{"type": "reasoning", "content": []}]}
+
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _NoMessageClient)
+    service = AIService(api_key="fake-key", provider="openai")
+
+    result = await service._call_openai_search("system", "input")
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_call_openai_search_degrades_gracefully_on_failure(monkeypatch):
+    import app.services.ai_service as ai_service_module
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", _RaisingAsyncClient)
+    service = AIService(api_key="fake-key", provider="openai")
+    result = await service._call_openai_search("system", "input")
+    assert result == ai_service_module.AI_TEMPORARILY_UNAVAILABLE
+
+
 @pytest.mark.asyncio
 async def test_bet_prompt_includes_verified_players():
     service = AIService()

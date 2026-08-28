@@ -246,14 +246,17 @@ async def analyze_bet(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Freeform betting-angle analysis. No live odds/weather data source
-    exists yet, so the matchup/lines themselves are still whatever the
-    user typed -- but any player names mentioned get looked up against
-    this app's own synced roster data first (see
-    _verified_players_from_text), so the model has real current team/
-    position/injury data to ground against instead of guessing from
-    training memory alone (a real, reported inaccuracy -- see
-    ai_service.py's _grounding_preamble for the full context)."""
+    """Freeform betting-angle analysis. When OpenAI is the configured
+    provider, this does REAL live web research (current odds, injury
+    reports, snap counts) via AIService._call_openai_search -- not just
+    training memory + whatever the user typed. Any player names
+    mentioned also get looked up against this app's own synced roster
+    data first (see _verified_players_from_text) as a fast, free
+    cross-check alongside that search, so the model has real current
+    team/position/injury data to ground against too. Falls back to a
+    no-search, honestly-hedged prompt for any other/no configured
+    provider -- see ai_service.py's BET_ANALYSIS_PROMPT vs.
+    BET_ANALYSIS_SEARCH_SYSTEM_PROMPT."""
     verified_players = await _verified_players_from_text(body.prompt, db)
     service = _get_ai_service()
     analysis = await service.analyze_bet(
