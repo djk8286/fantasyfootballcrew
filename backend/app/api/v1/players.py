@@ -35,20 +35,34 @@ def _sort_players(players: list[Player], sort_by: str, scoring_config: dict) -> 
     reasoning draft_manager.build_rank_by_id documents), not a second
     query. scoring_config falls back to DEFAULT_SCORING (standard, not
     any one league's custom rules) when no league_id was supplied,
-    matching build_rank_by_id's own existing convention elsewhere."""
+    matching build_rank_by_id's own existing convention elsewhere.
+
+    Every case tie-breaks on the real search_rank-based rank
+    (build_rank_by_id/get_rank_score), not just the primary key alone --
+    without this, sort_by=projected in particular degraded to effectively
+    arbitrary DB-insertion order: with no real Sleeper projections synced
+    yet this preseason (confirmed directly against the live API -- see
+    nfl_projections_service.py), virtually every player ties at the exact
+    same 0, and Python's stable sort just preserves whatever order the
+    query happened to return them in -- surfacing random deep-bench names
+    above real stars, a real reported bug, not a hypothetical edge case."""
     config = scoring_config or DEFAULT_SCORING
+    rank_by_id = build_rank_by_id(players, config)
+
+    def _rank(p: Player) -> int:
+        return get_rank_score(p, rank_by_id)
+
     if sort_by == "rank":
-        rank_by_id = build_rank_by_id(players, config)
-        return sorted(players, key=lambda p: get_rank_score(p, rank_by_id))
+        return sorted(players, key=_rank)
     if sort_by == "points":
         return sorted(
             players,
-            key=lambda p: -calculate_player_score(p.last_season_stats or {}, config, p.position),
+            key=lambda p: (-calculate_player_score(p.last_season_stats or {}, config, p.position), _rank(p)),
         )
     if sort_by == "yards":
-        return sorted(players, key=lambda p: -_yards(p.last_season_stats))
+        return sorted(players, key=lambda p: (-_yards(p.last_season_stats), _rank(p)))
     if sort_by == "touchdowns":
-        return sorted(players, key=lambda p: -_touchdowns(p.last_season_stats))
+        return sorted(players, key=lambda p: (-_touchdowns(p.last_season_stats), _rank(p)))
     if sort_by == "projected":
         # projected_stats is Sleeper's raw PER-GAME projection (see
         # Player model + nfl_projections_service.py) -- Sleeper exposes no
@@ -59,7 +73,7 @@ def _sort_players(players: list[Player], sort_by: str, scoring_config: dict) -> 
         # no projection info to show.
         return sorted(
             players,
-            key=lambda p: -calculate_player_score(p.projected_stats or {}, config, p.position),
+            key=lambda p: (-calculate_player_score(p.projected_stats or {}, config, p.position), _rank(p)),
         )
     return players
 

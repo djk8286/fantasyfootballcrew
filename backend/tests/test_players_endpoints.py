@@ -94,6 +94,26 @@ async def test_sort_by_projected_orders_by_synced_projection_and_nulls_sort_last
 
 
 @pytest.mark.asyncio
+async def test_sort_by_projected_ties_break_on_real_rank_not_db_order(client, db_session_factory):
+    """Regression test for a real reported bug: with no real Sleeper
+    projections synced yet (the whole pool ties at the same 0), the sort
+    must not degrade to arbitrary DB-insertion order -- it must fall back
+    to the real search_rank-based rank, so a genuine star still sorts
+    above deep-bench names even with no projection data to sort by yet."""
+    await _add_players(db_session_factory, [
+        {"first_name": "Deep", "last_name": "Bench", "position": "RB", "search_rank": 3000},
+        {"first_name": "Real", "last_name": "Star", "position": "RB", "search_rank": 2},
+        {"first_name": "Mid", "last_name": "Tier", "position": "RB", "search_rank": 500},
+    ])
+    r = await client.get("/players", params={"sort_by": "projected", "position": "RB"})
+    assert r.status_code == 200
+    body = r.json()
+    # None of them have a real projection -- all tie at 0 -- so the order
+    # must come from search_rank (Star < Tier < Bench), not insertion order.
+    assert [p["first_name"] for p in body] == ["Real", "Mid", "Deep"]
+
+
+@pytest.mark.asyncio
 async def test_unspecified_sort_by_is_unaffected(client, db_session_factory):
     """No sort_by -- unsorted DB-order behavior, unchanged from before
     this param existed."""

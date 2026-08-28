@@ -5,6 +5,7 @@ import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3, Users, 
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import TeamCircle from "./DraftTeamCircle";
+import TeamRosterCard from "./TeamRosterCard";
 import { PickCountdownText } from "./PickCountdown";
 import { formatPickLabel, picksUntilMyTurn, projectNextPick } from "@/lib/draftPickMath";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -225,16 +226,9 @@ function MobileDraftRoom({
 
   const availableQueue = queue;
 
-  // Position-grouped picks for whichever team is currently selected --
-  // same grouping shape/order TeamRosters.tsx's desktop "My Team" section
-  // already uses (POSITION_ORDER), so the two stay visually consistent.
+  // Picks for whichever team is currently selected -- TeamRosterCard does
+  // its own position-grouping now (see below).
   const selectedTeamPicks = (selectedTeamId && teamRosters[selectedTeamId]) || [];
-  const selectedTeamByPos: Record<string, TeamRosterPick[]> = {};
-  selectedTeamPicks.forEach((p) => {
-    const pos = p.player?.position || "UNKNOWN";
-    if (!selectedTeamByPos[pos]) selectedTeamByPos[pos] = [];
-    selectedTeamByPos[pos].push(p);
-  });
   const isViewingMyTeam = selectedTeamId !== null && selectedTeamId === myTeamId;
   const selectedTeamName = selectedTeamId ? teams[selectedTeamId]?.name || "Team" : null;
 
@@ -486,43 +480,18 @@ function MobileDraftRoom({
       {/* ── Roster view ────────────────────────────────────────────── */}
       {mobileView === "roster" && (
         <div className="px-4 pb-28 mt-1">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-xs font-semibold text-surface-300 flex items-center gap-1.5">
-              {isViewingMyTeam && <Star className="w-3.5 h-3.5 text-gold-400" />}
-              {selectedTeamName || "Select a team"}
-            </span>
-            <span className="text-surface-500 text-xs">{selectedTeamPicks.length} players</span>
-          </div>
           {!selectedTeamId ? (
             <div className="py-10 text-center text-surface-500 text-sm">
               Claim a team to see your roster, or tap a team above to view theirs.
             </div>
-          ) : selectedTeamPicks.length === 0 ? (
-            <div className="py-10 text-center text-surface-500 text-sm">
-              No picks yet. {isViewingMyTeam ? "Your" : `${selectedTeamName}'s`} picks will appear here as the draft goes.
-            </div>
           ) : (
-            <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden divide-y divide-surface-800">
-              {POSITION_ORDER.filter((pos) => selectedTeamByPos[pos]).map((pos) => (
-                <div key={pos}>
-                  <div className="px-4 py-1.5 bg-surface-900/30 text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
-                    {pos} ({selectedTeamByPos[pos].length})
-                  </div>
-                  {selectedTeamByPos[pos].map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center gap-2 px-4 py-2"
-                      onClick={(e) => p.player && onPlayerHover(p.player as any, e.currentTarget)}
-                    >
-                      <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">{p.pick_number}</span>
-                      {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover as any} />}
-                      <span className="text-sm text-white truncate flex-1">{p.player?.full_name}</span>
-                      <span className="text-[10px] text-surface-500 shrink-0">{p.player?.team}</span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
+            <TeamRosterCard
+              teamName={selectedTeamName || "Team"}
+              isMine={isViewingMyTeam}
+              picks={selectedTeamPicks}
+              emptyLabel={`No picks yet. ${isViewingMyTeam ? "Your" : `${selectedTeamName}'s`} picks will appear here as the draft goes.`}
+              onPlayerHover={onPlayerHover as any}
+            />
           )}
         </div>
       )}

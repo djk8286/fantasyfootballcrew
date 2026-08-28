@@ -31,6 +31,7 @@ import DraftHeader from "@/components/DraftHeader";
 import PlayerPool from "@/components/PlayerPool";
 import TeamRosters from "@/components/TeamRosters";
 import BoardView from "@/components/BoardView";
+import MobileBoardView from "@/components/MobileBoardView";
 import MobileDraftRoom from "@/components/MobileDraftRoom";
 import DraftQueuePanel from "@/components/DraftQueuePanel";
 import RecentPicksPanel from "@/components/RecentPicksPanel";
@@ -84,21 +85,30 @@ function sumHeadlineStatsBySuffix(stats: Record<string, number> | null | undefin
   return Object.entries(stats).reduce((sum, [k, v]) => (k.endsWith(suffix) ? sum + (v || 0) : sum), 0);
 }
 
+// Every comparator below tie-breaks on rank_score (the real, live
+// search_rank-based rank -- see draft_manager.build_rank_by_id on the
+// backend) whenever the primary value is equal, not just left in
+// whatever order the array happened to already be in. Without this,
+// "projected" in particular degraded to effectively random order: with
+// no real Sleeper projections synced yet this preseason, virtually every
+// player ties at the exact same value, and Array.sort's tie behavior
+// just preserves array order -- surfacing random deep-bench names above
+// real stars, a real reported bug, not a hypothetical edge case.
 function sortPlayers<T extends Player>(players: T[], sortBy: string): T[] {
   if (!sortBy) return players; // "" = keep the server-provided rank_score order as-is
   const sorted = [...players];
   switch (sortBy) {
     case "points":
-      sorted.sort((a, b) => (b.season_points ?? -Infinity) - (a.season_points ?? -Infinity));
+      sorted.sort((a, b) => (b.season_points ?? -Infinity) - (a.season_points ?? -Infinity) || a.rank_score - b.rank_score);
       break;
     case "projected":
-      sorted.sort((a, b) => (b.projected_points ?? -Infinity) - (a.projected_points ?? -Infinity));
+      sorted.sort((a, b) => (b.projected_points ?? -Infinity) - (a.projected_points ?? -Infinity) || a.rank_score - b.rank_score);
       break;
     case "yards":
-      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_yd") - sumHeadlineStatsBySuffix(a.headline_stats, "_yd"));
+      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_yd") - sumHeadlineStatsBySuffix(a.headline_stats, "_yd") || a.rank_score - b.rank_score);
       break;
     case "touchdowns":
-      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_td") - sumHeadlineStatsBySuffix(a.headline_stats, "_td"));
+      sorted.sort((a, b) => sumHeadlineStatsBySuffix(b.headline_stats, "_td") - sumHeadlineStatsBySuffix(a.headline_stats, "_td") || a.rank_score - b.rank_score);
       break;
   }
   return sorted;
@@ -894,17 +904,33 @@ export default function DraftPage() {
             >
               <List className="w-5 h-5" /> Back to Draft
             </button>
-            <BoardView
-              isCompleted={isCompleted}
-              draftInfo={draftInfo}
-              team_order={team_order}
-              teams={draft?.teams || {}}
-              allPicks={allPicks}
-              currentPick={currentPick}
-              myTeamId={myTeamId}
-              firstRoundTeams={firstRoundTeams}
-              onPlayerHover={handlePlayerHover}
-            />
+            {/* Mobile: the round x team grid is unreadable at phone width
+                (too many narrow columns) -- a stack of per-team roster
+                cards (the same style the "Rosters" tab already uses)
+                instead. Desktop keeps the real grid, which is what
+                actually needs the wide screen. */}
+            <div className="xl:hidden">
+              <MobileBoardView
+                team_order={team_order}
+                teams={draft?.teams || {}}
+                teamRosters={teamRosters}
+                myTeamId={myTeamId}
+                onPlayerHover={handlePlayerHover}
+              />
+            </div>
+            <div className="hidden xl:block">
+              <BoardView
+                isCompleted={isCompleted}
+                draftInfo={draftInfo}
+                team_order={team_order}
+                teams={draft?.teams || {}}
+                allPicks={allPicks}
+                currentPick={currentPick}
+                myTeamId={myTeamId}
+                firstRoundTeams={firstRoundTeams}
+                onPlayerHover={handlePlayerHover}
+              />
+            </div>
           </>
         )}
 
