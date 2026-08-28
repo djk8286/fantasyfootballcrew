@@ -57,5 +57,15 @@ class Player(Base):
     # build_rank_by_id now, not last season's box-score production (see
     # that function for the fallback used when a player has none -- team
     # DEF entries in particular never carry this field at all).
+    #
+    # NULLed out at sync time (sync_players_to_db) whenever Sleeper's own
+    # depth_chart_position is empty -- a real, confirmed data-quality gap:
+    # Sleeper's active/team fields are NOT reliable for "is this player
+    # actually on an NFL roster right now" (long-retired players like Todd
+    # Gurley/Tom Brady still show active=true with a real search_rank; Ben
+    # Roethlisberger, retired since 2022, still shows team="PIT"), which
+    # was the actual reported bug (Gurley showing up ranked). No
+    # depth_chart_position was null for all three of those and populated
+    # for every real current starter checked.
     search_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

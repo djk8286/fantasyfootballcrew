@@ -83,7 +83,20 @@ async def sync_players_to_db(db: AsyncSession) -> int:
         # away (None) if Sleeper ever stops ranking a player who used to
         # have one -- there's no "keep the last known value" case that
         # makes sense for a rank the way there is for e.g. team.
-        search_rank = data.get("search_rank")
+        #
+        # Only trusted when depth_chart_position is also set. Confirmed
+        # directly against the real API: Sleeper's own active/team fields
+        # are NOT reliable for "is this a real, currently rosterable NFL
+        # player" -- long-retired players still carry active=true and a
+        # real search_rank (Todd Gurley: active=true, search_rank=27; Tom
+        # Brady: active=true, search_rank=74), and team isn't reliable
+        # either (Ben Roethlisberger, retired since 2022, still shows
+        # team="PIT"). depth_chart_position/depth_chart_order, by
+        # contrast, were null for every one of those three and populated
+        # for every real current starter checked (Bijan Robinson, Josh
+        # Allen, Patrick Mahomes, ...) -- the actual reported bug (Todd
+        # Gurley showing up ranked) traces to trusting search_rank alone.
+        search_rank = data.get("search_rank") if data.get("depth_chart_position") else None
 
         if existing:
             # Update existing player
