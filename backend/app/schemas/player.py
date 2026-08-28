@@ -19,6 +19,13 @@ class PlayerRead(BaseModel):
     stats: Optional[dict] = None
     season_points: Optional[float] = None
     season_points_year: Optional[int] = None
+    # "most important stats from the previous year" (raw sums, not scoring-
+    # config-dependent) + Sleeper's synced per-game projection -- see
+    # api/v1/players.py's _serialize_player / SORT_VALUES for how these
+    # back the new sort_by=yards/touchdowns/projected options.
+    last_season_yards: Optional[float] = None
+    last_season_touchdowns: Optional[float] = None
+    projected_points: Optional[float] = None
 
     class Config:
         from_attributes = True

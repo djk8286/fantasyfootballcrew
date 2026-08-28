@@ -12,8 +12,8 @@ from app.services.salary_cap_service import (
     get_salary_cap_settings,
     compute_pick_slot_salary,
     compute_waiver_salary,
+    WAIVER_SALARY_SCALE_MAX,
 )
-from app.services.draft_manager import _SEQUENTIAL_RANKINGS
 
 
 def _settings(**overrides):
@@ -23,9 +23,11 @@ def _settings(**overrides):
 
 
 class _FakePlayer:
-    def __init__(self, first_name, last_name):
+    def __init__(self, first_name, last_name, position="RB", last_season_stats=None):
         self.first_name = first_name
         self.last_name = last_name
+        self.position = position
+        self.last_season_stats = last_season_stats or {}
 
 
 def test_compute_pick_slot_salary_top_pick_gets_top_salary():
@@ -56,29 +58,34 @@ def test_compute_pick_slot_salary_handles_single_pick_league():
     assert compute_pick_slot_salary(1, 1, settings) == 50.0
 
 
-def test_compute_waiver_salary_ranked_player_is_less_than_equivalent_pick_slot_salary():
+def test_compute_waiver_salary_elite_production_approaches_top_salary():
     settings = _settings(top_salary=50.0, bottom_salary=1.0, waiver_salary_pct=0.6)
-    # Real ranked star name, guaranteed to exist in the ranking list.
-    ranked_name = _SEQUENTIAL_RANKINGS[0][1]
-    first, last = ranked_name.split(" ", 1)
-    player = _FakePlayer(first, last)
+    # Real elite-level 2025 RB season line -- scores well above
+    # WAIVER_SALARY_SCALE_MAX, so this clamps at the top of the scale.
+    star = _FakePlayer("Star", "Runner", position="RB", last_season_stats={
+        "rush_yd": 2000, "rush_td": 20, "rec": 60, "rec_yd": 500, "rec_td": 4,
+    })
+    waiver_salary = compute_waiver_salary(star, settings)
+    assert waiver_salary == round(settings["top_salary"] * settings["waiver_salary_pct"], 2)
+
+
+def test_compute_waiver_salary_zero_production_falls_back_to_bottom_salary():
+    settings = _settings(top_salary=50.0, bottom_salary=1.0, waiver_salary_pct=0.6)
+    player = _FakePlayer("Totally", "Unranked-Nobody-XYZ", last_season_stats={})
 
     waiver_salary = compute_waiver_salary(player, settings)
-    equivalent_pick_salary = compute_pick_slot_salary(1, len(_SEQUENTIAL_RANKINGS), settings)
-
-    assert waiver_salary < equivalent_pick_salary
-    assert waiver_salary == round(equivalent_pick_salary * 0.6, 2)
-
-
-def test_compute_waiver_salary_unranked_player_falls_back_to_tier_scale():
-    settings = _settings(top_salary=50.0, bottom_salary=1.0, waiver_salary_pct=0.6)
-    player = _FakePlayer("Totally", "Unranked-Nobody-XYZ")
-
-    waiver_salary = compute_waiver_salary(player, settings)
-    # Unranked -> tier 5 of 5 -> bottom of the 5-slot interpolation, scaled.
-    expected = round(compute_pick_slot_salary(5, 5, settings) * 0.6, 2)
+    expected = round(settings["bottom_salary"] * settings["waiver_salary_pct"], 2)
     assert waiver_salary == expected
-    assert waiver_salary < compute_pick_slot_salary(1, len(_SEQUENTIAL_RANKINGS), settings)
+
+
+def test_compute_waiver_salary_scales_between_bottom_and_top_with_production():
+    settings = _settings(top_salary=50.0, bottom_salary=1.0, waiver_salary_pct=0.6)
+    zero = _FakePlayer("No", "Stats", last_season_stats={})
+    modest = _FakePlayer("Modest", "Producer", position="RB", last_season_stats={
+        "rush_yd": int(WAIVER_SALARY_SCALE_MAX / 2 / 0.1),  # ~half the scale's max score
+    })
+    assert compute_waiver_salary(zero, settings) < compute_waiver_salary(modest, settings)
+    assert compute_waiver_salary(modest, settings) < round(settings["top_salary"] * settings["waiver_salary_pct"], 2)
 
 
 def test_get_salary_cap_settings_merges_with_defaults():

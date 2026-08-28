@@ -19,14 +19,15 @@ releasing a multi-year-contract player early charges a separate
 DeadMoney entry against the team's cap for the rest of the season.
 
 Salary scale: two-number linear interpolation (top_salary at pick #1 /
-best-ranked free agent, bottom_salary at the worst pick slot / a
-bottom-tier free agent), not a 200+-row lookup table -- a commissioner
-configures exactly 2 numbers. Waiver/free-agent salaries reuse the same
-formula, keyed off the player's existing static rank/tier
-(draft_manager.get_player_rank_from_list/get_player_tier) instead of a
-pick number, then scaled down by waiver_salary_pct -- distinct from but
-proportional to the pick-slot scale, since there's no real bid to
-derive it from.
+best-produced free agent, bottom_salary at the worst pick slot / a
+zero-production free agent), not a 200+-row lookup table -- a
+commissioner configures exactly 2 numbers. Waiver/free-agent salaries
+reuse the same formula, keyed off the player's own real last-season
+production (calculate_player_score against last_season_stats,
+DEFAULT_SCORING, normalized against WAIVER_SALARY_SCALE_MAX -- see
+compute_waiver_salary) instead of a pick number, then scaled down by
+waiver_salary_pct -- distinct from but proportional to the pick-slot
+scale, since there's no real bid to derive it from.
 """
 from typing import Any
 from sqlalchemy import select, func
@@ -35,6 +36,17 @@ from app.models.league import League
 from app.models.team import Team
 from app.models.player import Player
 from app.models.contract import Contract, DeadMoney
+from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
+
+# Reference "top of the scale" point total standing in for pick #1 in
+# compute_pick_slot_salary's interpolation -- there's no natural draft-
+# pick-style rank to place a free agent at without scoring the entire
+# player pool on every single valuation call, so this normalizes against
+# a fixed point total instead. Roughly a standout full-season starter
+# under DEFAULT_SCORING (see test_scoring_engine.py's season-total
+# examples, e.g. a 107-point IDP season) -- a deliberately generous
+# ceiling so only truly elite production reaches top_salary.
+WAIVER_SALARY_SCALE_MAX = 350.0
 
 DEFAULT_SALARY_CAP_SETTINGS: dict[str, Any] = {
     "enabled": False,
@@ -67,25 +79,21 @@ def compute_pick_slot_salary(pick_number: int, total_picks: int, settings: dict)
 
 
 def compute_waiver_salary(player: Player, settings: dict) -> float:
-    """Same interpolation formula as compute_pick_slot_salary, keyed off
-    the player's existing static rank (ranked players) or tier (everyone
-    else) instead of a draft-pick position, then scaled by
-    waiver_salary_pct -- the "distinct but proportional to the pick-slot
-    scale" waiver/free-agent scale, since there's no real bid to price a
-    free-agent signing off of."""
-    # Local import: avoids a module-load-order cycle (draft_manager
-    # doesn't import this module, but importing it eagerly at the top of
-    # this file would still tie this service's import time to the full
-    # weight of draft_manager's own player-ranking-list construction).
-    from app.services.draft_manager import get_player_rank_from_list, get_player_tier, _SEQUENTIAL_RANKINGS
-
-    full_name = f"{player.first_name} {player.last_name}"
-    rank = get_player_rank_from_list(full_name)
-    if rank < 1000:
-        base = compute_pick_slot_salary(rank, len(_SEQUENTIAL_RANKINGS), settings)
-    else:
-        tier = get_player_tier(full_name)  # 1-4, or 5 for unranked
-        base = compute_pick_slot_salary(tier, 5, settings)
+    """Same top/bottom-salary interpolation formula as
+    compute_pick_slot_salary, but keyed off the player's own real last-
+    season production (calculate_player_score against last_season_stats)
+    instead of draft_manager's static name/tier list (removed -- see
+    draft_manager.build_rank_by_id for why it was stale and wrong),
+    normalized against WAIVER_SALARY_SCALE_MAX in place of a rank
+    position, then scaled by waiver_salary_pct -- the "distinct but
+    proportional to the pick-slot scale" waiver/free-agent price, since
+    there's no real bid to derive it from. No stats yet (a rookie/newly-
+    synced player) scores 0 and lands at bottom_salary, same as the old
+    system's "unranked" fallback did."""
+    score = calculate_player_score(player.last_season_stats or {}, DEFAULT_SCORING, player.position)
+    frac = min(max(score, 0.0) / WAIVER_SALARY_SCALE_MAX, 1.0)
+    top, bottom = settings["top_salary"], settings["bottom_salary"]
+    base = round(bottom + (top - bottom) * frac, 2)
     return round(base * settings["waiver_salary_pct"], 2)
 
 

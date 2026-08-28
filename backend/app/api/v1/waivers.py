@@ -12,7 +12,7 @@ from app.models.transaction import Transaction, TransactionType, TransactionStat
 from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
 from app.api.deps import get_current_user, require_commissioner
-from app.services.draft_manager import get_player_rank_from_list, FANTASY_POSITIONS
+from app.services.draft_manager import build_rank_by_id, get_rank_score, FANTASY_POSITIONS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.scoring_engine import calculate_player_score
 from app.services.waiver_service import _priority_order, process_league_waivers
@@ -73,9 +73,13 @@ async def list_free_agents(
     )
     free_agents = players_result.scalars().all()
 
+    # Real, data-driven rank (see draft_manager.build_rank_by_id) --
+    # replaces the old static tier/name-list lookup.
+    rank_by_id = build_rank_by_id(free_agents, scoring_config)
+
     ranked_by_position: dict[str, list[tuple[int, Player]]] = {pos: [] for pos in POSITION_DISPLAY_ORDER}
     for p in free_agents:
-        rank = get_player_rank_from_list(f"{p.first_name} {p.last_name}")
+        rank = get_rank_score(p, rank_by_id)
         ranked_by_position.setdefault(p.position, []).append((rank, p))
 
     def _season_points_fields(p: Player) -> dict:
@@ -98,7 +102,7 @@ async def list_free_agents(
                 "avatar_url": sleeper_avatar_url(p.sleeper_id),
                 "sleeper_id": p.sleeper_id,
                 "injury_status": p.injury_status,
-                "rank": rank if rank < 1000 else None,
+                "rank": rank,
                 "pos_rank": i + 1,
                 **_season_points_fields(p),
             }

@@ -716,6 +716,7 @@ export default function DraftPage() {
             lastPick={lastPick}
             availablePlayers={available}
             myRosterByPos={myRosterByPos}
+            teamRosters={teamRosters}
             filteredPlayers={filteredPlayers}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}

@@ -32,6 +32,17 @@ class Player(Base):
     # chosen between.
     last_season_stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
     last_season_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Sleeper's own per-game projection (raw stat dict, same shape as
+    # week_stats' per-week entries) -- Sleeper only exposes projections at
+    # the single-week granularity, no season-aggregate endpoint exists, so
+    # this is deliberately labeled/used as a PER-GAME projection rather
+    # than a fabricated season total (see nfl_projections_service.py).
+    # projected_week/projected_year record which real week this snapshot
+    # is FOR, same "know which season a stat blob represents" convention
+    # as stats_year/last_season_year above.
+    projected_stats: Mapped[dict | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    projected_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    projected_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

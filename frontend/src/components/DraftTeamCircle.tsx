@@ -29,29 +29,44 @@ export default function DraftTeamCircle({
   name,
   isCurrent,
   isMine,
+  isSelected = false,
+  onClick,
   size = "md",
 }: {
   teamId: string;
   name: string;
   isCurrent: boolean;
   isMine: boolean;
+  // Distinct from isMine/isCurrent -- "whose roster is the mobile draft
+  // room currently showing", not "whose team is this" or "who's on the
+  // clock". Purely a display ring; optional so the desktop draft header's
+  // (non-tappable) use of this same component is unaffected.
+  isSelected?: boolean;
+  onClick?: () => void;
   size?: "sm" | "md" | "lg";
 }) {
   const colors = TEAM_COLORS[hashTeam(teamId) % TEAM_COLORS.length];
   const dims = { sm: "w-9 h-9 text-xs", md: "w-12 h-12 text-sm", lg: "w-14 h-14 text-base" }[size];
+  const Wrapper = onClick ? "button" : "div";
   return (
-    <div className="flex flex-col items-center gap-1 shrink-0" style={{ scrollSnapAlign: "center" }}>
+    <Wrapper
+      className="flex flex-col items-center gap-1 shrink-0"
+      style={{ scrollSnapAlign: "center" }}
+      {...(onClick ? { onClick, type: "button", "aria-pressed": isSelected, "aria-label": `View ${name}'s picks` } : {})}
+    >
       <div className="relative">
         {isCurrent && (
           <span className="absolute -inset-1 rounded-full bg-gradient-to-tr from-red-500 to-orange-400 animate-pulse blur-[2px]" />
         )}
         <div
-          className={`relative ${dims} rounded-full flex items-center justify-center font-bold border-2 ${
+          className={`relative ${dims} rounded-full flex items-center justify-center font-bold border-2 transition-all ${
             isCurrent
               ? "border-orange-400 ring-2 ring-red-500/60 shadow-[0_0_16px_rgba(251,146,60,0.5)]"
-              : isMine
-                ? "border-gold-400/60"
-                : "border-surface-700"
+              : isSelected
+                ? "border-blue-400 ring-2 ring-blue-400/50"
+                : isMine
+                  ? "border-gold-400/60"
+                  : "border-surface-700"
           } ${isMine ? "bg-gold-400/20 text-gold-400" : `${colors.bg} ${colors.text}`}`}
         >
           {isMine ? "★" : initialsFor(name)}
@@ -62,9 +77,9 @@ export default function DraftTeamCircle({
           )}
         </div>
       </div>
-      <span className={`text-[9px] font-medium truncate max-w-[52px] ${isCurrent ? "text-orange-300" : "text-surface-500"}`}>
+      <span className={`text-[9px] font-medium truncate max-w-[52px] ${isCurrent ? "text-orange-300" : isSelected ? "text-blue-300" : "text-surface-500"}`}>
         {isMine ? "You" : name}
       </span>
-    </div>
+    </Wrapper>
   );
 }

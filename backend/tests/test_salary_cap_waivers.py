@@ -52,10 +52,11 @@ async def _make_cap_league(db_session_factory, cap_settings=None, num_teams=2, r
         }
 
 
-async def _make_player(db_session_factory, first_name="Free", last_name="Agent", position="RB"):
+async def _make_player(db_session_factory, first_name="Free", last_name="Agent", position="RB", last_season_stats=None):
     async with db_session_factory() as db:
         player = Player(id=str(uuid.uuid4()), sleeper_id=f"sleeper-{uuid.uuid4().hex[:8]}",
-                         first_name=first_name, last_name=last_name, position=position)
+                         first_name=first_name, last_name=last_name, position=position,
+                         last_season_stats=last_season_stats or {})
         db.add(player)
         await db.commit()
         return player.id, player
@@ -119,8 +120,13 @@ async def test_claim_exceeding_cap_denied_with_reason(client, db_session_factory
     settings = dict(CAP_SETTINGS, cap_total=5.0)  # very tight cap
     setup = await _make_cap_league(db_session_factory, cap_settings=settings)
     league_id, team_id = setup["league_id"], setup["team_ids"][0]
-    # A ranked star player gets close to top_salary * waiver_salary_pct, well over a $5 cap.
-    player_id, _player = await _make_player(db_session_factory, "Christian", "McCaffrey")
+    # A real elite-production player's score clamps near the top of
+    # compute_waiver_salary's scale (WAIVER_SALARY_SCALE_MAX) -> close to
+    # top_salary * waiver_salary_pct, well over a $5 cap.
+    player_id, _player = await _make_player(
+        db_session_factory, "Christian", "McCaffrey", position="RB",
+        last_season_stats={"rush_yd": 2000, "rush_td": 20, "rec": 60, "rec_yd": 500, "rec_td": 4},
+    )
     await _make_claim(db_session_factory, league_id, team_id, player_id)
 
     client.headers["Authorization"] = f"Bearer {setup['token']}"

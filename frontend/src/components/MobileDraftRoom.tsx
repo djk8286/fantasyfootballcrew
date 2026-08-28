@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3 } from "lucide-react";
+import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3, Users, Star } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import TeamCircle from "./DraftTeamCircle";
@@ -44,6 +44,33 @@ interface MobileDraftPick {
   team: { id: string; name: string };
 }
 
+// Richer pick shape for the per-team roster view (avatar/team/bye/injury,
+// not just id/name/position) -- structurally matches draft/[id]/page.tsx's
+// DraftPick (the real draft-state API response shape) and TeamRosters.tsx's
+// own TeamRosterPick, same "define locally, don't import a page-local
+// type" convention this file already uses for MobileDraftPlayer above.
+interface TeamRosterPick {
+  id: string;
+  pick_number: number;
+  player?: {
+    id: string;
+    full_name: string;
+    position: string;
+    team: string;
+    number?: number | null;
+    age?: number | null;
+    bye_week?: number | null;
+    injury_status?: string | null;
+    fantasy_positions?: string[] | null;
+    avatar_url?: string | null;
+    sleeper_id?: string | null;
+    rank_score?: number;
+    pos_rank?: number;
+    headline_stats?: Record<string, number> | null;
+  } | null;
+  team: { id: string; name: string };
+}
+
 interface MobileDraftRoomProps {
   teamOrder: string[];
   teams: Record<string, { name: string }>;
@@ -64,6 +91,11 @@ interface MobileDraftRoomProps {
 
   availablePlayers: MobileDraftPlayer[];
   myRosterByPos: Record<string, MobileDraftPick[]>;
+  // Every team's picks so far, keyed by team id -- backs the default
+  // "your team" / tap-another-team roster view. Already computed once in
+  // draft/[id]/page.tsx from the same get_draft_state response
+  // myRosterByPos/availablePlayers come from -- no new API call.
+  teamRosters: Record<string, TeamRosterPick[]>;
 
   filteredPlayers: MobileDraftPlayer[];
   searchQuery: string;
@@ -107,6 +139,7 @@ function MobileDraftRoom({
   lastPick,
   availablePlayers,
   myRosterByPos,
+  teamRosters,
   filteredPlayers,
   searchQuery,
   onSearchQueryChange,
@@ -131,6 +164,20 @@ function MobileDraftRoom({
   const [showQueuePanel, setShowQueuePanel] = useState(false);
   const currentTeamRef = useRef<HTMLDivElement>(null);
   const queueSheetRef = useFocusTrap<HTMLDivElement>(() => setShowQueuePanel(false), showQueuePanel);
+
+  // Which team's drafted-so-far roster is showing -- defaults to (and
+  // resets to, on claim/unclaim) your own team, per David's ask: "you see
+  // your team and can select other teams to see who they drafted", not
+  // the always-on full player pool this replaced as the default view.
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(myTeamId);
+  useEffect(() => {
+    setSelectedTeamId(myTeamId);
+  }, [myTeamId]);
+
+  // "roster" (default) = the team roster view above; "pool" = the
+  // original always-visible search/filter/full-player-list, now reached
+  // via the tab below instead of being the default.
+  const [mobileView, setMobileView] = useState<"roster" | "pool">("roster");
 
   // Keep the on-the-clock avatar scrolled into view as the draft advances.
   useEffect(() => {
@@ -161,6 +208,19 @@ function MobileDraftRoom({
 
   const availableQueue = queue;
 
+  // Position-grouped picks for whichever team is currently selected --
+  // same grouping shape/order TeamRosters.tsx's desktop "My Team" section
+  // already uses (POSITION_ORDER), so the two stay visually consistent.
+  const selectedTeamPicks = (selectedTeamId && teamRosters[selectedTeamId]) || [];
+  const selectedTeamByPos: Record<string, TeamRosterPick[]> = {};
+  selectedTeamPicks.forEach((p) => {
+    const pos = p.player?.position || "UNKNOWN";
+    if (!selectedTeamByPos[pos]) selectedTeamByPos[pos] = [];
+    selectedTeamByPos[pos].push(p);
+  });
+  const isViewingMyTeam = selectedTeamId !== null && selectedTeamId === myTeamId;
+  const selectedTeamName = selectedTeamId ? teams[selectedTeamId]?.name || "Team" : null;
+
   return (
     <div className="xl:hidden">
       {/* ── Header: status bar + draft train ─────────────────────── */}
@@ -175,6 +235,11 @@ function MobileDraftRoom({
                   name={teams[tid]?.name || "Team"}
                   isCurrent={tid === currentTeamId && !isCompleted}
                   isMine={tid === myTeamId}
+                  isSelected={mobileView === "roster" && tid === selectedTeamId}
+                  onClick={() => {
+                    setSelectedTeamId(tid);
+                    setMobileView("roster");
+                  }}
                 />
               </div>
             ))}
@@ -308,55 +373,131 @@ function MobileDraftRoom({
         </div>
       )}
 
-      {/* ── Search + position pills ───────────────────────────────── */}
+      {/* ── Roster / Players tab ──────────────────────────────────── */}
+      {/* Roster view is the default (see selectedTeamId/mobileView above)
+          -- replaces the always-visible full player pool that used to be
+          the only thing on this screen. Pool/search is still one tap
+          away, just no longer the default. */}
       <div className="px-4 mt-3 sticky top-[52px] z-20 bg-surface-900/95 backdrop-blur-md pb-2 pt-1">
-        <div className="relative mb-2">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500" />
-          <input
-            type="text"
-            placeholder="Search players..."
-            aria-label="Search players by name, team, or position"
-            value={searchQuery}
-            onChange={(e) => onSearchQueryChange(e.target.value)}
-            className="w-full pl-10 pr-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
-          />
-        </div>
-        <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+        <div className="flex gap-1 bg-surface-800 border border-surface-700 rounded-lg p-0.5">
           <button
-            onClick={() => onPositionFilterChange("ALL")}
-            aria-pressed={positionFilter === "ALL"}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
-              positionFilter === "ALL"
-                ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
-                : "bg-surface-800 text-surface-400 border border-surface-700"
+            onClick={() => setMobileView("roster")}
+            aria-pressed={mobileView === "roster"}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
+              mobileView === "roster" ? "bg-surface-700 text-white" : "text-surface-400"
             }`}
           >
-            All ({availableCount})
+            <Users className="w-3.5 h-3.5" />
+            Rosters
           </button>
-          {POSITION_ORDER.map((pos) => {
-            const count = positionCounts[pos] || 0;
-            return (
+          <button
+            onClick={() => setMobileView("pool")}
+            aria-pressed={mobileView === "pool"}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
+              mobileView === "pool" ? "bg-surface-700 text-white" : "text-surface-400"
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            Players
+          </button>
+        </div>
+
+        {mobileView === "pool" && (
+          <>
+            <div className="relative mt-2 mb-2">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500" />
+              <input
+                type="text"
+                placeholder="Search players..."
+                aria-label="Search players by name, team, or position"
+                value={searchQuery}
+                onChange={(e) => onSearchQueryChange(e.target.value)}
+                className="w-full pl-10 pr-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
+              />
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
               <button
-                key={pos}
-                onClick={() => onPositionFilterChange(pos)}
-                disabled={count === 0}
-                aria-pressed={positionFilter === pos}
+                onClick={() => onPositionFilterChange("ALL")}
+                aria-pressed={positionFilter === "ALL"}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
-                  positionFilter === pos
+                  positionFilter === "ALL"
                     ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
-                    : count === 0
-                      ? "bg-surface-800 text-surface-600 border border-surface-700/50 opacity-50"
-                      : "bg-surface-800 text-surface-400 border border-surface-700"
+                    : "bg-surface-800 text-surface-400 border border-surface-700"
                 }`}
               >
-                {pos} ({count})
+                All ({availableCount})
               </button>
-            );
-          })}
-        </div>
+              {POSITION_ORDER.map((pos) => {
+                const count = positionCounts[pos] || 0;
+                return (
+                  <button
+                    key={pos}
+                    onClick={() => onPositionFilterChange(pos)}
+                    disabled={count === 0}
+                    aria-pressed={positionFilter === pos}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
+                      positionFilter === pos
+                        ? "bg-gold-400/20 text-gold-400 border border-gold-400/30"
+                        : count === 0
+                          ? "bg-surface-800 text-surface-600 border border-surface-700/50 opacity-50"
+                          : "bg-surface-800 text-surface-400 border border-surface-700"
+                    }`}
+                  >
+                    {pos} ({count})
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* ── Player list ────────────────────────────────────────────── */}
+      {/* ── Roster view ────────────────────────────────────────────── */}
+      {mobileView === "roster" && (
+        <div className="px-4 pb-28 mt-1">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-xs font-semibold text-surface-300 flex items-center gap-1.5">
+              {isViewingMyTeam && <Star className="w-3.5 h-3.5 text-gold-400" />}
+              {selectedTeamName || "Select a team"}
+            </span>
+            <span className="text-surface-500 text-xs">{selectedTeamPicks.length} players</span>
+          </div>
+          {!selectedTeamId ? (
+            <div className="py-10 text-center text-surface-500 text-sm">
+              Claim a team to see your roster, or tap a team above to view theirs.
+            </div>
+          ) : selectedTeamPicks.length === 0 ? (
+            <div className="py-10 text-center text-surface-500 text-sm">
+              No picks yet. {isViewingMyTeam ? "Your" : `${selectedTeamName}'s`} picks will appear here as the draft goes.
+            </div>
+          ) : (
+            <div className="bg-surface-800/50 border border-surface-700 rounded-2xl overflow-hidden divide-y divide-surface-800">
+              {POSITION_ORDER.filter((pos) => selectedTeamByPos[pos]).map((pos) => (
+                <div key={pos}>
+                  <div className="px-4 py-1.5 bg-surface-900/30 text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
+                    {pos} ({selectedTeamByPos[pos].length})
+                  </div>
+                  {selectedTeamByPos[pos].map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-2 px-4 py-2"
+                      onClick={(e) => p.player && onPlayerHover(p.player as any, e.currentTarget)}
+                    >
+                      <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">{p.pick_number}</span>
+                      {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover as any} />}
+                      <span className="text-sm text-white truncate flex-1">{p.player?.full_name}</span>
+                      <span className="text-[10px] text-surface-500 shrink-0">{p.player?.team}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Player list (pool view) ───────────────────────────────── */}
+      {mobileView === "pool" && (
       <div className="px-4 pb-28">
         {filteredPlayers.length === 0 ? (
           <div className="py-10 text-center text-surface-500 text-sm">
@@ -417,6 +558,7 @@ function MobileDraftRoom({
           </div>
         )}
       </div>
+      )}
 
       {/* ── Sticky bottom action bar ──────────────────────────────── */}
       {!isCompleted && (

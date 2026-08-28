@@ -22,6 +22,31 @@ interface PlayerRead {
   rank?: number;
   avatar_url?: string | null;
   headline_stats?: Record<string, number> | null;
+  last_season_yards?: number | null;
+  last_season_touchdowns?: number | null;
+  projected_points?: number | null;
+}
+
+// Mirrors backend/app/api/v1/players.py's SORT_VALUES exactly.
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "rank", label: "Rank" },
+  { value: "points", label: "Fantasy Points (last season)" },
+  { value: "yards", label: "Yards (last season)" },
+  { value: "touchdowns", label: "Touchdowns (last season)" },
+  { value: "projected", label: "Projected (per game)" },
+];
+
+function sortValueLine(p: PlayerRead, sortBy: string): string | null {
+  switch (sortBy) {
+    case "yards":
+      return p.last_season_yards ? `${Math.round(p.last_season_yards)} yds (last season)` : null;
+    case "touchdowns":
+      return p.last_season_touchdowns ? `${Math.round(p.last_season_touchdowns)} TD (last season)` : null;
+    case "projected":
+      return p.projected_points != null ? `${Math.round(p.projected_points * 10) / 10} proj pts/game` : null;
+    default:
+      return null;
+  }
 }
 
 const STAT_LABELS: Record<string, string> = {
@@ -76,6 +101,7 @@ export default function PlayersPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [positionFilter, setPositionFilter] = useState("ALL");
+  const [sortBy, setSortBy] = useState("");
 
   const [hoveredPlayer, setHoveredPlayer] = useState<HoverPlayer | null>(null);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
@@ -93,7 +119,12 @@ export default function PlayersPage() {
     [],
   );
 
-  const showingProspects = !search.trim() && positionFilter === "ALL";
+  // Curated top-100-prospects default only applies when nothing else is
+  // engaged -- picking a sort explicitly (even "Rank", the same ranking
+  // top-prospects itself uses) switches to the general /players?sort_by=
+  // path instead, same one ranking code path either way (see
+  // api/v1/players.py's top_prospects/list_players).
+  const showingProspects = !search.trim() && positionFilter === "ALL" && !sortBy;
 
   const loadPlayers = useCallback(() => {
     setLoading(true);
@@ -110,13 +141,14 @@ export default function PlayersPage() {
     const params: Record<string, string> = { limit: "100" };
     if (search.trim()) params.search = search.trim();
     if (positionFilter !== "ALL") params.position = positionFilter;
+    if (sortBy) params.sort_by = sortBy;
 
     playersApi
       .list(params)
       .then((data) => setPlayers(Array.isArray(data) ? (data as PlayerRead[]) : []))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load players"))
       .finally(() => setLoading(false));
-  }, [search, positionFilter, showingProspects]);
+  }, [search, positionFilter, sortBy, showingProspects]);
 
   useEffect(() => {
     const handle = setTimeout(loadPlayers, 300);
@@ -150,7 +182,7 @@ export default function PlayersPage() {
               className="w-full pl-10 pr-3 py-2.5 bg-surface-900 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
             />
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => setPositionFilter("ALL")}
@@ -176,6 +208,21 @@ export default function PlayersPage() {
                 {pos}
               </button>
             ))}
+            <label className="ml-auto flex items-center gap-1.5 text-xs text-surface-400">
+              Sort by
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="bg-surface-900 border border-surface-700 rounded-lg text-xs text-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gold-400"
+              >
+                <option value="">Default</option>
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
 
@@ -198,14 +245,17 @@ export default function PlayersPage() {
                 Top 100 Draft Prospects
               </div>
             )}
-            {players.map((p) => {
+            {players.map((p, i) => {
               const hp = toHoverPlayer(p);
+              const valueLine = sortValueLine(p, sortBy);
               return (
                 <div
                   key={p.id}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-surface-700/30 transition-colors"
                 >
-                  {showingProspects && p.rank && <RankBadge rank={p.rank} size="sm" />}
+                  {((showingProspects && p.rank) || sortBy === "rank") && (
+                    <RankBadge rank={showingProspects ? (p.rank as number) : i + 1} size="sm" />
+                  )}
                   <PlayerAvatar player={hp} size="md" onHover={handleHover} />
                   <div
                     className="flex-1 min-w-0"
@@ -222,6 +272,7 @@ export default function PlayersPage() {
                       {p.injury_status && p.injury_status !== "None" && (
                         <span className="text-yellow-400">{p.injury_status}</span>
                       )}
+                      {valueLine && <span className="text-gold-400/80 font-medium">{valueLine}</span>}
                     </div>
                     {p.headline_stats && Object.keys(p.headline_stats).length > 0 && (
                       <p className="text-[11px] text-surface-400 mt-0.5">

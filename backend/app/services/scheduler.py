@@ -46,7 +46,7 @@ from app.services.best_ball_service import get_best_ball_settings, is_window_ope
 from app.services.waiver_service import process_league_waivers
 from app.models.league import League, DraftStatus, LeagueType
 from app.core.config import settings
-from app.services import top_performers_service, team_recap_service, nfl_schedule_service
+from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service
 from app.services.ai_service import AIService
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 
@@ -359,6 +359,30 @@ async def _sync_players_once() -> None:
     print(f"[scheduler] Synced player metadata for {count} players")
 
 
+async def _sync_projections_once() -> None:
+    """Sleeper's own next/current-week projection (Player.projected_stats,
+    see nfl_projections_service.py) -- refreshed alongside player metadata
+    (same PLAYER_SYNC_INTERVAL cadence, called right after
+    _sync_players_once) since a projection is only ever useful for the
+    CURRENT/UPCOMING week, unlike metadata which is always just "the
+    latest snapshot" regardless of timing. Uses Sleeper's live state
+    directly (season_type is one of "pre"/"regular"/"post", exactly what
+    this endpoint's own path segment expects) rather than requiring
+    regular season the way stats sync does -- draft prep/waiver browsing
+    during the preseason is exactly when "projected points for the
+    upcoming season" matters most."""
+    try:
+        state = await fetch_nfl_state()
+        season = int(state["season"])
+        week = int(state["week"])
+        season_type = state.get("season_type") or "regular"
+        async with async_session() as db:
+            count = await nfl_projections_service.sync_week_projections(db, season, week, season_type)
+        print(f"[scheduler] Synced week {week}, {season} ({season_type}) projections for {count} players")
+    except Exception as e:
+        print(f"[scheduler] Projections sync failed: {e}")
+
+
 async def run_scheduler() -> None:
     """Entry point -- launched once as a background task at app startup
     (see main.py). Runs until cancelled at shutdown."""
@@ -377,6 +401,7 @@ async def run_scheduler() -> None:
         last_player_sync = loop.time()
     except Exception as e:
         print(f"[scheduler] Initial player sync failed: {e}")
+    await _sync_projections_once()
 
     while True:
         try:
@@ -452,5 +477,6 @@ async def run_scheduler() -> None:
                 last_player_sync = loop.time()
             except Exception as e:
                 print(f"[scheduler] Player sync iteration failed: {e}")
+            await _sync_projections_once()
 
         await asyncio.sleep(STATS_SYNC_INTERVAL)
