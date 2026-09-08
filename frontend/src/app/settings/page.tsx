@@ -3,11 +3,11 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { usersApi, logout } from "@/lib/api-client";
+import { usersApi, authApi, logout } from "@/lib/api-client";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import Avatar from "@/components/Avatar";
 import AvatarEditor from "@/components/AvatarEditor";
-import { ArrowLeft, Save, Loader2, Check, User as UserIcon, KeyRound, Mail, Calendar, AlertTriangle, X, Trash2 } from "lucide-react";
+import { ArrowLeft, Save, Loader2, Check, User as UserIcon, KeyRound, Mail, Calendar, AlertTriangle, X, Trash2, BadgeCheck } from "lucide-react";
 
 interface Me {
   id: string;
@@ -15,6 +15,7 @@ interface Me {
   username: string;
   avatar_url: string | null;
   provider: string;
+  email_verified: boolean;
   created_at: string;
 }
 
@@ -29,6 +30,10 @@ export default function SettingsPage() {
   const [profileError, setProfileError] = useState("");
 
   const [avatarEditorOpen, setAvatarEditorOpen] = useState(false);
+
+  const [resendingVerification, setResendingVerification] = useState(false);
+  const [verificationResent, setVerificationResent] = useState(false);
+  const [resendError, setResendError] = useState("");
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -73,6 +78,19 @@ export default function SettingsPage() {
     const updated = await usersApi.update({ avatar_url: url }) as Me;
     setMe(updated);
     setAvatarEditorOpen(false);
+  };
+
+  const handleResendVerification = async () => {
+    setResendingVerification(true);
+    setResendError("");
+    try {
+      await authApi.resendVerification();
+      setVerificationResent(true);
+    } catch (err: unknown) {
+      setResendError(err instanceof Error ? err.message.replace(/^API error: \d+ ?\w* ?—? ?/, "") : "Failed to resend");
+    } finally {
+      setResendingVerification(false);
+    }
   };
 
   const handleChangePassword = async () => {
@@ -272,11 +290,36 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="flex items-center gap-2 text-surface-400 text-sm">
+            <div className="flex items-center gap-2 text-surface-400 text-sm flex-wrap">
               <Mail className="w-3.5 h-3.5 shrink-0" />
               <span>{me.email}</span>
               <span className="text-surface-500 text-xs">(can't be changed here)</span>
+              {me.email_verified ? (
+                <span className="inline-flex items-center gap-1 text-green-400 text-xs font-medium">
+                  <BadgeCheck className="w-3.5 h-3.5" /> Verified
+                </span>
+              ) : verificationResent ? (
+                <span className="inline-flex items-center gap-1 text-green-400 text-xs font-medium">
+                  <Check className="w-3.5 h-3.5" /> Verification email sent — check your inbox
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resendingVerification}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-gold-400 hover:text-gold-300 transition-colors disabled:opacity-50"
+                >
+                  {resendingVerification ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Sending...</>
+                  ) : (
+                    "Not verified — resend verification email"
+                  )}
+                </button>
+              )}
             </div>
+            {resendError && (
+              <div className="p-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">{resendError}</div>
+            )}
 
             <div className="flex items-center gap-2 text-surface-500 text-xs">
               <Calendar className="w-3.5 h-3.5 shrink-0" />

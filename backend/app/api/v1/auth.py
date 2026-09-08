@@ -55,6 +55,18 @@ async def register(request: Request, user_data: UserCreate, db: AsyncSession = D
     # nothing blocks on this being clicked; see VerifyEmailRequest/
     # verify_email below. Fire-and-forget: a verification-email hiccup
     # should never fail a registration that already succeeded.
+    await _create_and_send_verification_email(user, db)
+
+    return user
+
+
+async def _create_and_send_verification_email(user: User, db: AsyncSession) -> None:
+    """Shared by register() and POST /auth/resend-verification. Always
+    issues a fresh token rather than trying to reuse/extend an old one --
+    every account that registered before the Resend sending domain was
+    verified (2026-09-08) got a token from its original registration
+    that's long since past VERIFY_TOKEN_LIFETIME, so resend has to start
+    over, not resurrect a dead one."""
     raw_token = secrets.token_urlsafe(32)
     db.add(EmailVerificationToken(
         user_id=user.id,
@@ -64,8 +76,6 @@ async def register(request: Request, user_data: UserCreate, db: AsyncSession = D
     await db.commit()
     verify_link = f"{settings.FRONTEND_URL}/verify-email?token={raw_token}"
     await send_verification_email(user.email, verify_link)
-
-    return user
 
 
 @router.post("/login")
@@ -178,6 +188,25 @@ async def verify_email(request: Request, data: VerifyEmailRequest, db: AsyncSess
     await db.commit()
 
     return {"message": "Email verified."}
+
+
+@router.post("/resend-verification")
+@limiter.limit("3/hour")
+async def resend_verification(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Self-service -- covers every account that registered before the
+    Resend sending domain was verified (2026-09-08) and so never got a
+    working verification email in the first place (same root cause as
+    league invites 403ing: the shared sandbox sender only delivers to
+    the Resend account's own address). Authenticated rather than
+    email-in-body, so there's no account-enumeration surface here."""
+    if current_user.email_verified:
+        return {"message": "Your email is already verified."}
+    await _create_and_send_verification_email(current_user, db)
+    return {"message": "Verification email sent."}
 
 
 @router.get("/me", response_model=UserRead)

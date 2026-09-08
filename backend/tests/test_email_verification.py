@@ -139,3 +139,76 @@ async def test_register_rejects_malformed_email(client):
 async def _is_verified(db_session_factory, user_id: str) -> bool:
     async with db_session_factory() as db:
         return (await db.execute(select(User).where(User.id == user_id))).scalar_one().email_verified
+
+
+# ─── POST /auth/resend-verification ─────────────────────────────────
+# Covers every account that registered before the Resend sending domain
+# was verified (2026-09-08) and so never got a working verification
+# email in the first place -- same root cause as league invites 403ing.
+
+@pytest.mark.asyncio
+async def test_resend_verification_issues_a_fresh_token_and_sends(client, db_session_factory, monkeypatch):
+    captured = {}
+
+    async def spy(to_email, verify_link):
+        captured["to_email"] = to_email
+        captured["verify_link"] = verify_link
+
+    monkeypatch.setattr(auth_module, "send_verification_email", spy)
+
+    async with db_session_factory() as db:
+        user = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"user{uuid.uuid4().hex[:8]}", hashed_password=None, provider="google")
+        db.add(user)
+        await db.commit()
+        user_id, user_email = user.id, user.email
+
+    from app.services.auth_service import create_access_token
+    token = create_access_token({"sub": user_id, "email": user_email, "token_version": 0})
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    r = await client.post("/auth/resend-verification")
+    assert r.status_code == 200
+    assert captured["to_email"] == user_email
+    assert "/verify-email?token=" in captured["verify_link"]
+
+    # The freshly-issued token actually verifies the account -- proves
+    # this isn't reusing/extending some already-dead original token.
+    fresh_raw_token = captured["verify_link"].split("token=")[1]
+    r = await client.post("/auth/verify-email", json={"token": fresh_raw_token})
+    assert r.status_code == 200
+    assert (await _is_verified(db_session_factory, user_id)) is True
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_is_a_noop_if_already_verified(client, db_session_factory, monkeypatch):
+    sent = False
+
+    async def spy(to_email, verify_link):
+        nonlocal sent
+        sent = True
+
+    monkeypatch.setattr(auth_module, "send_verification_email", spy)
+
+    async with db_session_factory() as db:
+        user = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"user{uuid.uuid4().hex[:8]}", hashed_password=None,
+                     provider="google", email_verified=True)
+        db.add(user)
+        await db.commit()
+        user_id, user_email = user.id, user.email
+
+    from app.services.auth_service import create_access_token
+    token = create_access_token({"sub": user_id, "email": user_email, "token_version": 0})
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    r = await client.post("/auth/resend-verification")
+    assert r.status_code == 200
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_requires_auth(client):
+    client.headers.pop("Authorization", None)
+    r = await client.post("/auth/resend-verification")
+    assert r.status_code in (401, 403)

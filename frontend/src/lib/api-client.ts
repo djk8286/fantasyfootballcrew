@@ -126,6 +126,8 @@ export const authApi = {
       method: "POST",
       body: { token },
     }),
+  resendVerification: () =>
+    apiRequest("/api/v1/auth/resend-verification", { method: "POST" }),
 };
 
 // Users

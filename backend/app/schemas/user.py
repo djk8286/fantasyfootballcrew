@@ -51,6 +51,7 @@ class UserRead(BaseModel):
     username: str
     avatar_url: Optional[str] = None
     provider: str
+    email_verified: bool = False
     created_at: datetime
 
     class Config:
