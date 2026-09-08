@@ -4,12 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
-import { TEAM_AVATARS, AVATAR_URL_PREFIX, getAvatarStyle } from "@/lib/team-avatars";
 import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
-import { useFocusTrap } from "@/lib/useFocusTrap";
+import Avatar from "@/components/Avatar";
+import AvatarEditor from "@/components/AvatarEditor";
 import {
   Trophy,
   Users,
@@ -202,6 +202,11 @@ export default function LeagueDetailPage() {
   // Avatar picker state
   const [editingAvatarTeam, setEditingAvatarTeam] = useState<string | null>(null);
 
+  // Team rename state
+  const [editingNameTeam, setEditingNameTeam] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+
   // Commissioner panel state
   const [showComPanel, setShowComPanel] = useState(false);
 
@@ -372,14 +377,30 @@ export default function LeagueDetailPage() {
 
   // ─── Actions ─────────────────────────────────────────────
 
-  const handleSetAvatar = async (teamId: string, avatarId: string) => {
+  const handleSetAvatar = async (url: string) => {
+    if (!editingAvatarTeam) return;
+    // Errors intentionally propagate -- AvatarEditor's own try/catch
+    // shows them inline in the modal instead of this page's error banner.
+    await teamsApi.update(editingAvatarTeam, { avatar_url: url });
+    await refreshTeams();
+    setEditingAvatarTeam(null);
+  };
+
+  const handleRenameTeam = async (teamId: string) => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      setEditingNameTeam(null);
+      return;
+    }
+    setSavingName(true);
     try {
-      const url = `${AVATAR_URL_PREFIX}${avatarId}`;
-      await teamsApi.update(teamId, { avatar_url: url });
+      await teamsApi.update(teamId, { name: trimmed });
       await refreshTeams();
-      setEditingAvatarTeam(null);
+      setEditingNameTeam(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update avatar");
+      setError(err instanceof Error ? err.message : "Failed to rename team");
+    } finally {
+      setSavingName(false);
     }
   };
 
@@ -527,58 +548,6 @@ export default function LeagueDetailPage() {
     }
   };
 
-  // ─── Avatar Picker Modal ────────────────────────────────
-
-  function AvatarPicker({ teamId, currentUrl, onClose }: { teamId: string; currentUrl: string | null; onClose: () => void }) {
-    const currentId = currentUrl?.replace(AVATAR_URL_PREFIX, "") || "";
-    const dialogRef = useFocusTrap<HTMLDivElement>(onClose);
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <div
-          ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="avatar-picker-title"
-          tabIndex={-1}
-          className="bg-surface-800 border border-surface-700 rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl"
-        >
-          <div className="flex items-center justify-between mb-5">
-            <h3 id="avatar-picker-title" className="text-lg font-semibold text-white">Choose Team Avatar</h3>
-            <button onClick={onClose} className="text-surface-400 hover:text-white transition-colors" aria-label="Close">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="grid grid-cols-5 gap-3">
-            {TEAM_AVATARS.map((av) => (
-              <button
-                key={av.id}
-                onClick={() => handleSetAvatar(teamId, av.id)}
-                className={`w-full aspect-square rounded-xl flex items-center justify-center text-2xl transition-all hover:scale-110 hover:shadow-lg ${
-                  currentId === av.id
-                    ? "ring-2 ring-gold-400 ring-offset-2 ring-offset-surface-800 scale-110"
-                    : "border border-surface-600 hover:border-gold-400/50"
-                }`}
-                style={{ backgroundColor: av.bg }}
-                title={av.label}
-              >
-                {av.icon}
-              </button>
-            ))}
-          </div>
-          {currentUrl && (
-            <button
-              onClick={() => handleSetAvatar(teamId, "")}
-              className="mt-4 w-full text-sm text-surface-400 hover:text-red-400 transition-colors"
-            >
-              Remove avatar
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // ─── Helper: team owner display ─────────────────────────
 
   function getOwnerDisplay(team: Team): { label: string; isHuman: boolean; isMe: boolean; isCommish: boolean } {
@@ -657,9 +626,10 @@ export default function LeagueDetailPage() {
     <div className="min-h-screen bg-surface-900">
       {/* Avatar Picker Overlay */}
       {editingAvatarTeam && (
-        <AvatarPicker
-          teamId={editingAvatarTeam}
+        <AvatarEditor
+          title="Choose Team Avatar"
           currentUrl={teams.find((t) => t.id === editingAvatarTeam)?.avatar_url || null}
+          onSave={handleSetAvatar}
           onClose={() => setEditingAvatarTeam(null)}
         />
       )}
@@ -813,19 +783,16 @@ export default function LeagueDetailPage() {
                   )}
                   {teams.length > 0 && (
                     <div className="flex items-center gap-1.5 mt-4">
-                      {teams.slice(0, 8).map((team) => {
-                        const avatar = getAvatarStyle(team.avatar_url);
-                        return (
-                          <div
-                            key={team.id}
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-sm border-2 border-surface-900 shrink-0 -ml-2 first:ml-0"
-                            style={{ backgroundColor: avatar.bg }}
-                            title={team.name}
-                          >
-                            {avatar.icon}
-                          </div>
-                        );
-                      })}
+                      {teams.slice(0, 8).map((team) => (
+                        <Avatar
+                          key={team.id}
+                          url={team.avatar_url}
+                          size={32}
+                          rounded="rounded-full"
+                          className="border-2 border-surface-900 -ml-2 first:ml-0"
+                          title={team.name}
+                        />
+                      ))}
                       {teams.length > 8 && (
                         <span className="text-surface-500 text-xs ml-2">
                           +{teams.length - 8} more
@@ -1107,7 +1074,6 @@ export default function LeagueDetailPage() {
                 {sortedTeams.map((team, idx) => {
                   const rank = idx + 1;
                   const owner = getOwnerDisplay(team);
-                  const avatar = getAvatarStyle(team.avatar_url);
                   const isMyTeam = myTeamIds.includes(team.id);
 
                   return (
@@ -1132,8 +1098,7 @@ export default function LeagueDetailPage() {
                         <div className="flex items-center gap-3">
                           {/* Avatar */}
                           <div
-                            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0 border border-surface-700/50 cursor-pointer hover:opacity-80 transition-opacity"
-                            style={{ backgroundColor: avatar.bg }}
+                            className="relative cursor-pointer hover:opacity-80 transition-opacity"
                             onClick={() => {
                               if (isMyTeam || isLeagueManager) setEditingAvatarTeam(team.id);
                             }}
@@ -1150,10 +1115,10 @@ export default function LeagueDetailPage() {
                                 setEditingAvatarTeam(team.id);
                               }
                             }}
-                            title={isMyTeam || isLeagueManager ? "Click to change avatar" : team.avatar_url ? team.avatar_url.replace(AVATAR_URL_PREFIX, "") : ""}
+                            title={isMyTeam || isLeagueManager ? "Click to change avatar" : ""}
                             aria-label={isMyTeam || isLeagueManager ? `Change avatar for ${team.name}` : undefined}
                           >
-                            {avatar.icon}
+                            <Avatar url={team.avatar_url} size={36} className="border border-surface-700/50" />
                             {(isMyTeam || isLeagueManager) && (
                               <span className="absolute -top-1 -right-1 w-4 h-4 bg-surface-800 border border-surface-600 rounded-full flex items-center justify-center">
                                 <Pencil className="w-2.5 h-2.5 text-surface-400" />
@@ -1161,7 +1126,51 @@ export default function LeagueDetailPage() {
                             )}
                           </div>
                           <div>
-                            <span className="font-medium text-white">{team.name}</span>
+                            {editingNameTeam === team.id ? (
+                              <span className="inline-flex items-center gap-1.5 align-middle">
+                                <input
+                                  autoFocus
+                                  value={nameDraft}
+                                  onChange={(e) => setNameDraft(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleRenameTeam(team.id);
+                                    if (e.key === "Escape") setEditingNameTeam(null);
+                                  }}
+                                  disabled={savingName}
+                                  className="px-2 py-1 bg-surface-900 border border-gold-400/50 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-1 focus:ring-gold-400 w-40"
+                                />
+                                <button
+                                  onClick={() => handleRenameTeam(team.id)}
+                                  disabled={savingName}
+                                  aria-label="Save team name"
+                                  className="text-green-400 hover:text-green-300 disabled:opacity-50"
+                                >
+                                  <Check className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setEditingNameTeam(null)}
+                                  disabled={savingName}
+                                  aria-label="Cancel rename"
+                                  className="text-surface-500 hover:text-white disabled:opacity-50"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </span>
+                            ) : (
+                              <span className="font-medium text-white">
+                                {team.name}
+                                {(isMyTeam || isLeagueManager) && (
+                                  <button
+                                    onClick={() => { setEditingNameTeam(team.id); setNameDraft(team.name); }}
+                                    aria-label={`Rename ${team.name}`}
+                                    title="Rename team"
+                                    className="ml-1.5 align-middle text-surface-500 hover:text-gold-400 transition-colors"
+                                  >
+                                    <Pencil className="w-3 h-3 inline" />
+                                  </button>
+                                )}
+                              </span>
+                            )}
                             {league.league_type === "conference" && (
                               <span className="ml-2 inline-block align-middle">
                                 <ConferenceBadge
@@ -1318,7 +1327,6 @@ export default function LeagueDetailPage() {
             <h3 className="text-sm font-semibold text-surface-300 mb-3">Team Rosters</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sortedTeams.map((team) => {
-                const avatar = getAvatarStyle(team.avatar_url);
                 const isMyTeam = myTeamIds.includes(team.id);
                 const isCpu = team.is_cpu || team.owner_id === "cpu";
                 const rosterIds = team.roster || [];
@@ -1335,7 +1343,7 @@ export default function LeagueDetailPage() {
                     }`}
                   >
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm shrink-0">{avatar.icon}</span>
+                      <Avatar url={team.avatar_url} size={20} rounded="rounded-md" />
                       <span className="font-medium text-sm text-white truncate flex-1">{team.name}</span>
                       {isCpu && <Bot className="w-3 h-3 text-surface-500 shrink-0" />}
                       {isMyTeam && <Crown className="w-3 h-3 text-gold-500 shrink-0" />}

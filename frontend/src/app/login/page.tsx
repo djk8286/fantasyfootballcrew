@@ -18,8 +18,11 @@ function LoginForm() {
   // other than /dashboard after signing in. Falls back to /dashboard,
   // same as before this existed.
   const next = searchParams.get("next") || "/dashboard";
+  // Set by the invite-accept landing page so a visitor doesn't have to
+  // retype the address their invite was sent to.
+  const prefillEmail = searchParams.get("email") || "";
 
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(prefillEmail);
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");

@@ -308,10 +308,17 @@ export default function DraftPage() {
     fetchState();
   }, [fetchState]);
 
-  // Auto-refresh every 5 seconds while in progress
+  // Auto-refresh every 2 seconds while in progress. Was 5s -- your own
+  // pick already refetches immediately (see handleMakePick), so this
+  // interval only governs how long it takes to SEE someone else's pick;
+  // 2s trims that wait without meaningfully adding load (measured
+  // production /state latency is 150-400ms, and Railway's own metrics
+  // show this service at <1% CPU / ~1% memory even during active use --
+  // a small beta league's worth of clients polling twice as often is
+  // nowhere near either ceiling).
   useEffect(() => {
     if (!draft || draft.draft.status !== "in_progress") return;
-    const interval = setInterval(fetchState, 5000);
+    const interval = setInterval(fetchState, 2000);
     return () => clearInterval(interval);
   }, [draft?.draft.status, fetchState]);
 

@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
+from app.core.avatars import validate_avatar_url
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -45,6 +46,7 @@ async def create_team(
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
 
+    validate_avatar_url(team_data.avatar_url)
     team = Team(
         name=team_data.name,
         owner_id=current_user.id,
@@ -87,6 +89,7 @@ async def update_team(
     if update_data.name is not None:
         team.name = update_data.name
     if update_data.avatar_url is not None:
+        validate_avatar_url(update_data.avatar_url)
         team.avatar_url = update_data.avatar_url
     if update_data.co_owner_id is not None:
         team.co_owner_id = update_data.co_owner_id
@@ -234,6 +237,10 @@ async def claim_team(
 
     team.owner_id = current_user.id
     team.is_cpu = False
+    # Personalize the placeholder name ("CPU Team 3", etc.) the moment a
+    # real person takes it over -- rename UI (PATCH /teams/{id}) lets them
+    # change it again later if they want something else.
+    team.name = f"{current_user.username}'s Team"
 
     # Dual-Squad (Phase 7): claiming one team of a linked pair also
     # auto-claims its still-CPU partner as the SAME owner, atomically --

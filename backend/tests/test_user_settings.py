@@ -57,6 +57,21 @@ async def test_update_username(client, db_session_factory):
 
 
 @pytest.mark.asyncio
+async def test_update_avatar_url(client, db_session_factory):
+    user, token = await _make_user(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    r = await client.put("/users/me", json={"avatar_url": "ffc-avatar:lion"})
+    assert r.status_code == 200
+    assert r.json()["avatar_url"] == "ffc-avatar:lion"
+    # Username untouched by an avatar-only update.
+    assert r.json()["username"] == user.username
+
+    r = await client.get("/users/me")
+    assert r.json()["avatar_url"] == "ffc-avatar:lion"
+
+
+@pytest.mark.asyncio
 async def test_cannot_take_an_already_used_username(client, db_session_factory):
     existing_user, _token1 = await _make_user(db_session_factory)
     _other_user, token2 = await _make_user(db_session_factory)

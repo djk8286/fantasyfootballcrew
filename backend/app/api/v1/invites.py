@@ -155,6 +155,7 @@ async def get_invite_by_token(token: str, db: AsyncSession = Depends(get_db)):
         league_name=league.name,
         league_description=league.description,
         inviter_username=inviter_username,
+        invited_email=invite.invited_email,
         personal_message=invite.personal_message,
         usable=_display_status(invite) == "pending",
     )

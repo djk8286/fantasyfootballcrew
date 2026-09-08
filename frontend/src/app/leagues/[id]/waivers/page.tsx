@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign } from "lucide-react";
+import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign, Flame } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
@@ -61,6 +61,7 @@ interface FreeAgent {
   pos_rank: number;
   season_points: number | null;
   season_points_year: number | null;
+  trending_add_count: number | null;
 }
 
 // Salary-Cap + Contract Leagues (Phase 5) -- mirrors
@@ -104,6 +105,7 @@ export default function WaiversPage() {
   const [freeAgents, setFreeAgents] = useState<Record<string, FreeAgent[]>>({});
   const [faLoading, setFaLoading] = useState(true);
   const [faPosition, setFaPosition] = useState("QB");
+  const [trendingOnly, setTrendingOnly] = useState(false);
 
   // Salary-Cap + Contract Leagues (Phase 5).
   const [capEnabled, setCapEnabled] = useState(false);
@@ -475,15 +477,32 @@ export default function WaiversPage() {
                 {pos}
               </button>
             ))}
+            <span className="w-px h-5 bg-surface-700 shrink-0 mx-0.5" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => setTrendingOnly((v) => !v)}
+              title="Players being added across Sleeper's platform in the last 24h"
+              className={`shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                trendingOnly
+                  ? "bg-orange-500/20 text-orange-400 border border-orange-500/40"
+                  : "bg-surface-900 border border-surface-700 text-surface-400 hover:text-white"
+              }`}
+            >
+              <Flame className="w-3 h-3" /> Trending
+            </button>
           </div>
 
           {faLoading ? (
             <p className="text-surface-500 text-sm">Loading free agents…</p>
-          ) : (freeAgents[faPosition] || []).length === 0 ? (
-            <p className="text-surface-500 text-sm">No available {faPosition}s right now.</p>
+          ) : (freeAgents[faPosition] || []).filter((p) => !trendingOnly || !!p.trending_add_count).length === 0 ? (
+            <p className="text-surface-500 text-sm">
+              {trendingOnly ? `No trending ${faPosition}s among available free agents right now.` : `No available ${faPosition}s right now.`}
+            </p>
           ) : (
             <div className="space-y-1">
-              {(freeAgents[faPosition] || []).map((p) => (
+              {(freeAgents[faPosition] || [])
+                .filter((p) => !trendingOnly || !!p.trending_add_count)
+                .map((p) => (
                 <div
                   key={p.id}
                   className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-surface-900/60 transition-colors"
@@ -505,6 +524,14 @@ export default function WaiversPage() {
                   {p.season_points != null && (
                     <span className="text-[10px] text-gold-400/80 font-semibold shrink-0 w-10 text-right">
                       {Math.round(p.season_points * 10) / 10}
+                    </span>
+                  )}
+                  {!!p.trending_add_count && (
+                    <span
+                      title={`Added in ${p.trending_add_count.toLocaleString()} Sleeper leagues in the last 24h`}
+                      className="inline-flex items-center gap-0.5 text-[10px] text-orange-400 font-semibold shrink-0"
+                    >
+                      <Flame className="w-3 h-3" /> {p.trending_add_count.toLocaleString()}
                     </span>
                   )}
                   <span className="text-[10px] text-surface-500 shrink-0">{p.team || "FA"}</span>

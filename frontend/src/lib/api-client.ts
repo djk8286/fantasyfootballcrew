@@ -131,8 +131,8 @@ export const authApi = {
 // Users
 export const usersApi = {
   me: () => apiRequest("/api/v1/users/me"),
-  update: (username: string) =>
-    apiRequest("/api/v1/users/me", { method: "PUT", body: { username } }),
+  update: (data: { username?: string; avatar_url?: string }) =>
+    apiRequest("/api/v1/users/me", { method: "PUT", body: data }),
   changePassword: (currentPassword: string, newPassword: string) =>
     apiRequest("/api/v1/users/me/change-password", {
       method: "POST",
@@ -407,6 +407,14 @@ export const dashboardApi = {
   getNflScores: () => apiRequest("/api/v1/dashboard/nfl-scores"),
   generateNflScores: (week: number, year: number, seasonType = 2) =>
     apiRequest(`/api/v1/dashboard/nfl-scores/generate?week=${week}&year=${year}&season_type=${seasonType}`, { method: "POST" }),
+};
+
+// Read-only dev/management dashboard -- 403s server-side for anyone
+// whose account isn't User.is_admin. See app/api/v1/admin.py.
+export const adminApi = {
+  getStats: () => apiRequest("/api/v1/admin/stats"),
+  getUsers: () => apiRequest("/api/v1/admin/users"),
+  getLeagues: () => apiRequest("/api/v1/admin/leagues"),
 };
 
 export default apiRequest;

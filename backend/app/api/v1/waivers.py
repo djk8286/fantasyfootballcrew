@@ -13,7 +13,7 @@ from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
 from app.api.deps import get_current_user, require_commissioner
 from app.services.draft_manager import build_rank_by_id, get_rank_score, FANTASY_POSITIONS
-from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
+from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats, fetch_trending_add_counts
 from app.services.scoring_engine import calculate_player_score
 from app.services.waiver_service import _priority_order, process_league_waivers
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
@@ -77,6 +77,12 @@ async def list_free_agents(
     # replaces the old static tier/name-list lookup.
     rank_by_id = build_rank_by_id(free_agents, scoring_config)
 
+    # Platform-wide "hot pickup" signal -- how many Sleeper leagues added
+    # this player in the last 24h, keyed by sleeper_id (cached, see
+    # fetch_trending_add_counts). Purely additive to each entry below;
+    # never blocks or errors this endpoint if Sleeper's unreachable.
+    trending_counts = await fetch_trending_add_counts()
+
     ranked_by_position: dict[str, list[tuple[int, Player]]] = {pos: [] for pos in POSITION_DISPLAY_ORDER}
     for p in free_agents:
         rank = get_rank_score(p, rank_by_id)
@@ -104,6 +110,7 @@ async def list_free_agents(
                 "injury_status": p.injury_status,
                 "rank": rank,
                 "pos_rank": i + 1,
+                "trending_add_count": trending_counts.get(p.sleeper_id) if p.sleeper_id else None,
                 **_season_points_fields(p),
             }
             for i, (rank, p) in enumerate(entries[:limit_per_position])

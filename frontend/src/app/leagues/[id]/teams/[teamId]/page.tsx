@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { teamsApi, leaguesApi, playersApi, standingsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
-import { getAvatarStyle } from "@/lib/team-avatars";
+import Avatar from "@/components/Avatar";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
@@ -236,7 +236,6 @@ export default function TeamPage() {
     );
   }
 
-  const avatar = getAvatarStyle(team.avatar_url);
   const roster = (team.roster || []).map((pid) => playersById[pid]).filter(Boolean) as RosterPlayer[];
   const salaryByPlayerId = new Map((cap?.contracts || []).map((c) => [c.player_id, c.salary]));
   const rosterByPos: Record<string, RosterPlayer[]> = {};
@@ -303,12 +302,7 @@ export default function TeamPage() {
 
         {/* Team header */}
         <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 flex items-center gap-4 flex-wrap gap-y-4">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl shrink-0 border border-surface-700/50"
-            style={{ backgroundColor: avatar.bg }}
-          >
-            {avatar.icon}
-          </div>
+          <Avatar url={team.avatar_url} size={64} className="border border-surface-700/50" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-2xl font-bold text-white truncate">{team.name}</h2>

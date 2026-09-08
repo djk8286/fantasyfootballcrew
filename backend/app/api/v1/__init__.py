@@ -17,6 +17,7 @@ from app.api.v1.notifications import router as notifications_router
 from app.api.v1.playoffs import router as playoffs_router
 from app.api.v1.invites import router as invites_router
 from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.admin import router as admin_router
 
 __all__ = [
     "auth_router", "users_router", "leagues_router",
@@ -25,4 +26,5 @@ __all__ = [
     "commissioner_router", "trades_router", "waivers_router",
     "coaches_router", "lineups_router", "notifications_router",
     "playoffs_router", "invites_router", "dashboard_router",
+    "admin_router",
 ]

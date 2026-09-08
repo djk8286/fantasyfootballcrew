@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { usersApi, logout } from "@/lib/api-client";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import Avatar from "@/components/Avatar";
+import AvatarEditor from "@/components/AvatarEditor";
 import { ArrowLeft, Save, Loader2, Check, User as UserIcon, KeyRound, Mail, Calendar, AlertTriangle, X, Trash2 } from "lucide-react";
 
 interface Me {
@@ -25,6 +27,8 @@ export default function SettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
   const [profileError, setProfileError] = useState("");
+
+  const [avatarEditorOpen, setAvatarEditorOpen] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -51,7 +55,7 @@ export default function SettingsPage() {
     setSavingProfile(true);
     setProfileError("");
     try {
-      const updated = await usersApi.update(username.trim()) as Me;
+      const updated = await usersApi.update({ username: username.trim() }) as Me;
       setMe(updated);
       setUsername(updated.username);
       setProfileSaved(true);
@@ -61,6 +65,14 @@ export default function SettingsPage() {
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  const handleSetAvatar = async (url: string) => {
+    // Thrown errors surface inline inside AvatarEditor itself -- let them
+    // propagate rather than catching here.
+    const updated = await usersApi.update({ avatar_url: url }) as Me;
+    setMe(updated);
+    setAvatarEditorOpen(false);
   };
 
   const handleChangePassword = async () => {
@@ -237,6 +249,19 @@ export default function SettingsPage() {
           </div>
           <div className="p-5 space-y-4">
             <div>
+              <span className="text-xs text-surface-400 font-medium">Avatar</span>
+              <div className="mt-1.5 flex items-center gap-3">
+                <Avatar url={me.avatar_url} size={56} />
+                <button
+                  onClick={() => setAvatarEditorOpen(true)}
+                  className="px-3.5 py-2 rounded-lg text-xs font-bold text-surface-200 bg-surface-900 border border-surface-600 hover:border-gold-400/50 transition-colors"
+                >
+                  Change Avatar
+                </button>
+              </div>
+            </div>
+
+            <div>
               <label htmlFor="username" className="text-xs text-surface-400 font-medium">Username</label>
               <input
                 id="username"
@@ -384,6 +409,15 @@ export default function SettingsPage() {
 
       {showDeleteModal && (
         <DeleteAccountModal requiresPassword={me.provider === "email"} onClose={() => setShowDeleteModal(false)} />
+      )}
+
+      {avatarEditorOpen && (
+        <AvatarEditor
+          title="Choose Your Avatar"
+          currentUrl={me.avatar_url}
+          onSave={handleSetAvatar}
+          onClose={() => setAvatarEditorOpen(false)}
+        />
       )}
     </div>
   );

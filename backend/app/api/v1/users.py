@@ -15,6 +15,7 @@ from app.models.commissioner_digest import CommissionerDigest
 from app.schemas.user import UserRead, UserPublic, UserUpdate, ChangePasswordRequest, DeleteAccountRequest
 from app.services.auth_service import hash_password, verify_password
 from app.api.deps import get_current_user
+from app.core.avatars import validate_avatar_url
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -30,15 +31,21 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Currently just username -- email is left alone (changing it would
-    need its own re-verification flow, same reason register/login don't
-    let it double as a login-alias-only field) and avatar is a future
-    addition once there's a real picker for user (not team) avatars."""
+    """Username and avatar. Email is left alone (changing it would need
+    its own re-verification flow, same reason register/login don't let
+    it double as a login-alias-only field). avatar_url uses the same
+    "ffc-avatar:<id>" scheme as Team.avatar_url (see frontend's
+    TEAM_AVATARS) -- not validated against that list here, same as team
+    avatars aren't either, so a future avatar set doesn't need a backend
+    change to go with it."""
     if data.username is not None and data.username != current_user.username:
         result = await db.execute(select(User).where(User.username == data.username))
         if result.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Username already taken")
         current_user.username = data.username
+    if data.avatar_url is not None:
+        validate_avatar_url(data.avatar_url)
+        current_user.avatar_url = data.avatar_url
     await db.commit()
     await db.refresh(current_user)
     return current_user

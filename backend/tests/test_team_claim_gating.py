@@ -86,6 +86,21 @@ async def test_claim_team_allowed_on_open_league(client, db_session_factory):
 
 
 @pytest.mark.asyncio
+async def test_claim_team_renames_it_to_the_new_owner(client, db_session_factory):
+    """Claiming a CPU placeholder ("CPU Team") personalizes the name
+    immediately -- the whole point of a real person taking it over."""
+    owner, _owner_token = await _make_user(db_session_factory)
+    stranger, stranger_token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN)
+    team_id = await _make_cpu_team(db_session_factory, league_id)
+
+    client.headers["Authorization"] = f"Bearer {stranger_token}"
+    r = await client.post(f"/teams/{team_id}/claim")
+    assert r.status_code == 200
+    assert r.json()["name"] == f"{stranger.username}'s Team"
+
+
+@pytest.mark.asyncio
 async def test_claim_team_blocked_on_invite_only_without_access(client, db_session_factory):
     owner, _owner_token = await _make_user(db_session_factory)
     stranger, stranger_token = await _make_user(db_session_factory)

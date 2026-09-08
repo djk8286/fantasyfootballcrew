@@ -9,8 +9,10 @@ Endpoints used:
 - https://api.sleeper.app/v1/players/{player_id} - Individual player
 - https://api.sleeper.app/v1/stats/nfl/{year} - Season stats
 - https://api.sleeper.app/v1/stats/nfl/{year}/{week} - Weekly stats
+- https://api.sleeper.app/v1/players/nfl/trending/add - Most-added players platform-wide
 """
 
+import time
 import httpx
 from datetime import date
 from typing import Dict, Any, Optional, Tuple
@@ -235,6 +237,47 @@ def sleeper_avatar_url(sleeper_id: Optional[str]) -> Optional[str]:
     if not sleeper_id:
         return None
     return f"https://sleepercdn.com/content/nfl/players/{sleeper_id}.jpg"
+
+
+# In-process cache for /players/nfl/trending/add -- this is platform-wide
+# add-count data (how many of Sleeper's own leagues added a player in the
+# lookback window), not scoped to us at all, so it's identical for every
+# caller and every one of our leagues. A live call per free-agents page
+# load would hit Sleeper on every waiver-page view across every league;
+# this data realistically doesn't shift meaningfully minute to minute, so
+# a short TTL cache is a good citizen of Sleeper's free, no-auth API
+# rather than hammering it. Module-level (not per-request/per-league) is
+# deliberate -- there's exactly one "trending across the NFL" answer.
+_trending_add_cache: dict[str, tuple[float, Dict[str, int]]] = {}
+_TRENDING_CACHE_TTL_SECONDS = 20 * 60
+
+
+async def fetch_trending_add_counts(lookback_hours: int = 24, limit: int = 50) -> Dict[str, int]:
+    """{sleeper_id: add_count} for the most-added players across Sleeper's
+    whole platform in the last `lookback_hours` -- a real, live "hot
+    waiver pickup" signal, not anything we compute ourselves. Falls back
+    to an empty dict (never raises) on any failure so a Sleeper hiccup
+    just means no trending badges show up, not a broken free-agents page."""
+    cache_key = f"{lookback_hours}:{limit}"
+    cached = _trending_add_cache.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) < _TRENDING_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"{SLEEPER_API}/players/nfl/trending/add",
+                params={"lookback_hours": lookback_hours, "limit": limit},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception:
+        # Stale cache beats nothing at all if Sleeper is briefly down.
+        return cached[1] if cached else {}
+
+    counts = {entry["player_id"]: entry["count"] for entry in data if entry.get("player_id")}
+    _trending_add_cache[cache_key] = (time.monotonic(), counts)
+    return counts
 
 
 # Compact, position-appropriate stat keys to surface as a "headline" summary

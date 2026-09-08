@@ -57,6 +57,16 @@ async def get_current_user_optional(
     return user
 
 
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Gate for app/api/v1/admin.py -- the read-only dev/management
+    dashboard. Deliberately its own flag rather than "is the site owner"
+    check on a hardcoded email, so more than one person (other employees/
+    collaborators) can be granted access later without a code change."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user
+
+
 def require_commissioner(league: League, current_user: User) -> None:
     """Raise 403 unless current_user is the league's commissioner or a co-commissioner."""
     allowed_ids = {league.commissioner_id, *(league.co_commissioner_ids or [])}

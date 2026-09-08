@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, ShieldCheck, XCircle, Clock } from "lucide-react";
-import { invitesApi, isLoggedIn } from "@/lib/api-client";
+import { invitesApi, usersApi, isLoggedIn, logout } from "@/lib/api-client";
 
 interface InviteLanding {
   league_id: string;
   league_name: string;
   league_description: string | null;
   inviter_username: string;
+  invited_email: string;
   personal_message: string | null;
   usable: boolean;
 }
@@ -26,6 +27,18 @@ export default function InviteLandingPage() {
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState("");
   const [accepted, setAccepted] = useState(false);
+
+  // Whoever is logged in when "Accept" is clicked gets the invite --
+  // token possession, not email matching (see accept_invite's backend
+  // docstring). That's normally fine, but it means a commissioner who's
+  // already logged in and opens an invite meant for someone else's email
+  // (testing the link, or it landing in an already-open browser) would
+  // silently claim it under their own account instead of the invited
+  // person's. Fetch the logged-in account's email so we can warn before
+  // that happens rather than after.
+  const [meChecked, setMeChecked] = useState(false);
+  const [myEmail, setMyEmail] = useState<string | null>(null);
+  const [myUsername, setMyUsername] = useState<string | null>(null);
 
   const loadInvite = useCallback(async () => {
     setLoading(true);
@@ -46,6 +59,33 @@ export default function InviteLandingPage() {
     loadInvite();
   }, [loadInvite]);
 
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      setMeChecked(true);
+      return;
+    }
+    usersApi
+      .me()
+      .then((u) => {
+        const user = u as { email?: string; username?: string };
+        setMyEmail(user.email ?? null);
+        setMyUsername(user.username ?? null);
+      })
+      // If this fails (expired token, network hiccup) fall back to the
+      // old behavior -- show the plain Accept button rather than block
+      // on a check we couldn't complete.
+      .catch(() => {})
+      .finally(() => setMeChecked(true));
+  }, []);
+
+  const nextParam = `/invites/${token}`;
+
+  const handleSwitchAccounts = () => {
+    logout();
+    const email = invite ? `&email=${encodeURIComponent(invite.invited_email)}` : "";
+    router.push(`/register?next=${encodeURIComponent(nextParam)}${email}`);
+  };
+
   const handleAccept = async () => {
     setAccepting(true);
     setAcceptError("");
@@ -60,7 +100,11 @@ export default function InviteLandingPage() {
     }
   };
 
-  const nextParam = `/invites/${token}`;
+  const emailMismatch = !!(
+    myEmail &&
+    invite &&
+    myEmail.trim().toLowerCase() !== invite.invited_email.trim().toLowerCase()
+  );
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4">
@@ -118,6 +162,38 @@ export default function InviteLandingPage() {
                     Browse other leagues
                   </Link>
                 </div>
+              ) : isLoggedIn() && !meChecked ? (
+                <div className="flex items-center justify-center gap-3 py-4">
+                  <div className="w-5 h-5 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-surface-400 text-sm">Checking your account...</span>
+                </div>
+              ) : isLoggedIn() && emailMismatch ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm" role="alert">
+                    This invite was sent to <span className="font-medium">{invite.invited_email}</span>, but
+                    you&apos;re signed in as{" "}
+                    <span className="font-medium">{myUsername ?? "a different account"}</span>. Accepting now
+                    would join this league under that account instead.
+                  </div>
+                  {acceptError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm" role="alert">
+                      {acceptError}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleSwitchAccounts}
+                    className="w-full bg-gold-400 hover:bg-gold-300 text-surface-900 font-bold py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-gold-400/25"
+                  >
+                    Log out &amp; use {invite.invited_email}
+                  </button>
+                  <button
+                    onClick={handleAccept}
+                    disabled={accepting}
+                    className="w-full bg-surface-700 hover:bg-surface-600 text-white font-bold py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {accepting ? "Joining..." : `Accept as ${myUsername ?? "this account"} anyway`}
+                  </button>
+                </div>
               ) : isLoggedIn() ? (
                 <>
                   {acceptError && (
@@ -139,13 +215,13 @@ export default function InviteLandingPage() {
                     Sign in or create an account to accept this invite.
                   </p>
                   <Link
-                    href={`/login?next=${encodeURIComponent(nextParam)}`}
+                    href={`/login?next=${encodeURIComponent(nextParam)}&email=${encodeURIComponent(invite.invited_email)}`}
                     className="block w-full text-center bg-gold-400 hover:bg-gold-300 text-surface-900 font-bold py-2.5 rounded-lg transition-all"
                   >
                     Sign In
                   </Link>
                   <Link
-                    href={`/register?next=${encodeURIComponent(nextParam)}`}
+                    href={`/register?next=${encodeURIComponent(nextParam)}&email=${encodeURIComponent(invite.invited_email)}`}
                     className="block w-full text-center bg-surface-700 hover:bg-surface-600 text-white font-bold py-2.5 rounded-lg transition-all"
                   >
                     Create Account

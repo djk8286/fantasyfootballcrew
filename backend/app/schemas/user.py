@@ -30,6 +30,7 @@ class VerifyEmailRequest(BaseModel):
 
 class UserUpdate(BaseModel):
     username: Optional[str] = Field(default=None, min_length=3, max_length=32)
+    avatar_url: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):

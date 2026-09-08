@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi, teamsApi } from "@/lib/api-client";
-import { getAvatarStyle } from "@/lib/team-avatars";
+import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
 import {
@@ -378,7 +378,6 @@ export default function StandingsPage() {
                   const rank = idx + 1;
                   const myTeam = isMyTeam(team);
                   const ownerLabel = getOwnerLabel(team);
-                  const avatar = getAvatarStyle(team.avatar_url);
 
                   return (
                     <tr
@@ -396,12 +395,7 @@ export default function StandingsPage() {
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <div
-                            className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0 border border-white/10"
-                            style={{ backgroundColor: avatar.bg }}
-                          >
-                            {avatar.icon}
-                          </div>
+                          <Avatar url={team.avatar_url} size={36} rounded="rounded-full" className="border border-white/10" />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-white truncate max-w-[180px]">

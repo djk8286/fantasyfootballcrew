@@ -27,5 +27,9 @@ class User(Base):
     # enforcing it later, closer to a public launch, without a schema
     # change at that point. See auth.py's register()/verify-email.
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Gates the admin dashboard (app/api/v1/admin.py) -- everyone starts
+    # false, including the app owner; the first admin is flipped on
+    # directly in prod after the migration lands.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

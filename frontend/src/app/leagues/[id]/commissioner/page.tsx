@@ -31,7 +31,7 @@ import {
   MessageSquare,
   MessageCircle,
 } from "lucide-react";
-import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi } from "@/lib/api-client";
+import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi, getCurrentUserId } from "@/lib/api-client";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
 
 // Explicit "AI-generated" labeling on every real LLM output (digest,
@@ -52,6 +52,7 @@ interface League {
   id: string;
   name: string;
   commissioner_id: string;
+  co_commissioner_ids: string[] | null;
   draft_status: string;
   draft_type: string;
   max_teams: number;
@@ -253,6 +254,42 @@ export default function CommissionerPage() {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
           <span className="text-surface-400">Loading commissioner panel...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!league) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
+        <div className="text-center">
+          <p className="text-red-400 text-sm mb-4">{error || "Failed to load league"}</p>
+          <Link href="/leagues" className="text-gold-400 hover:text-gold-300 font-medium text-sm">Back to leagues</Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Client-side mirror of the backend's require_commissioner check --
+  // every mutating/listing call on this page already 403s for anyone
+  // who isn't the commissioner or a co-commissioner, but without this
+  // gate a member who navigates here directly (bookmark, shared link,
+  // browser history) would still see the whole panel shell render
+  // before every fetch on it failed. This blocks that render instead.
+  const viewerId = getCurrentUserId();
+  const isLeagueManager = !!viewerId && (viewerId === league.commissioner_id || (league.co_commissioner_ids || []).includes(viewerId));
+  if (!isLeagueManager) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <Shield className="w-10 h-10 text-surface-600 mx-auto mb-4" />
+          <h1 className="text-white font-bold text-lg mb-2">Commissioner access required</h1>
+          <p className="text-surface-400 text-sm mb-6">
+            Only {league.name}&apos;s commissioner or co-commissioners can view this page.
+          </p>
+          <Link href={`/leagues/${leagueId}`} className="text-gold-400 hover:text-gold-300 font-medium text-sm">
+            Back to league
+          </Link>
         </div>
       </div>
     );

@@ -29,5 +29,6 @@ class InviteLandingRead(BaseModel):
     league_name: str
     league_description: Optional[str] = None
     inviter_username: str
+    invited_email: str
     personal_message: Optional[str] = None
     usable: bool  # false if already accepted/revoked/expired

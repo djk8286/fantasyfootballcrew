@@ -13,11 +13,14 @@ function RegisterForm() {
   // invite-accept landing page when a logged-out visitor needs to land
   // back there after creating an account, instead of always /dashboard.
   const next = searchParams.get("next") || "/dashboard";
+  // Set by the invite-accept landing page so a visitor doesn't have to
+  // retype the address their invite was sent to.
+  const prefillEmail = searchParams.get("email") || "";
 
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
-    email: "",
+    email: prefillEmail,
     username: "",
     password: "",
   });
