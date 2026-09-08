@@ -13,9 +13,11 @@ from app.models.user import User
 from app.models.notification import NotificationType
 from app.schemas.league_invite import InviteCreateRequest, InviteRead, InviteLandingRead
 from app.schemas.league_join_request import JoinRequestCreate, JoinRequestRead, JoinRequestDecision
+from app.models.team import Team
 from app.services.auth_service import hash_token
 from app.services.email_service import send_league_invite_email
 from app.services.notification_service import create_notification
+from app.services.team_claim_service import apply_team_claim, find_open_team
 from app.api.deps import get_current_user, require_commissioner
 
 # No router-level prefix -- unlike every other feature router, this one
@@ -196,8 +198,32 @@ async def accept_invite(
             league_id=league.id, link=f"/leagues/{league.id}/commissioner",
         )
 
+    # Auto-claim an open team -- accepting an invite used to be a dead
+    # end (you were "in" the league but owned nothing, had to separately
+    # find and click Claim on a specific team, which people kept missing
+    # entirely). Skip if they already own/co-own a team here (re-clicking
+    # an old invite link after already joining shouldn't reassign it), and
+    # skip silently if the league's already full of real owners -- the
+    # manual claim UI on the league page is still there as a fallback.
+    claimed_team = None
+    already_has_team = await db.execute(
+        select(Team.id).where(
+            Team.league_id == league.id,
+            (Team.owner_id == current_user.id) | (Team.co_owner_id == current_user.id),
+        )
+    )
+    if already_has_team.first() is None:
+        open_team = await find_open_team(db, league.id)
+        if open_team:
+            await apply_team_claim(db, open_team, league, current_user)
+            claimed_team = open_team
+
     await db.commit()
-    return {"status": "ok", "league_id": invite.league_id}
+    response = {"status": "ok", "league_id": invite.league_id}
+    if claimed_team:
+        response["claimed_team_id"] = claimed_team.id
+        response["claimed_team_name"] = claimed_team.name
+    return response
 
 
 # ─── Join requests ──────────────────────────────────────────────────

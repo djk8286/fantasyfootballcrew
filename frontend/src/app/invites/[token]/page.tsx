@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, ShieldCheck, XCircle, Clock } from "lucide-react";
-import { invitesApi, usersApi, isLoggedIn, logout } from "@/lib/api-client";
+import { invitesApi, usersApi, isLoggedIn, logout, setClaimedTeam } from "@/lib/api-client";
 
 interface InviteLanding {
   league_id: string;
@@ -27,6 +27,7 @@ export default function InviteLandingPage() {
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const [claimedTeamName, setClaimedTeamName] = useState<string | null>(null);
 
   // Whoever is logged in when "Accept" is clicked gets the invite --
   // token possession, not email matching (see accept_invite's backend
@@ -90,9 +91,19 @@ export default function InviteLandingPage() {
     setAccepting(true);
     setAcceptError("");
     try {
-      const result = await invitesApi.accept(token) as { league_id: string };
+      const result = await invitesApi.accept(token) as {
+        league_id: string; claimed_team_id?: string; claimed_team_name?: string;
+      };
       setAccepted(true);
-      setTimeout(() => router.push(`/leagues/${result.league_id}`), 1500);
+      setClaimedTeamName(result.claimed_team_name ?? null);
+      // A team just got auto-claimed for them -- same localStorage
+      // "which team is mine" record every other claim flow writes (see
+      // draft room's claimTeam/unclaimTeam), so the league page and
+      // draft room both immediately recognize it as theirs.
+      if (result.claimed_team_id) {
+        setClaimedTeam(result.league_id, result.claimed_team_id);
+      }
+      setTimeout(() => router.push(`/leagues/${result.league_id}`), 1800);
     } catch (err) {
       setAcceptError(err instanceof Error ? err.message : "Failed to accept invite.");
     } finally {
@@ -135,7 +146,11 @@ export default function InviteLandingPage() {
           ) : accepted ? (
             <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm text-center" role="status">
               <ShieldCheck className="w-5 h-5 mx-auto mb-2" />
-              You&apos;re in! Taking you to the league...
+              {claimedTeamName ? (
+                <>You&apos;re in! You&apos;ve been given <strong>{claimedTeamName}</strong> — taking you to the league...</>
+              ) : (
+                <>You&apos;re in! Taking you to the league...</>
+              )}
             </div>
           ) : invite ? (
             <>

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from app.models.user import User
 from app.models.league import League, LeagueVisibility
 from app.models.league_invite import LeagueInvite, InviteStatus
+from app.models.team import Team
 from app.services.auth_service import create_access_token, hash_token
 
 
@@ -198,3 +199,80 @@ async def test_unknown_token_404s(client, db_session_factory):
     client.headers.pop("Authorization", None)
     r = await client.get("/invites/not-a-real-token")
     assert r.status_code == 404
+
+
+# ─── Auto-claim on accept ────────────────────────────────────────────
+# Accepting used to be a dead end -- "in" the league but owning nothing,
+# with claiming a team left as a separate, easy-to-miss step. Accepting
+# now auto-claims the first open CPU team, same rename-on-claim behavior
+# claim_team itself has.
+
+async def _add_cpu_team(db_session_factory, league_id, name="CPU Team 1"):
+    async with db_session_factory() as db:
+        team = Team(id=str(uuid.uuid4()), name=name, league_id=league_id, is_cpu=True, roster=[])
+        db.add(team)
+        await db.commit()
+        return team.id
+
+
+@pytest.mark.asyncio
+async def test_accept_invite_auto_claims_an_open_team(client, db_session_factory):
+    user, _token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, user.id)
+    await _add_cpu_team(db_session_factory, league_id)
+    raw_token = await _make_raw_invite(db_session_factory, league_id, user.id)
+    acceptor, acceptor_token = await _make_user(db_session_factory)
+
+    client.headers["Authorization"] = f"Bearer {acceptor_token}"
+    r = await client.post(f"/invites/{raw_token}/accept")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["claimed_team_id"] is not None
+    assert body["claimed_team_name"] == f"{acceptor.username}'s Team"
+
+    r = await client.get(f"/teams/{body['claimed_team_id']}")
+    assert r.json()["owner_id"] == acceptor.id
+    assert r.json()["is_cpu"] is False
+
+
+@pytest.mark.asyncio
+async def test_accept_invite_with_no_open_teams_still_succeeds(client, db_session_factory):
+    """No CPU team available (e.g. league already full of real owners)
+    -- accepting must still succeed, just without a claimed_team_id.
+    The manual claim UI stays as a fallback."""
+    user, _token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, user.id)
+    raw_token = await _make_raw_invite(db_session_factory, league_id, user.id)
+    _acceptor, acceptor_token = await _make_user(db_session_factory)
+
+    client.headers["Authorization"] = f"Bearer {acceptor_token}"
+    r = await client.post(f"/invites/{raw_token}/accept")
+    assert r.status_code == 200
+    assert "claimed_team_id" not in r.json()
+
+
+@pytest.mark.asyncio
+async def test_accept_invite_does_not_reclaim_if_already_own_a_team(client, db_session_factory):
+    """Re-clicking an old invite link after already having a team in
+    this league must not reassign/rename it."""
+    user, _token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, user.id)
+    await _add_cpu_team(db_session_factory, league_id, name="CPU Team 1")
+    acceptor, acceptor_token = await _make_user(db_session_factory)
+
+    async with db_session_factory() as db:
+        existing_team = Team(id=str(uuid.uuid4()), name="Already Mine", league_id=league_id,
+                              owner_id=acceptor.id, is_cpu=False, roster=[])
+        db.add(existing_team)
+        await db.commit()
+
+    raw_token = await _make_raw_invite(db_session_factory, league_id, user.id)
+    client.headers["Authorization"] = f"Bearer {acceptor_token}"
+    r = await client.post(f"/invites/{raw_token}/accept")
+    assert r.status_code == 200
+    assert "claimed_team_id" not in r.json()
+
+    r = await client.get(f"/teams/league/{league_id}")
+    names = {t["name"] for t in r.json()}
+    assert "Already Mine" in names
+    assert "CPU Team 1" in names  # untouched, still CPU

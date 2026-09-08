@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
+from app.services.team_claim_service import apply_team_claim
 from app.core.avatars import validate_avatar_url
 from pydantic import BaseModel
 
@@ -235,28 +236,7 @@ async def claim_team(
     if not team.is_cpu:
         raise HTTPException(status_code=400, detail="Team is already owned by a user")
 
-    team.owner_id = current_user.id
-    team.is_cpu = False
-    # Personalize the placeholder name ("CPU Team 3", etc.) the moment a
-    # real person takes it over -- rename UI (PATCH /teams/{id}) lets them
-    # change it again later if they want something else.
-    team.name = f"{current_user.username}'s Team"
-
-    # Dual-Squad (Phase 7): claiming one team of a linked pair also
-    # auto-claims its still-CPU partner as the SAME owner, atomically --
-    # reuses this existing "Claim CPU team" button rather than adding a
-    # second endpoint. Only mirrors the OWNER; claim_co_owner is
-    # deliberately NOT auto-mirrored (a manager might want a different
-    # or no co-owner per team). If the partner was already independently
-    # claimed by someone else (a race), this just leaves the pair split
-    # between two owners rather than erroring.
-    if league.league_type == LeagueType.DUAL_SQUAD and team.partner_team_id:
-        partner_result = await db.execute(select(Team).where(Team.id == team.partner_team_id))
-        partner = partner_result.scalar_one_or_none()
-        if partner and partner.is_cpu:
-            partner.owner_id = current_user.id
-            partner.is_cpu = False
-
+    await apply_team_claim(db, team, league, current_user)
     await db.commit()
     await db.refresh(team)
     return team

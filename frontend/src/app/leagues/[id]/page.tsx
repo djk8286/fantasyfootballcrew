@@ -197,7 +197,15 @@ export default function LeagueDetailPage() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Page-load failure only ("League not found") -- gates the full-page
+  // error screen below. Action failures (rename, claim, settings save,
+  // ...) must NEVER write to this one: every action handler used to
+  // share this same state, so any failed action (a 403 on renaming a
+  // team you don't own, a bad league-settings save, ...) replaced the
+  // *entire* page with "League not found" instead of showing what
+  // actually went wrong. See actionError below for what those use now.
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
 
   // Avatar picker state
   const [editingAvatarTeam, setEditingAvatarTeam] = useState<string | null>(null);
@@ -375,6 +383,23 @@ export default function LeagueDetailPage() {
     }
   };
 
+  // Auto-refresh teams/league every 8s while this page is open -- before
+  // this, the only way to see someone else claim a team, rename it, or
+  // change their avatar was your own next action (or a manual reload).
+  // Everyone else's teams just sat there looking like unclaimed CPU
+  // teams until you refreshed. 8s (vs. the draft room's 2s) since this
+  // isn't a live-turn-based flow -- nobody's staring at this page
+  // waiting on a countdown the way they are mid-draft.
+  useEffect(() => {
+    if (!id) return;
+    const interval = setInterval(() => {
+      refreshTeams();
+      refreshLeague();
+    }, 8000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   // ─── Actions ─────────────────────────────────────────────
 
   const handleSetAvatar = async (url: string) => {
@@ -398,7 +423,12 @@ export default function LeagueDetailPage() {
       await refreshTeams();
       setEditingNameTeam(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rename team");
+      // Exit edit mode on failure too -- leaving the input open with no
+      // visible feedback (the real error lands in the page-wide banner,
+      // easy to miss below the fold) reads as "the rename bar is just
+      // broken" rather than "that failed, here's why."
+      setActionError(err instanceof Error ? err.message : "Failed to rename team");
+      setEditingNameTeam(null);
     } finally {
       setSavingName(false);
     }
@@ -414,7 +444,7 @@ export default function LeagueDetailPage() {
       localStorage.setItem("ffc_user_teams", JSON.stringify(stored));
       await Promise.all([refreshTeams(), refreshLeague()]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to claim team");
+      setActionError(err instanceof Error ? err.message : "Failed to claim team");
     }
     setClaimingTeamId(null);
   };
@@ -425,7 +455,7 @@ export default function LeagueDetailPage() {
       await teamsApi.claimCoOwner(teamId);
       await Promise.all([refreshTeams(), refreshLeague()]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
+      setActionError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
     }
     setClaimingTeamId(null);
   };
@@ -449,7 +479,7 @@ export default function LeagueDetailPage() {
       setDeleteConfirmId(null);
       await refreshTeams();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete team");
+      setActionError(err instanceof Error ? err.message : "Failed to delete team");
     }
   };
 
@@ -466,7 +496,7 @@ export default function LeagueDetailPage() {
       await teamsApi.update(teamId, { conference: newConference });
       await refreshTeams();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reassign conference");
+      setActionError(err instanceof Error ? err.message : "Failed to reassign conference");
     }
     setSwappingConferenceTeamId(null);
   };
@@ -479,7 +509,7 @@ export default function LeagueDetailPage() {
       await teamsApi.bulkAddCpu(league.id, slotsLeft);
       await refreshTeams();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add CPU teams");
+      setActionError(err instanceof Error ? err.message : "Failed to add CPU teams");
     }
     setLoading(false);
   };
@@ -491,7 +521,7 @@ export default function LeagueDetailPage() {
       await teamsApi.bulkAddCpu(league.id, 1, league.name + " Team");
       await refreshTeams();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add team");
+      setActionError(err instanceof Error ? err.message : "Failed to add team");
     }
     setLoading(false);
   };
@@ -509,9 +539,9 @@ export default function LeagueDetailPage() {
       });
       await refreshLeague();
       setEditingLeague(false);
-      setError("");
+      setActionError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update league");
+      setActionError(err instanceof Error ? err.message : "Failed to update league");
     }
   };
 
@@ -521,9 +551,9 @@ export default function LeagueDetailPage() {
       await leaguesApi.manageCommissioner(league.id, "add_co_commish", coCommishUserId.trim());
       await refreshLeague();
       setCoCommishUserId("");
-      setError("");
+      setActionError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add co-commissioner");
+      setActionError(err instanceof Error ? err.message : "Failed to add co-commissioner");
     }
   };
 
@@ -533,7 +563,7 @@ export default function LeagueDetailPage() {
       await leaguesApi.manageCommissioner(league.id, "remove_co_commish", userId);
       await refreshLeague();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove co-commissioner");
+      setActionError(err instanceof Error ? err.message : "Failed to remove co-commissioner");
     }
   };
 
@@ -542,9 +572,9 @@ export default function LeagueDetailPage() {
     try {
       await leaguesApi.manageCommissioner(league.id, "transfer", userId);
       await refreshLeague();
-      setError("");
+      setActionError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to transfer commissioner");
+      setActionError(err instanceof Error ? err.message : "Failed to transfer commissioner");
     }
   };
 
@@ -644,6 +674,28 @@ export default function LeagueDetailPage() {
           Back to Dashboard
         </Link>
       </div>
+
+      {/* Action error banner -- visible regardless of which action on
+          this page failed (rename, claim, settings save, ...). See
+          actionError's declaration for why this exists as its own
+          state instead of reusing the page-load `error`. */}
+      {actionError && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 p-3.5 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm"
+          >
+            <span className="flex-1">{actionError}</span>
+            <button
+              onClick={() => setActionError("")}
+              aria-label="Dismiss"
+              className="text-red-400/70 hover:text-red-400 transition-colors shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* League Header */}
       <section
@@ -910,7 +962,7 @@ export default function LeagueDetailPage() {
                       const draftRes = await draftsApi.create(league.id, 15) as { id: string };
                       window.location.href = `/draft/${draftRes.id}`;
                     } catch {
-                      setError("Failed to create draft. Make sure your league has at least 2 teams.");
+                      setActionError("Failed to create draft. Make sure your league has at least 2 teams.");
                       setLoading(false);
                     }
                   }}
