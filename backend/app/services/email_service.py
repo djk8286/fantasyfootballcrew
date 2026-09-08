@@ -15,7 +15,9 @@ source of truth for the actual copy, the HTML just dresses it up.
 """
 import html as html_module
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
+from app.models.email_send_log import EmailSendLog
 
 # Matches the app's own theme (frontend/src/app/globals.css) so the email
 # doesn't look like a different product from the site the link lands on.
@@ -92,7 +94,23 @@ def _render_email(heading: str, body_lines: list[str], cta_label: str, cta_url: 
 </html>"""
 
 
-async def _send(to_email: str, subject: str, text_body: str, html_body: str, log_label: str, log_link: str) -> None:
+async def _log_send(db: AsyncSession, to_email: str, email_type: str, subject: str, status: str, error_detail: str | None = None) -> None:
+    """Persist an EmailSendLog row and commit it on its own -- deliberately
+    NOT part of whatever transaction the caller's request is mid-way
+    through (a password-reset token, a league invite row, ...), so this
+    is never rolled back by an unrelated failure later in that request,
+    and a send outcome is recorded the instant it's known rather than
+    whenever the caller happens to commit. See EmailSendLog's docstring
+    for why this table exists at all (2026-09-08: weeks of silently
+    failing sends, visible only in `railway logs`)."""
+    db.add(EmailSendLog(to_email=to_email, email_type=email_type, subject=subject, status=status, error_detail=error_detail))
+    await db.commit()
+
+
+async def _send(
+    to_email: str, subject: str, text_body: str, html_body: str, log_label: str, log_link: str,
+    db: AsyncSession, email_type: str,
+) -> None:
     """Shared send/stub/failure-swallow plumbing for all three email
     functions below -- extracted once the HTML template gave every send
     the exact same shape (was "not worth extracting for just two email
@@ -100,6 +118,7 @@ async def _send(to_email: str, subject: str, text_body: str, html_body: str, log
     tipped it)."""
     if not settings.RESEND_API_KEY:
         print(f"[email stub -- no RESEND_API_KEY configured] {log_label} for {to_email}: {log_link}", flush=True)
+        await _log_send(db, to_email, email_type, subject, "stubbed")
         return
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -116,6 +135,7 @@ async def _send(to_email: str, subject: str, text_body: str, html_body: str, log
                 },
             )
             resp.raise_for_status()
+            await _log_send(db, to_email, email_type, subject, "sent")
         except Exception as e:
             # Don't let an email-provider hiccup surface as a 500 to the
             # user on a request that already succeeded server-side (the
@@ -123,9 +143,10 @@ async def _send(to_email: str, subject: str, text_body: str, html_body: str, log
             # move on. Falling back to the stub log means the link is
             # still recoverable from `railway logs`.
             print(f"[email send FAILED, falling back to log] {to_email}: {log_link} -- {e}", flush=True)
+            await _log_send(db, to_email, email_type, subject, "failed", error_detail=str(e)[:2000])
 
 
-async def send_password_reset_email(to_email: str, reset_link: str) -> None:
+async def send_password_reset_email(to_email: str, reset_link: str, db: AsyncSession) -> None:
     subject = "Reset your FantasyFootballCrew password"
     text_body = (
         f"Someone (hopefully you) requested a password reset.\n\n"
@@ -142,10 +163,10 @@ async def send_password_reset_email(to_email: str, reset_link: str) -> None:
         cta_url=reset_link,
         footnote="If the button doesn't work, copy and paste this link: " + reset_link,
     )
-    await _send(to_email, subject, text_body, html_body, "Password reset", reset_link)
+    await _send(to_email, subject, text_body, html_body, "Password reset", reset_link, db, "password_reset")
 
 
-async def send_verification_email(to_email: str, verify_link: str) -> None:
+async def send_verification_email(to_email: str, verify_link: str, db: AsyncSession) -> None:
     """Sent once, right after registration -- track-only (Auth Security
     Hardening, Step 3): nothing in the app blocks on this being clicked,
     it just flips User.email_verified when it is."""
@@ -166,7 +187,7 @@ async def send_verification_email(to_email: str, verify_link: str) -> None:
         cta_url=verify_link,
         footnote="If the button doesn't work, copy and paste this link: " + verify_link,
     )
-    await _send(to_email, subject, text_body, html_body, "Verification email", verify_link)
+    await _send(to_email, subject, text_body, html_body, "Verification email", verify_link, db, "verification")
 
 
 async def send_league_invite_email(
@@ -175,6 +196,7 @@ async def send_league_invite_email(
     inviter_name: str,
     personal_message: str | None,
     invite_link: str,
+    db: AsyncSession,
 ) -> None:
     subject = f"{inviter_name} invited you to join {league_name} on FantasyFootballCrew"
     message_block = f"\n\n\"{personal_message}\"\n" if personal_message else ""
@@ -206,4 +228,4 @@ async def send_league_invite_email(
         cta_url=invite_link,
         footnote="If the button doesn't work, copy and paste this link: " + invite_link,
     )
-    await _send(to_email, subject, text_body, html_body, f"League invite for '{league_name}'", invite_link)
+    await _send(to_email, subject, text_body, html_body, f"League invite for '{league_name}'", invite_link, db, "league_invite")

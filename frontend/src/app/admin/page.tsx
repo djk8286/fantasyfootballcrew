@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { adminApi } from "@/lib/api-client";
-import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown } from "lucide-react";
+import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle } from "lucide-react";
 
 interface Stats {
   users: number;
@@ -36,8 +36,54 @@ interface AdminLeague {
   created_at: string;
 }
 
+interface AiUsage {
+  total: number;
+  last_24h: number;
+  by_endpoint: { endpoint: string; count: number }[];
+  by_league: { league_id: string; league_name: string; count: number }[];
+}
+
+interface LeagueHealthRow {
+  id: string;
+  name: string;
+  commissioner_username: string | null;
+  commissioner_email: string | null;
+  draft_status: string;
+  team_count: number;
+  created_at: string;
+  flags: string[];
+}
+
+interface EmailLogRow {
+  id: string;
+  to_email: string;
+  email_type: string;
+  subject: string;
+  status: string;
+  error_detail: string | null;
+  created_at: string;
+}
+
+type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log";
+
+const FLAG_LABELS: Record<string, string> = {
+  no_teams: "No teams",
+  never_started: "Never started",
+  stuck_draft: "Stuck draft",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  sent: "text-green-400",
+  failed: "text-red-400",
+  stubbed: "text-surface-500",
+};
+
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
@@ -58,17 +104,27 @@ export default function AdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [leagues, setLeagues] = useState<AdminLeague[]>([]);
+  const [aiUsage, setAiUsage] = useState<AiUsage | null>(null);
+  const [leagueHealth, setLeagueHealth] = useState<LeagueHealthRow[]>([]);
+  const [emailLog, setEmailLog] = useState<EmailLogRow[]>([]);
+  const [emailStatusFilter, setEmailStatusFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"leagues" | "users">("leagues");
+  const [tab, setTab] = useState<Tab>("leagues");
 
   useEffect(() => {
-    Promise.all([adminApi.getStats(), adminApi.getUsers(), adminApi.getLeagues()])
-      .then(([s, u, l]) => {
+    Promise.all([
+      adminApi.getStats(), adminApi.getUsers(), adminApi.getLeagues(),
+      adminApi.getAiUsage(), adminApi.getLeagueHealth(), adminApi.getEmailLog(),
+    ])
+      .then(([s, u, l, ai, health, emails]) => {
         setStats(s as Stats);
         setUsers(u as AdminUser[]);
         setLeagues(l as AdminLeague[]);
+        setAiUsage(ai as AiUsage);
+        setLeagueHealth(health as LeagueHealthRow[]);
+        setEmailLog(emails as EmailLogRow[]);
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "Failed to load";
@@ -80,6 +136,17 @@ export default function AdminPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  const loadEmailLog = useCallback((status: string) => {
+    adminApi.getEmailLog(status || undefined)
+      .then((data) => setEmailLog(data as EmailLogRow[]))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!loading) loadEmailLog(emailStatusFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailStatusFilter]);
 
   if (loading) {
     return (
@@ -138,26 +205,27 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className="flex items-center gap-1 p-1 bg-surface-800 border border-surface-700 rounded-lg w-fit">
-          <button
-            onClick={() => setTab("leagues")}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-bold transition-colors ${
-              tab === "leagues" ? "bg-gold-400 text-surface-900" : "text-surface-400 hover:text-white"
-            }`}
-          >
-            Leagues ({leagues.length})
-          </button>
-          <button
-            onClick={() => setTab("users")}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-bold transition-colors ${
-              tab === "users" ? "bg-gold-400 text-surface-900" : "text-surface-400 hover:text-white"
-            }`}
-          >
-            Users ({users.length})
-          </button>
+        <div className="flex items-center gap-1 p-1 bg-surface-800 border border-surface-700 rounded-lg w-fit overflow-x-auto">
+          {([
+            ["leagues", `Leagues (${leagues.length})`],
+            ["users", `Users (${users.length})`],
+            ["ai-usage", "AI Usage"],
+            ["health", `League Health${leagueHealth.length ? ` (${leagueHealth.length})` : ""}`],
+            ["email-log", "Email Log"],
+          ] as [Tab, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`shrink-0 px-3.5 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                tab === key ? "bg-gold-400 text-surface-900" : "text-surface-400 hover:text-white"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {tab === "leagues" ? (
+        {tab === "leagues" && (
           <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[720px]">
               <thead>
@@ -202,7 +270,9 @@ export default function AdminPage() {
               </tbody>
             </table>
           </div>
-        ) : (
+        )}
+
+        {tab === "users" && (
           <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[640px]">
               <thead>
@@ -240,6 +310,171 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {tab === "ai-usage" && (
+          <div className="space-y-4">
+            {aiUsage && (
+              <div className="grid grid-cols-2 gap-3">
+                <StatTile icon={<Bot className="w-4.5 h-4.5" />} label="Total AI Calls" value={aiUsage.total} />
+                <StatTile icon={<Bot className="w-4.5 h-4.5" />} label="Last 24h" value={aiUsage.last_24h} />
+              </div>
+            )}
+            <p className="text-surface-500 text-xs">
+              Call counts only -- not dollars. Every AI Co-Commissioner feature (digest, trade review, chat, message drafts, recaps) logs one row per call here regardless of league.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
+                  <h3 className="text-white font-bold text-sm">By Feature</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-surface-700/60">
+                    {(aiUsage?.by_endpoint.length ?? 0) === 0 ? (
+                      <tr><td className="px-4 py-4 text-surface-500 text-center">No AI usage yet.</td></tr>
+                    ) : (
+                      aiUsage!.by_endpoint.map((row) => (
+                        <tr key={row.endpoint}>
+                          <td className="px-4 py-2.5 text-surface-300">{row.endpoint.replace(/_/g, " ")}</td>
+                          <td className="px-4 py-2.5 text-white font-medium text-right">{row.count.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
+                  <h3 className="text-white font-bold text-sm">Top Leagues</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-surface-700/60">
+                    {(aiUsage?.by_league.length ?? 0) === 0 ? (
+                      <tr><td className="px-4 py-4 text-surface-500 text-center">No AI usage yet.</td></tr>
+                    ) : (
+                      aiUsage!.by_league.map((row) => (
+                        <tr key={row.league_id}>
+                          <td className="px-4 py-2.5 text-surface-300">{row.league_name}</td>
+                          <td className="px-4 py-2.5 text-white font-medium text-right">{row.count.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "health" && (
+          <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
+              <thead>
+                <tr className="border-b border-surface-700 text-left text-surface-400 text-xs uppercase tracking-wider">
+                  <th className="px-4 py-3 font-medium">League</th>
+                  <th className="px-4 py-3 font-medium">Commissioner</th>
+                  <th className="px-4 py-3 font-medium">Draft</th>
+                  <th className="px-4 py-3 font-medium text-right">Teams</th>
+                  <th className="px-4 py-3 font-medium">Flags</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-700/60">
+                {leagueHealth.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-surface-500">
+                      Nothing flagged -- every real league looks healthy.
+                    </td>
+                  </tr>
+                ) : (
+                  leagueHealth.map((l) => (
+                    <tr key={l.id} className="hover:bg-surface-900/40 transition-colors">
+                      <td className="px-4 py-3 text-white font-medium">{l.name}</td>
+                      <td className="px-4 py-3 text-surface-300">
+                        {l.commissioner_username || "—"}
+                        {l.commissioner_email && (
+                          <span className="block text-surface-500 text-xs">{l.commissioner_email}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-surface-400">{l.draft_status.replace("_", " ")}</td>
+                      <td className="px-4 py-3 text-surface-300 text-right">{l.team_count}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {l.flags.map((f) => (
+                            <span key={f} className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">
+                              <AlertTriangle className="w-2.5 h-2.5" /> {FLAG_LABELS[f] || f}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-surface-500 text-xs">{fmtDate(l.created_at)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "email-log" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-1.5">
+              {["", "sent", "failed", "stubbed"].map((s) => (
+                <button
+                  key={s || "all"}
+                  onClick={() => setEmailStatusFilter(s)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    emailStatusFilter === s
+                      ? "bg-gold-400 text-surface-900"
+                      : "bg-surface-900 border border-surface-700 text-surface-400 hover:text-white"
+                  }`}
+                >
+                  {s ? s[0].toUpperCase() + s.slice(1) : "All"}
+                </button>
+              ))}
+            </div>
+            <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[720px]">
+                <thead>
+                  <tr className="border-b border-surface-700 text-left text-surface-400 text-xs uppercase tracking-wider">
+                    <th className="px-4 py-3 font-medium">To</th>
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Subject</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Sent</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-700/60">
+                  {emailLog.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-6 text-center text-surface-500">
+                        <Mail className="w-5 h-5 mx-auto mb-2 opacity-40" /> No emails logged.
+                      </td>
+                    </tr>
+                  ) : (
+                    emailLog.map((e) => (
+                      <tr key={e.id} className="hover:bg-surface-900/40 transition-colors align-top">
+                        <td className="px-4 py-3 text-surface-300">{e.to_email}</td>
+                        <td className="px-4 py-3 text-surface-400">{e.email_type.replace(/_/g, " ")}</td>
+                        <td className="px-4 py-3 text-surface-300">
+                          {e.subject}
+                          {e.error_detail && (
+                            <span className="block text-red-400/80 text-xs mt-0.5 max-w-md truncate" title={e.error_detail}>
+                              {e.error_detail}
+                            </span>
+                          )}
+                        </td>
+                        <td className={`px-4 py-3 font-semibold text-xs ${STATUS_COLOR[e.status] || "text-surface-400"}`}>
+                          {e.status}
+                        </td>
+                        <td className="px-4 py-3 text-surface-500 text-xs whitespace-nowrap">{fmtDateTime(e.created_at)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

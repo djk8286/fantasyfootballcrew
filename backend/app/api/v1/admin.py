@@ -8,18 +8,28 @@ not a more convenient delete button. Destructive league/user cleanup
 stays a deliberate one-off script against prod, same as it's always
 been -- see [[ffc-beta-draft-readiness]] in project memory.
 """
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.core.database import get_db
 from app.models.user import User
-from app.models.league import League
+from app.models.league import League, DraftStatus
 from app.models.team import Team
 from app.models.draft import Draft, DraftPick, DraftRunStatus
+from app.models.ai_usage_event import AIUsageEvent
+from app.models.email_send_log import EmailSendLog
 from app.api.deps import require_admin
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# "Stuck" thresholds -- deliberately generous (a real live draft can
+# legitimately sit on one pick for a while if someone's timer is long or
+# they're just slow), tuned to flag drafts that look abandoned, not ones
+# mid-pick.
+STUCK_DRAFT_HOURS = 48
+STALE_NOT_STARTED_DAYS = 7
 
 
 @router.get("/stats")
@@ -101,4 +111,151 @@ async def list_leagues(
             "created_at": l.created_at,
         }
         for l in leagues
+    ]
+
+
+@router.get("/ai-usage")
+async def get_ai_usage(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Real LLM-spend activity (see AIUsageEvent's docstring -- one row
+    per digest/trade-review/message-draft/chat/recap call). Call counts
+    only, not tokens or dollars -- there's no cost data captured
+    anywhere yet, this is "how much is this feature being used," not
+    "what is this costing us." Excludes mock leagues (practice drafts
+    never touch AI Co-Commissioner features, but the filter is here for
+    when/if that changes)."""
+    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    total = (await db.execute(select(func.count(AIUsageEvent.id)))).scalar()
+    last_24h = (
+        await db.execute(select(func.count(AIUsageEvent.id)).where(AIUsageEvent.created_at >= since_24h))
+    ).scalar()
+
+    by_endpoint_result = await db.execute(
+        select(AIUsageEvent.endpoint, func.count(AIUsageEvent.id))
+        .group_by(AIUsageEvent.endpoint)
+        .order_by(func.count(AIUsageEvent.id).desc())
+    )
+    by_endpoint = [{"endpoint": e, "count": c} for e, c in by_endpoint_result.all()]
+
+    by_league_result = await db.execute(
+        select(AIUsageEvent.league_id, func.count(AIUsageEvent.id))
+        .group_by(AIUsageEvent.league_id)
+        .order_by(func.count(AIUsageEvent.id).desc())
+        .limit(10)
+    )
+    league_rows = by_league_result.all()
+    league_ids = [lid for lid, _ in league_rows]
+    leagues_by_id: dict[str, League] = {}
+    if league_ids:
+        leagues_result = await db.execute(select(League).where(League.id.in_(league_ids)))
+        leagues_by_id = {l.id: l for l in leagues_result.scalars().all()}
+    by_league = [
+        {
+            "league_id": lid,
+            "league_name": leagues_by_id[lid].name if lid in leagues_by_id else "(deleted league)",
+            "count": count,
+        }
+        for lid, count in league_rows
+    ]
+
+    return {"total": total, "last_24h": last_24h, "by_endpoint": by_endpoint, "by_league": by_league}
+
+
+@router.get("/league-health")
+async def get_league_health(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Leagues that likely need a look -- computed, not stored. Three
+    independent flags (a league can carry more than one):
+
+      - no_teams: a shell with nobody in it.
+      - never_started: created a while ago and still hasn't drafted --
+        likely abandoned setup, not "about to draft."
+      - stuck_draft: draft_status is in_progress but no pick has landed
+        in a while -- likely someone's turn nobody's covering.
+
+    Excludes mock (practice-draft) leagues entirely -- they're meant to
+    be short-lived and this would just be noise for every one of them."""
+    now = datetime.now(timezone.utc)
+    never_started_cutoff = now - timedelta(days=STALE_NOT_STARTED_DAYS)
+    stuck_cutoff = now - timedelta(hours=STUCK_DRAFT_HOURS)
+
+    leagues_result = await db.execute(select(League).where(League.is_mock == False))  # noqa: E712
+    leagues = leagues_result.scalars().all()
+
+    in_progress_ids = [l.id for l in leagues if l.draft_status == DraftStatus.IN_PROGRESS]
+    last_pick_by_league: dict[str, datetime] = {}
+    if in_progress_ids:
+        last_pick_result = await db.execute(
+            select(DraftPick.league_id, func.max(DraftPick.drafted_at))
+            .where(DraftPick.league_id.in_(in_progress_ids))
+            .group_by(DraftPick.league_id)
+        )
+        last_pick_by_league = {lid: ts for lid, ts in last_pick_result.all()}
+
+    commissioner_ids = {l.commissioner_id for l in leagues}
+    users_by_id: dict[str, User] = {}
+    if commissioner_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(commissioner_ids)))
+        users_by_id = {u.id: u for u in users_result.scalars().all()}
+
+    flagged = []
+    for l in leagues:
+        team_count = len(l.teams)
+        flags = []
+        if team_count == 0:
+            flags.append("no_teams")
+        if l.draft_status == DraftStatus.NOT_STARTED and l.created_at.replace(tzinfo=timezone.utc) < never_started_cutoff:
+            flags.append("never_started")
+        if l.draft_status == DraftStatus.IN_PROGRESS:
+            last_pick = last_pick_by_league.get(l.id)
+            reference = last_pick.replace(tzinfo=timezone.utc) if last_pick else l.created_at.replace(tzinfo=timezone.utc)
+            if reference < stuck_cutoff:
+                flags.append("stuck_draft")
+        if flags:
+            flagged.append({
+                "id": l.id,
+                "name": l.name,
+                "commissioner_username": users_by_id[l.commissioner_id].username if l.commissioner_id in users_by_id else None,
+                "commissioner_email": users_by_id[l.commissioner_id].email if l.commissioner_id in users_by_id else None,
+                "draft_status": l.draft_status.value,
+                "team_count": team_count,
+                "created_at": l.created_at,
+                "flags": flags,
+            })
+
+    return flagged
+
+
+@router.get("/email-log")
+async def get_email_log(
+    status: str | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Recent outbound-email attempts, newest first -- see
+    EmailSendLog's docstring for why this exists. `status` optionally
+    filters to one of "sent" / "failed" / "stubbed"."""
+    limit = min(limit, 500)
+    query = select(EmailSendLog).order_by(EmailSendLog.created_at.desc()).limit(limit)
+    if status:
+        query = query.where(EmailSendLog.status == status)
+    result = await db.execute(query)
+    logs = result.scalars().all()
+    return [
+        {
+            "id": e.id,
+            "to_email": e.to_email,
+            "email_type": e.email_type,
+            "subject": e.subject,
+            "status": e.status,
+            "error_detail": e.error_detail,
+            "created_at": e.created_at,
+        }
+        for e in logs
     ]

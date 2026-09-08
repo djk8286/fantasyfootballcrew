@@ -20,7 +20,7 @@ import app.api.v1.auth as auth_module
 async def test_register_creates_exactly_one_verification_token_and_sends_email(client, monkeypatch):
     captured = {}
 
-    async def spy(to_email, verify_link):
+    async def spy(to_email, verify_link, db):
         captured["to_email"] = to_email
         captured["verify_link"] = verify_link
 
@@ -108,7 +108,7 @@ async def test_registering_and_never_verifying_still_allows_full_normal_use(clie
     """Regression pin for "track-only, not enforced" -- registering,
     logging in, and using an authenticated endpoint must all work with
     zero interaction with the verification link."""
-    async def spy(to_email, verify_link):
+    async def spy(to_email, verify_link, db):
         pass
     monkeypatch.setattr(auth_module, "send_verification_email", spy)
 
@@ -150,7 +150,7 @@ async def _is_verified(db_session_factory, user_id: str) -> bool:
 async def test_resend_verification_issues_a_fresh_token_and_sends(client, db_session_factory, monkeypatch):
     captured = {}
 
-    async def spy(to_email, verify_link):
+    async def spy(to_email, verify_link, db):
         captured["to_email"] = to_email
         captured["verify_link"] = verify_link
 
@@ -184,7 +184,7 @@ async def test_resend_verification_issues_a_fresh_token_and_sends(client, db_ses
 async def test_resend_verification_is_a_noop_if_already_verified(client, db_session_factory, monkeypatch):
     sent = False
 
-    async def spy(to_email, verify_link):
+    async def spy(to_email, verify_link, db):
         nonlocal sent
         sent = True
 

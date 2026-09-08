@@ -75,7 +75,7 @@ async def _create_and_send_verification_email(user: User, db: AsyncSession) -> N
     ))
     await db.commit()
     verify_link = f"{settings.FRONTEND_URL}/verify-email?token={raw_token}"
-    await send_verification_email(user.email, verify_link)
+    await send_verification_email(user.email, verify_link, db)
 
 
 @router.post("/login")
@@ -129,7 +129,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
     await db.commit()
 
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
-    await send_password_reset_email(user.email, reset_link)
+    await send_password_reset_email(user.email, reset_link, db)
 
     return generic_response
 

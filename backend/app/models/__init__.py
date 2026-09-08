@@ -21,6 +21,7 @@ from app.models.commissioner_digest import CommissionerDigest
 from app.models.chat_message import ChatMessage
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.email_verification_token import EmailVerificationToken
+from app.models.email_send_log import EmailSendLog
 from app.models.team_weekly_recap import TeamWeeklyRecap
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.weekly_scores_recap import WeeklyScoresRecap
@@ -40,6 +41,7 @@ __all__ = [
     "ChatMessage",
     "AIUsageEvent",
     "EmailVerificationToken",
+    "EmailSendLog",
     "TeamWeeklyRecap",
     "WeeklyTopPlayersSummary",
     "WeeklyScoresRecap",

@@ -73,7 +73,7 @@ async def send_invites(
         db.add(invite)
         created.append(invite)
         invite_link = f"{settings.FRONTEND_URL}/invites/{raw_token}"
-        await send_league_invite_email(email, league.name, current_user.username, data.message, invite_link)
+        await send_league_invite_email(email, league.name, current_user.username, data.message, invite_link, db)
 
     await db.commit()
     for invite in created:

@@ -417,6 +417,10 @@ export const adminApi = {
   getStats: () => apiRequest("/api/v1/admin/stats"),
   getUsers: () => apiRequest("/api/v1/admin/users"),
   getLeagues: () => apiRequest("/api/v1/admin/leagues"),
+  getAiUsage: () => apiRequest("/api/v1/admin/ai-usage"),
+  getLeagueHealth: () => apiRequest("/api/v1/admin/league-health"),
+  getEmailLog: (status?: string) =>
+    apiRequest(`/api/v1/admin/email-log${status ? `?status=${status}` : ""}`),
 };
 
 export default apiRequest;
