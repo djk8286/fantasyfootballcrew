@@ -27,6 +27,7 @@ class DraftRead(BaseModel):
     current_pick: int
     total_rounds: int
     team_order: Optional[str] = None
+    scheduled_for: Optional[datetime] = None
     created_at: datetime
 
     class Config:

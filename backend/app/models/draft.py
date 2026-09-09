@@ -50,6 +50,14 @@ class Draft(Base):
     team_order: Mapped[str | None] = mapped_column(String, nullable=True)  # JSON string of team IDs in draft order
     timer_seconds: Mapped[int] = mapped_column(Integer, default=60)  # Countdown timer per pick (0 = no timer)
     current_pick_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Scheduling (only meaningful while status is PENDING) -- see
+    # scheduler.py's _process_scheduled_drafts_once, which auto-starts a
+    # draft the moment this passes and sends the "starting soon" reminder
+    # partway there. reminder_email_sent_at exists purely so that
+    # once-every-tick check doesn't re-send the reminder every tick
+    # between when it first fires and when the draft actually starts.
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminder_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

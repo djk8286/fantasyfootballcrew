@@ -211,6 +211,42 @@ async def quickstart_mock_draft(
     return draft, my_team_id
 
 
+async def schedule_draft(db: AsyncSession, draft_id: str, scheduled_for: datetime) -> Draft:
+    """Set (or change) a PENDING draft's auto-start time. Resetting
+    reminder_email_sent_at on every call (not just the first) means
+    rescheduling to a later time correctly gets a fresh reminder before
+    the new time, instead of scheduler.py seeing a stale "already sent"
+    flag from the old schedule and staying silent."""
+    result = await db.execute(select(Draft).where(Draft.id == draft_id))
+    draft = result.scalar_one_or_none()
+    if not draft:
+        raise ValueError("Draft not found")
+    if draft.status != DraftRunStatus.PENDING:
+        raise ValueError(f"Draft already {draft.status.value}")
+
+    draft.scheduled_for = scheduled_for
+    draft.reminder_email_sent_at = None
+    await db.commit()
+    await db.refresh(draft)
+    return draft
+
+
+async def cancel_draft_schedule(db: AsyncSession, draft_id: str) -> Draft:
+    """Clear a scheduled time -- back to "manual Start Draft click only"."""
+    result = await db.execute(select(Draft).where(Draft.id == draft_id))
+    draft = result.scalar_one_or_none()
+    if not draft:
+        raise ValueError("Draft not found")
+    if draft.status != DraftRunStatus.PENDING:
+        raise ValueError(f"Draft already {draft.status.value}")
+
+    draft.scheduled_for = None
+    draft.reminder_email_sent_at = None
+    await db.commit()
+    await db.refresh(draft)
+    return draft
+
+
 async def start_draft(db: AsyncSession, draft_id: str) -> Draft:
     """Start a pending draft."""
     result = await db.execute(select(Draft).where(Draft.id == draft_id))
@@ -609,6 +645,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 draft.current_pick_started_at.isoformat() if draft.current_pick_started_at.tzinfo
                 else draft.current_pick_started_at.isoformat() + "+00:00"
             ) if draft.current_pick_started_at else None,
+            "scheduled_for": draft.scheduled_for.isoformat() if draft.scheduled_for else None,
         },
         "picks": picks_with_players,
         "current_team_id": current_team_id,
