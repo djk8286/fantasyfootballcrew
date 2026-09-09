@@ -308,17 +308,24 @@ export default function DraftPage() {
     fetchState();
   }, [fetchState]);
 
-  // Auto-refresh every 2 seconds while in progress. Was 5s -- your own
-  // pick already refetches immediately (see handleMakePick), so this
-  // interval only governs how long it takes to SEE someone else's pick;
-  // 2s trims that wait without meaningfully adding load (measured
-  // production /state latency is 150-400ms, and Railway's own metrics
-  // show this service at <1% CPU / ~1% memory even during active use --
-  // a small beta league's worth of clients polling twice as often is
-  // nowhere near either ceiling).
+  // Auto-refresh every 5 seconds while in progress -- your own pick
+  // already refetches immediately (see handleMakePick), so this
+  // interval only governs how long it takes to SEE someone else's pick.
+  // REVERTED from 2s back to 5s (2026-09-09 incident): the 150-400ms latency this 2s
+  // interval was sized against was measured with nobody actually
+  // drafting -- get_draft_state's rank_by_id computation + sort over the
+  // available player pool is synchronous CPU-bound Python that blocks
+  // the single-threaded event loop for its whole duration. Under real
+  // concurrent draft traffic for the first time tonight, running that
+  // computation on every client's every-2s poll backed up the entire
+  // server (every other request queued behind it, DB connections sat
+  // "idle in transaction" waiting for the app to get back around to
+  // them). See draft_manager.get_draft_state -- the actual fix is
+  // caching that computation, not just polling less; this is the fast,
+  // safe stopgap for the live draft in progress.
   useEffect(() => {
     if (!draft || draft.draft.status !== "in_progress") return;
-    const interval = setInterval(fetchState, 2000);
+    const interval = setInterval(fetchState, 5000);
     return () => clearInterval(interval);
   }, [draft?.draft.status, fetchState]);
 

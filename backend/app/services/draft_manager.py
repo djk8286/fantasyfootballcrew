@@ -39,6 +39,22 @@ from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_sal
 # Humans can draft them manually.
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF", "DB", "DL", "LB"}
 
+# Cache for get_draft_state's rank computation (2026-09-09 incident):
+# build_rank_by_id is synchronous CPU-bound Python (sorts the whole
+# available+picked player pool, computing a real fallback score for
+# every player with no search_rank) that was running on EVERY poll of
+# an endpoint every connected draft-room client hits every few seconds
+# -- blocking the single-threaded event loop long enough, under real
+# concurrent draft traffic, to back up every other request on the
+# process. rank_by_id only actually depends on the drafted-player SET
+# and scoring_config, and picks only ever grow one at a time for a
+# given draft (no un-drafting), so the pick COUNT is a valid, free
+# version key: the same count for a draft can only ever mean the same
+# set. In-memory/per-process only -- same tradeoff scheduler.py's
+# _last_seen_week etc. already accept; a redeploy mid-draft just
+# recomputes once more on the next poll, not a correctness issue.
+_rank_cache: dict[str, tuple[int, dict[str, int]]] = {}
+
 # Standard starting-lineup slots and realistic bench caps, used by
 # get_ai_mock_pick's need scoring below. A human drafter reliably fills
 # starters before taking depth, and rarely stockpiles many bench K/DEF/QB
@@ -541,10 +557,18 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
     # why the old static name list this replaced was stale and wrong).
     # Computed over the combined pool so a drafted player's shown rank
     # sits on the exact same scale as everyone still on the board, rather
-    # than each being ranked against a different subset.
-    rank_by_id = build_rank_by_id(
-        list(available_players) + list(picked_players_by_id.values()), scoring_config
-    )
+    # than each being ranked against a different subset. Cached by pick
+    # count -- see _rank_cache's module-level comment for why that's a
+    # valid, free version key; this is the actual fix for the
+    # 2026-09-09 incident, not just polling less often.
+    cached = _rank_cache.get(draft_id)
+    if cached and cached[0] == len(picks):
+        rank_by_id = cached[1]
+    else:
+        rank_by_id = build_rank_by_id(
+            list(available_players) + list(picked_players_by_id.values()), scoring_config
+        )
+        _rank_cache[draft_id] = (len(picks), rank_by_id)
 
     # Sort by rank, then position priority.
     pos_order = ["RB", "WR", "QB", "TE", "K", "DEF", "DB", "DL", "LB"]
