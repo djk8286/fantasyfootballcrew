@@ -3,19 +3,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.core.database import get_db
 from app.core.limiter import limiter
-from datetime import datetime
 from app.services.draft_manager import (
     create_draft,
     start_draft,
-    schedule_draft,
-    cancel_draft_schedule,
     make_pick,
     get_draft_state,
     run_mock_draft,
     get_ai_mock_pick,
     quickstart_mock_draft,
 )
-from app.services.draft_notification_service import notify_draft_scheduled, notify_draft_live, fire_and_forget_notify
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.league import League
 from app.models.team import Team
@@ -28,10 +24,6 @@ from app.api.deps import (
     require_league_participant,
 )
 from pydantic import BaseModel
-
-
-class DraftScheduleRequest(BaseModel):
-    scheduled_for: datetime
 
 
 class TimerUpdate(BaseModel):
@@ -152,65 +144,14 @@ async def api_start_draft(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start a pending draft. Commissioner only. Same "it's live" email
-    scheduler.py's auto-start sends -- a manual click and hitting a
-    scheduled time are the same event from a recipient's perspective.
-    Notification is fire-and-forget (see draft_notification_service's
-    module docstring -- awaiting a whole league's worth of sequential
-    Resend calls on this request's own DB connection is what caused the
-    2026-09-09 pool-exhaustion incident)."""
+    """Start a pending draft. Commissioner only."""
     _, league = await _get_draft_and_league_or_404(draft_id, db)
     require_commissioner(league, current_user)
     try:
         draft = await start_draft(db, draft_id)
+        return {"id": draft.id, "status": draft.status.value, "current_round": draft.current_round}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    fire_and_forget_notify(notify_draft_live(league.id, draft.id))
-    return {"id": draft.id, "status": draft.status.value, "current_round": draft.current_round}
-
-
-@router.post("/{draft_id}/schedule")
-@limiter.limit("20/hour")
-async def api_schedule_draft(
-    request: Request,
-    draft_id: str,
-    data: DraftScheduleRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Set/change a PENDING draft's auto-start time. Commissioner only.
-    Fires the "draft scheduled" confirmation the instant the commissioner
-    acts (not on some later scheduler tick, unlike the reminder/live
-    emails) -- but as a background task, not awaited inline. See
-    draft_notification_service's module docstring."""
-    _, league = await _get_draft_and_league_or_404(draft_id, db)
-    require_commissioner(league, current_user)
-    try:
-        draft = await schedule_draft(db, draft_id, data.scheduled_for)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    fire_and_forget_notify(notify_draft_scheduled(league.id, draft.id))
-    return {"id": draft.id, "scheduled_for": draft.scheduled_for}
-
-
-@router.delete("/{draft_id}/schedule")
-@limiter.limit("20/hour")
-async def api_cancel_draft_schedule(
-    request: Request,
-    draft_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Clear a scheduled time -- back to manual-start-only. No email;
-    unlike scheduling one, there's nothing time-sensitive to tell anyone
-    right now."""
-    _, league = await _get_draft_and_league_or_404(draft_id, db)
-    require_commissioner(league, current_user)
-    try:
-        draft = await cancel_draft_schedule(db, draft_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"id": draft.id, "scheduled_for": draft.scheduled_for}
 
 
 @router.post("/{draft_id}/pick")
@@ -247,10 +188,7 @@ async def api_get_draft_by_league(league_id: str, db: AsyncSession = Depends(get
     draft = result.scalars().first()
     if not draft:
         raise HTTPException(status_code=404, detail="No draft found for this league")
-    return {
-        "id": draft.id, "league_id": draft.league_id, "status": draft.status.value,
-        "scheduled_for": draft.scheduled_for,
-    }
+    return {"id": draft.id, "league_id": draft.league_id, "status": draft.status.value}
 
 
 @router.get("/{draft_id}/state")

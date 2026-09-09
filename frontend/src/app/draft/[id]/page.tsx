@@ -22,8 +22,6 @@ import {
   List,
   Timer,
   Info,
-  Calendar,
-  X,
 } from "lucide-react";
 
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
@@ -154,7 +152,6 @@ interface DraftState {
     total_picks: number;
     timer_seconds: number;
     current_pick_started_at: string | null;
-    scheduled_for: string | null;
   };
   picks: DraftPick[];
   current_team_id: string | null;
@@ -325,17 +322,6 @@ export default function DraftPage() {
     return () => clearInterval(interval);
   }, [draft?.draft.status, fetchState]);
 
-  // Separate, slower poll while PENDING -- specifically so a scheduled
-  // draft's auto-start (scheduler.py hitting scheduled_for) actually
-  // shows up for everyone sitting on this waiting screen, not just
-  // whoever happens to refresh at that moment. 15s since nothing here
-  // is turn-based yet -- there's no clock anyone's staring down.
-  useEffect(() => {
-    if (!draft || draft.draft.status !== "pending") return;
-    const interval = setInterval(fetchState, 15000);
-    return () => clearInterval(interval);
-  }, [draft?.draft.status, fetchState]);
-
   const handleStartDraft = async () => {
     setActionLoading("start");
     try {
@@ -343,42 +329,6 @@ export default function DraftPage() {
       await fetchState();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start draft");
-    }
-    setActionLoading("");
-  };
-
-  // Scheduling -- not gated client-side (require_commissioner on the
-  // backend is what actually enforces it), same as Start Draft/Run Mock
-  // right above, which have never had a client-side check either.
-  const [scheduleInput, setScheduleInput] = useState("");
-  const [schedulingError, setSchedulingError] = useState("");
-
-  const handleScheduleDraft = async () => {
-    if (!scheduleInput) return;
-    setActionLoading("schedule");
-    setSchedulingError("");
-    try {
-      // datetime-local has no timezone of its own -- it's implicitly
-      // the browser's local time, so `new Date(...)` (which also
-      // assumes local time for a string with no offset) converts it
-      // correctly to a real instant before this goes out as UTC.
-      const iso = new Date(scheduleInput).toISOString();
-      await draftsApi.schedule(id, iso);
-      await fetchState();
-    } catch (err: unknown) {
-      setSchedulingError(err instanceof Error ? err.message : "Failed to schedule draft");
-    }
-    setActionLoading("");
-  };
-
-  const handleCancelSchedule = async () => {
-    setActionLoading("schedule");
-    setSchedulingError("");
-    try {
-      await draftsApi.cancelSchedule(id);
-      await fetchState();
-    } catch (err: unknown) {
-      setSchedulingError(err instanceof Error ? err.message : "Failed to cancel schedule");
     }
     setActionLoading("");
   };
@@ -623,59 +573,9 @@ export default function DraftPage() {
             <p className="text-surface-400 text-sm mb-2">
               {draft.draft.num_teams} teams · {draft.draft.total_rounds} rounds · Snake
             </p>
-            <p className="text-surface-500 text-xs mb-2">
+            <p className="text-surface-500 text-xs mb-8">
               {draft.draft.draft_type === "snake" ? "Serpentine order, randomized" : "Budget auction draft"}
             </p>
-
-            {/* Scheduling -- everyone gets an email the moment this is
-                set, a reminder about an hour out, and another the moment
-                it actually goes live (auto-start hitting the time below,
-                or Start Draft clicked manually). */}
-            <div className="mb-8 w-full max-w-sm">
-              {draft.draft.scheduled_for ? (
-                <div className="p-3.5 bg-surface-800 border border-surface-700 rounded-xl text-sm">
-                  <div className="flex items-center justify-center gap-2 text-gold-400 font-semibold">
-                    <Calendar className="w-4 h-4" />
-                    {new Date(draft.draft.scheduled_for).toLocaleString(undefined, {
-                      weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
-                    })}
-                  </div>
-                  <p className="text-surface-500 text-xs mt-1">
-                    It'll start automatically -- everyone's already been emailed.
-                  </p>
-                  <button
-                    onClick={handleCancelSchedule}
-                    disabled={actionLoading === "schedule"}
-                    className="mt-2 inline-flex items-center gap-1 text-surface-500 hover:text-red-400 transition-colors text-xs font-medium disabled:opacity-50"
-                  >
-                    <X className="w-3 h-3" /> Cancel schedule
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="flex items-center gap-2 w-full">
-                    <input
-                      type="datetime-local"
-                      value={scheduleInput}
-                      onChange={(e) => setScheduleInput(e.target.value)}
-                      className="flex-1 px-3 py-2 bg-surface-800 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
-                    />
-                    <button
-                      onClick={handleScheduleDraft}
-                      disabled={!scheduleInput || actionLoading === "schedule"}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 border border-surface-600 text-xs font-bold text-surface-200 hover:text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                    >
-                      <Calendar className="w-3.5 h-3.5" /> Schedule
-                    </button>
-                  </div>
-                  <p className="text-surface-500 text-xs">Optional -- schedule it to start automatically, or just start it now below.</p>
-                </div>
-              )}
-              {schedulingError && (
-                <p className="mt-2 text-red-400 text-xs" role="alert">{schedulingError}</p>
-              )}
-            </div>
-
             {/* Team claiming before start */}
             {draft.team_order && draft.team_order.length > 0 && (
               <div className="mb-8 w-full max-w-md">

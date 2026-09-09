@@ -34,7 +34,7 @@ The manual commissioner button still exists unchanged, as a force-recalc
 option (e.g. after a late roster correction).
 """
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 from app.core.database import async_session
@@ -44,10 +44,7 @@ from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.services.waiver_service import process_league_waivers
-from app.services.draft_manager import start_draft
-from app.services.draft_notification_service import notify_draft_reminder, notify_draft_live, fire_and_forget_notify
 from app.models.league import League, DraftStatus, LeagueType
-from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
 from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service
 from app.services.ai_service import AIService
@@ -56,7 +53,6 @@ from app.models.weekly_scores_recap import WeeklyScoresRecap
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
 STATS_SYNC_INTERVAL = 2 * 60    # 2 minutes -- as live as practical without hammering Sleeper's free API
 ERROR_BACKOFF = 60              # after a failed iteration, wait this long before the next attempt
-DRAFT_REMINDER_LEAD_MINUTES = 60  # send the "starting soon" reminder this far out from a scheduled draft
 
 
 def _league_is_auto_scorable(league: League) -> bool:
@@ -240,65 +236,6 @@ async def _process_all_league_best_ball_window_reopens_once(now: datetime | None
 
     if processed:
         print(f"[scheduler] Auto-processed waivers on management-window reopen for {processed} league(s)")
-
-
-async def _process_scheduled_drafts_once() -> None:
-    """Runs every tick, independent of the regular-season gate (a draft
-    can be scheduled preseason -- that's the whole point) -- same
-    "own independent pass" shape as the Best-Ball window check above.
-
-    Each PENDING draft with a scheduled_for is handled one of two ways
-    per tick, mutually exclusive:
-      - scheduled_for has passed -> auto-start it, then send the "it's
-        live" email (same one a manual Start Draft click sends).
-      - scheduled_for is within DRAFT_REMINDER_LEAD_MINUTES and no
-        reminder has gone out yet -> send the reminder, stamp
-        reminder_email_sent_at so this doesn't repeat every tick between
-        now and the actual start.
-
-    Each draft is wrapped individually so one league's bad state (e.g.
-    fewer than 2 teams, which start_draft rejects) can't take the rest
-    of the pass down -- it just keeps failing quietly on every tick
-    until someone fixes that league, same tolerance the other per-league
-    passes in this file have for their own failure modes."""
-    now = datetime.now(timezone.utc)
-    async with async_session() as db:
-        result = await db.execute(
-            select(Draft).where(Draft.status == DraftRunStatus.PENDING, Draft.scheduled_for.isnot(None))
-        )
-        drafts = result.scalars().all()
-
-        started, reminded, failed = 0, 0, 0
-        for draft in drafts:
-            scheduled_for = draft.scheduled_for
-            if scheduled_for.tzinfo is None:
-                scheduled_for = scheduled_for.replace(tzinfo=timezone.utc)
-
-            league_result = await db.execute(select(League).where(League.id == draft.league_id))
-            league = league_result.scalar_one_or_none()
-            if not league:
-                continue
-
-            try:
-                if scheduled_for <= now:
-                    started_draft = await start_draft(db, draft.id)
-                    # Fire-and-forget, own session -- see
-                    # draft_notification_service's module docstring for
-                    # why this must never await inline on THIS session
-                    # (held open across the whole scheduler loop).
-                    fire_and_forget_notify(notify_draft_live(league.id, started_draft.id))
-                    started += 1
-                elif draft.reminder_email_sent_at is None and (scheduled_for - now) <= timedelta(minutes=DRAFT_REMINDER_LEAD_MINUTES):
-                    draft.reminder_email_sent_at = now
-                    await db.commit()
-                    fire_and_forget_notify(notify_draft_reminder(league.id, draft.id))
-                    reminded += 1
-            except Exception as e:
-                failed += 1
-                print(f"[scheduler] Scheduled-draft processing failed for draft {draft.id}: {e}")
-
-    if started or reminded or failed:
-        print(f"[scheduler] Scheduled drafts: {started} auto-started, {reminded} reminded" + (f", {failed} failed" if failed else ""))
 
 
 async def _notify_matchup_results_for_all_leagues_once(season: int, week: int) -> None:
@@ -533,15 +470,6 @@ async def run_scheduler() -> None:
             _last_seen_dashboard_week = dash_key
         except Exception as e:
             print(f"[scheduler] Dashboard summaries week-check failed: {e}")
-
-        # Scheduled drafts: independent of the regular-season gate above
-        # (a draft can legitimately be scheduled preseason, or even in
-        # the offseason for next year) -- same reasoning Dashboard AI
-        # Summaries' own independent check has.
-        try:
-            await _process_scheduled_drafts_once()
-        except Exception as e:
-            print(f"[scheduler] Scheduled-draft pass failed: {e}")
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:

@@ -343,13 +343,6 @@ export const draftsApi = {
     }),
   start: (draftId: string) =>
     apiRequest(`/api/v1/drafts/${draftId}/start`, { method: "POST" }),
-  schedule: (draftId: string, scheduledForIso: string) =>
-    apiRequest(`/api/v1/drafts/${draftId}/schedule`, {
-      method: "POST",
-      body: { scheduled_for: scheduledForIso },
-    }),
-  cancelSchedule: (draftId: string) =>
-    apiRequest(`/api/v1/drafts/${draftId}/schedule`, { method: "DELETE" }),
   makePick: (draftId: string, teamId: string, playerId: string) =>
     apiRequest(`/api/v1/drafts/${draftId}/pick`, {
       method: "POST",
