@@ -258,6 +258,16 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/${teamId}/claim-co-owner`, {
       method: "POST",
     }),
+  // Commissioner-side equivalents -- assign/remove on someone else's
+  // behalf, gated server-side to the league's commissioner/co-commissioners.
+  removeOwner: (teamId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/remove-owner`, { method: "POST" }),
+  removeCoOwner: (teamId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/remove-co-owner`, { method: "POST" }),
+  assignOwner: (teamId: string, identifier: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/assign-owner`, { method: "POST", body: { identifier } }),
+  assignCoOwner: (teamId: string, identifier: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/assign-co-owner`, { method: "POST", body: { identifier } }),
   bulkAddCpu: (leagueId: string, count: number, namePrefix = "CPU Team") =>
     apiRequest(`/api/v1/teams/bulk-add/${leagueId}`, {
       method: "POST",

@@ -460,6 +460,61 @@ export default function LeagueDetailPage() {
     setClaimingTeamId(null);
   };
 
+  // ─── Commissioner team-management overrides ─────────────────────
+  // Fixing a wrong claim, or hand-assigning teams, used to have no path
+  // at all -- ownership was entirely self-service. These call the same
+  // require_commissioner-gated endpoints a manager (not the person
+  // being assigned/removed) uses.
+
+  const handleRemoveOwner = async (teamId: string, teamName: string) => {
+    if (!window.confirm(`Remove the owner from "${teamName}"? If there's a co-owner, they become the new owner; otherwise the team goes back to CPU.`)) return;
+    setClaimingTeamId(teamId);
+    try {
+      await teamsApi.removeOwner(teamId);
+      await refreshTeams();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to remove owner");
+    }
+    setClaimingTeamId(null);
+  };
+
+  const handleRemoveCoOwnerAsManager = async (teamId: string) => {
+    setClaimingTeamId(teamId);
+    try {
+      await teamsApi.removeCoOwner(teamId);
+      await refreshTeams();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to remove co-owner");
+    }
+    setClaimingTeamId(null);
+  };
+
+  const handleAssignOwner = async (teamId: string) => {
+    const identifier = window.prompt("Assign this team to (username or email):");
+    if (!identifier || !identifier.trim()) return;
+    setClaimingTeamId(teamId);
+    try {
+      await teamsApi.assignOwner(teamId, identifier.trim());
+      await refreshTeams();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to assign owner");
+    }
+    setClaimingTeamId(null);
+  };
+
+  const handleAssignCoOwner = async (teamId: string) => {
+    const identifier = window.prompt("Assign co-owner (username or email):");
+    if (!identifier || !identifier.trim()) return;
+    setClaimingTeamId(teamId);
+    try {
+      await teamsApi.assignCoOwner(teamId, identifier.trim());
+      await refreshTeams();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to assign co-owner");
+    }
+    setClaimingTeamId(null);
+  };
+
   const handleRequestToJoin = async () => {
     setSubmittingJoinRequest(true);
     setJoinRequestError("");
@@ -1251,7 +1306,7 @@ export default function LeagueDetailPage() {
                       </td>
                       <td className="px-5 py-4">
                         {owner.isHuman ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className={`inline-flex items-center gap-1 ${
                               owner.isMe ? "text-gold-400" : "text-surface-400"
                             }`}>
@@ -1268,11 +1323,55 @@ export default function LeagueDetailPage() {
                                 {claimingTeamId === team.id ? "Joining…" : "Join as Co-Owner"}
                               </button>
                             )}
+                            {/* Commissioner overrides -- fixing a wrong
+                                claim or hand-assigning teams no longer
+                                requires the affected person to act. */}
+                            {isLeagueManager && (
+                              <>
+                                <button
+                                  onClick={() => handleRemoveOwner(team.id, team.name)}
+                                  disabled={claimingTeamId === team.id}
+                                  className="text-[10px] text-surface-500 hover:text-red-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
+                                  title="Remove this team's owner"
+                                >
+                                  Remove
+                                </button>
+                                {team.co_owner_id ? (
+                                  <button
+                                    onClick={() => handleRemoveCoOwnerAsManager(team.id)}
+                                    disabled={claimingTeamId === team.id}
+                                    className="text-[10px] text-surface-500 hover:text-red-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
+                                    title="Remove this team's co-owner"
+                                  >
+                                    Remove Co-Owner
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => handleAssignCoOwner(team.id)}
+                                    disabled={claimingTeamId === team.id}
+                                    className="text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
+                                    title="Assign a specific person as co-owner"
+                                  >
+                                    Assign Co-Owner
+                                  </button>
+                                )}
+                              </>
+                            )}
                           </div>
                         ) : (
                           <span className="text-surface-500 italic flex items-center gap-1">
                             <Bot className="w-3.5 h-3.5" />
                             {owner.label}
+                            {isLeagueManager && (
+                              <button
+                                onClick={() => handleAssignOwner(team.id)}
+                                disabled={claimingTeamId === team.id}
+                                className="ml-1 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50 not-italic"
+                                title="Assign a specific person to this team"
+                              >
+                                Assign
+                              </button>
+                            )}
                           </span>
                         )}
                       </td>

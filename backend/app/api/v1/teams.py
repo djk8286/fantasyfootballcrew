@@ -7,7 +7,7 @@ from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
-from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league
+from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league, require_commissioner
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
 from app.core.avatars import validate_avatar_url
@@ -237,6 +237,147 @@ async def claim_team(
         raise HTTPException(status_code=400, detail="Team is already owned by a user")
 
     await apply_team_claim(db, team, league, current_user)
+    await db.commit()
+    await db.refresh(team)
+    return team
+
+
+class AssignTeamRequest(BaseModel):
+    # Username or email -- whichever the commissioner has on hand for
+    # the person they're assigning. Same "look up either" convenience
+    # as nothing else in this app currently offers (co-commissioner
+    # add/remove take a raw user_id instead), but a commissioner
+    # assigning teams realistically knows a name or email, not a UUID.
+    identifier: str
+
+
+async def _find_user_by_identifier(db: AsyncSession, identifier: str) -> User | None:
+    result = await db.execute(select(User).where((User.username == identifier) | (User.email == identifier)))
+    return result.scalar_one_or_none()
+
+
+async def _get_team_and_league_or_404(team_id: str, db: AsyncSession) -> tuple[Team, League]:
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return team, league
+
+
+@router.post("/{team_id}/remove-owner", response_model=TeamRead)
+@limiter.limit("30/hour")
+async def remove_owner(
+    request: Request,
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Commissioner-only. If there's a co-owner, they're promoted to
+    owner rather than leaving the team ownerless -- flipping back to
+    CPU only happens when nobody's left managing it at all. Same
+    ownerless-team-becomes-CPU shape self-service account deletion
+    already produces elsewhere."""
+    team, league = await _get_team_and_league_or_404(team_id, db)
+    require_commissioner(league, current_user)
+
+    if team.owner_id is None:
+        raise HTTPException(status_code=400, detail="This team has no owner to remove")
+
+    if team.co_owner_id:
+        team.owner_id = team.co_owner_id
+        team.co_owner_id = None
+    else:
+        team.owner_id = None
+        team.is_cpu = True
+
+    await db.commit()
+    await db.refresh(team)
+    return team
+
+
+@router.post("/{team_id}/remove-co-owner", response_model=TeamRead)
+@limiter.limit("30/hour")
+async def remove_co_owner(
+    request: Request,
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Commissioner-only. Leaves the primary owner untouched."""
+    team, league = await _get_team_and_league_or_404(team_id, db)
+    require_commissioner(league, current_user)
+
+    if team.co_owner_id is None:
+        raise HTTPException(status_code=400, detail="This team has no co-owner to remove")
+
+    team.co_owner_id = None
+    await db.commit()
+    await db.refresh(team)
+    return team
+
+
+@router.post("/{team_id}/assign-owner", response_model=TeamRead)
+@limiter.limit("30/hour")
+async def assign_owner(
+    request: Request,
+    team_id: str,
+    data: AssignTeamRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Commissioner-only equivalent of claim_team, on someone else's
+    behalf -- requires the team to currently be CPU (same as self-claim)
+    so this can't silently steamroll an existing real owner; remove_owner
+    first if that's actually what's wanted. Bypasses user_can_join_league
+    entirely -- a commissioner assigning a team is itself the
+    authorization, same reasoning accept_invite's auto-claim doesn't
+    re-check it either."""
+    team, league = await _get_team_and_league_or_404(team_id, db)
+    require_commissioner(league, current_user)
+
+    if not team.is_cpu:
+        raise HTTPException(status_code=400, detail="Team is already owned -- remove the current owner first")
+
+    target = await _find_user_by_identifier(db, data.identifier.strip())
+    if not target:
+        raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
+
+    await apply_team_claim(db, team, league, target)
+    await db.commit()
+    await db.refresh(team)
+    return team
+
+
+@router.post("/{team_id}/assign-co-owner", response_model=TeamRead)
+@limiter.limit("30/hour")
+async def assign_co_owner(
+    request: Request,
+    team_id: str,
+    data: AssignTeamRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Commissioner-only equivalent of claim_co_owner, on someone else's
+    behalf."""
+    team, league = await _get_team_and_league_or_404(team_id, db)
+    require_commissioner(league, current_user)
+
+    if team.is_cpu:
+        raise HTTPException(status_code=400, detail="Assign this team's owner first, not a co-owner")
+    if team.co_owner_id:
+        raise HTTPException(status_code=400, detail="This team already has a co-owner -- remove them first")
+
+    target = await _find_user_by_identifier(db, data.identifier.strip())
+    if not target:
+        raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
+    if target.id == team.owner_id:
+        raise HTTPException(status_code=400, detail="That person already owns this team")
+
+    team.co_owner_id = target.id
     await db.commit()
     await db.refresh(team)
     return team
