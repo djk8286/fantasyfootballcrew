@@ -15,7 +15,7 @@ from app.services.draft_manager import (
     get_ai_mock_pick,
     quickstart_mock_draft,
 )
-from app.services.draft_notification_service import notify_draft_scheduled, notify_draft_live
+from app.services.draft_notification_service import notify_draft_scheduled, notify_draft_live, fire_and_forget_notify
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.league import League
 from app.models.team import Team
@@ -154,14 +154,18 @@ async def api_start_draft(
 ):
     """Start a pending draft. Commissioner only. Same "it's live" email
     scheduler.py's auto-start sends -- a manual click and hitting a
-    scheduled time are the same event from a recipient's perspective."""
+    scheduled time are the same event from a recipient's perspective.
+    Notification is fire-and-forget (see draft_notification_service's
+    module docstring -- awaiting a whole league's worth of sequential
+    Resend calls on this request's own DB connection is what caused the
+    2026-09-09 pool-exhaustion incident)."""
     _, league = await _get_draft_and_league_or_404(draft_id, db)
     require_commissioner(league, current_user)
     try:
         draft = await start_draft(db, draft_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    await notify_draft_live(db, league, draft)
+    fire_and_forget_notify(notify_draft_live(league.id, draft.id))
     return {"id": draft.id, "status": draft.status.value, "current_round": draft.current_round}
 
 
@@ -175,17 +179,17 @@ async def api_schedule_draft(
     current_user: User = Depends(get_current_user),
 ):
     """Set/change a PENDING draft's auto-start time. Commissioner only.
-    Sends the "draft scheduled" confirmation immediately, synchronously
-    -- unlike the reminder/live emails (genuinely time-dependent, so
-    they're scheduler.py's job), this one fires the instant the
-    commissioner acts, not on some later tick."""
+    Fires the "draft scheduled" confirmation the instant the commissioner
+    acts (not on some later scheduler tick, unlike the reminder/live
+    emails) -- but as a background task, not awaited inline. See
+    draft_notification_service's module docstring."""
     _, league = await _get_draft_and_league_or_404(draft_id, db)
     require_commissioner(league, current_user)
     try:
         draft = await schedule_draft(db, draft_id, data.scheduled_for)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    await notify_draft_scheduled(db, league, draft)
+    fire_and_forget_notify(notify_draft_scheduled(league.id, draft.id))
     return {"id": draft.id, "scheduled_for": draft.scheduled_for}
 
 

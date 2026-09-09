@@ -3,10 +3,23 @@ Tests for draft scheduling: POST/DELETE /drafts/{id}/schedule, the "it's
 live" email on both manual start and scheduler auto-start, and
 scheduler.py's _process_scheduled_drafts_once (auto-start + reminder).
 
+Every notify_* in draft_notification_service opens its OWN session (see
+that module's docstring re: the 2026-09-09 connection-pool-exhaustion
+incident this replaced) and is fired via fire_and_forget_notify --
+asyncio.create_task, not awaited inline. Two consequences for these
+tests: (1) draft_notification_service's own `async_session` reference
+needs patching to this test's isolated DB too, separately from
+scheduler.py's (each `from ... import async_session` binds its own
+module-level name -- patching one doesn't patch the other), and (2) a
+test has to explicitly wait for whatever background task got created
+before checking EmailSendLog, since the triggering endpoint/scheduler
+call returns before that task necessarily finishes.
+
 email_service._send stubs (no RESEND_API_KEY in test env) and logs to
 EmailSendLog either way -- these tests check that table rather than
 mocking Resend, same as test_email_send_log.py.
 """
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 import pytest
@@ -19,10 +32,33 @@ from app.models.email_send_log import EmailSendLog
 from app.services.auth_service import create_access_token
 from app.services.draft_manager import create_draft
 import app.services.scheduler as scheduler_module
+import app.services.draft_notification_service as notify_module
 from app.services.scheduler import _process_scheduled_drafts_once
 
 
-async def _run_scheduled_drafts_pass(monkeypatch, db_session_factory):
+@pytest.fixture(autouse=True)
+def _patch_notification_session(monkeypatch, db_session_factory):
+    """Every test in this file needs this -- background notify tasks
+    (fired from both the API endpoints and the scheduler) open their own
+    session via draft_notification_service's async_session, which
+    otherwise points at the real configured DATABASE_URL rather than
+    this test's isolated in-memory DB."""
+    monkeypatch.setattr(notify_module, "async_session", db_session_factory)
+
+
+async def _wait_for_background_notifies() -> None:
+    """Background notify tasks are created (via asyncio.create_task)
+    synchronously inside the triggering call, so they already exist in
+    _background_tasks by the time that call returns -- gathering
+    whatever's still in there (already-finished tasks won't even be in
+    the set anymore, having removed themselves via their done-callback)
+    reliably waits out anything still in flight."""
+    pending = list(notify_module._background_tasks)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _run_scheduled_drafts_pass(monkeypatch, db_session_factory) -> None:
     """_process_scheduled_drafts_once uses app.core.database.async_session
     directly (it's a standalone background-loop function, not a FastAPI
     request handler with an overridable get_db dependency) -- the
@@ -32,6 +68,7 @@ async def _run_scheduled_drafts_pass(monkeypatch, db_session_factory):
     than module-wide so it can't leak into other tests."""
     monkeypatch.setattr(scheduler_module, "async_session", db_session_factory)
     await _process_scheduled_drafts_once()
+    await _wait_for_background_notifies()
 
 
 async def _make_user(db_session_factory):
@@ -75,7 +112,7 @@ async def _email_logs(db_session_factory, email_type: str) -> list[EmailSendLog]
 async def test_schedule_draft_requires_commissioner(client, db_session_factory):
     commissioner, _ = await _make_user(db_session_factory)
     owner, _ = await _make_user(db_session_factory)
-    outsider, outsider_token = await _make_user(db_session_factory)
+    _outsider, outsider_token = await _make_user(db_session_factory)
     league_id = await _make_league_with_teams(db_session_factory, commissioner.id, [commissioner.id, owner.id])
     draft_id = await _create_pending_draft(db_session_factory, league_id)
 
@@ -97,6 +134,7 @@ async def test_schedule_draft_sets_time_and_emails_participants(client, db_sessi
     r = await client.post(f"/drafts/{draft_id}/schedule", json={"scheduled_for": scheduled_for.isoformat()})
     assert r.status_code == 200
     assert r.json()["scheduled_for"] is not None
+    await _wait_for_background_notifies()
 
     async with db_session_factory() as db:
         draft = (await db.execute(select(Draft).where(Draft.id == draft_id))).scalar_one()
@@ -121,6 +159,7 @@ async def test_schedule_draft_rejects_already_started(client, db_session_factory
     scheduled_for = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     r = await client.post(f"/drafts/{draft_id}/schedule", json={"scheduled_for": scheduled_for})
     assert r.status_code == 400
+    await _wait_for_background_notifies()
 
 
 @pytest.mark.asyncio
@@ -133,6 +172,7 @@ async def test_cancel_draft_schedule_clears_time(client, db_session_factory):
     client.headers["Authorization"] = f"Bearer {commissioner_token}"
     scheduled_for = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     await client.post(f"/drafts/{draft_id}/schedule", json={"scheduled_for": scheduled_for})
+    await _wait_for_background_notifies()
 
     r = await client.delete(f"/drafts/{draft_id}/schedule")
     assert r.status_code == 200
@@ -151,6 +191,7 @@ async def test_manual_start_sends_live_email(client, db_session_factory):
     client.headers["Authorization"] = f"Bearer {commissioner_token}"
     r = await client.post(f"/drafts/{draft_id}/start")
     assert r.status_code == 200
+    await _wait_for_background_notifies()
 
     logs = await _email_logs(db_session_factory, "draft_live")
     emailed = {l.to_email for l in logs}

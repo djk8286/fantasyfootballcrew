@@ -45,7 +45,7 @@ from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.services.waiver_service import process_league_waivers
 from app.services.draft_manager import start_draft
-from app.services.draft_notification_service import notify_draft_reminder, notify_draft_live
+from app.services.draft_notification_service import notify_draft_reminder, notify_draft_live, fire_and_forget_notify
 from app.models.league import League, DraftStatus, LeagueType
 from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
@@ -282,12 +282,16 @@ async def _process_scheduled_drafts_once() -> None:
             try:
                 if scheduled_for <= now:
                     started_draft = await start_draft(db, draft.id)
-                    await notify_draft_live(db, league, started_draft)
+                    # Fire-and-forget, own session -- see
+                    # draft_notification_service's module docstring for
+                    # why this must never await inline on THIS session
+                    # (held open across the whole scheduler loop).
+                    fire_and_forget_notify(notify_draft_live(league.id, started_draft.id))
                     started += 1
                 elif draft.reminder_email_sent_at is None and (scheduled_for - now) <= timedelta(minutes=DRAFT_REMINDER_LEAD_MINUTES):
-                    await notify_draft_reminder(db, league, draft)
                     draft.reminder_email_sent_at = now
                     await db.commit()
+                    fire_and_forget_notify(notify_draft_reminder(league.id, draft.id))
                     reminded += 1
             except Exception as e:
                 failed += 1
