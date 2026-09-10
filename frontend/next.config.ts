@@ -12,6 +12,21 @@ import { withSentryConfig } from "@sentry/nextjs";
 const API_ORIGIN =
   process.env.NEXT_PUBLIC_API_URL || "https://fantasyfootballcrew-production.up.railway.app";
 
+// Google AdSense (see src/components/AdSlot.tsx) -- gated on the same
+// env var that gates whether AdSlot renders anything at all, so this
+// widened CSP is completely inert (byte-for-byte the same policy as
+// before AdSlot existed) unless/until NEXT_PUBLIC_ADSENSE_CLIENT_ID is
+// actually set. AdSense needs script-src for its loader, frame-src for
+// the sandboxed iframe each ad creative actually renders inside,
+// connect-src for its own ad-request calls, and img-src for fallback
+// image ads -- all scoped to Google's ad-serving domains specifically,
+// not a blanket googlesyndication wildcard grant to the rest of the CSP.
+const ADS_ENABLED = !!process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID;
+const ADSENSE_SCRIPT_SRC = " https://pagead2.googlesyndication.com https://www.googletagservices.com";
+const ADSENSE_FRAME_SRC = " https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://www.google.com";
+const ADSENSE_CONNECT_SRC = " https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net";
+const ADSENSE_IMG_SRC = " https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net";
+
 const CSP = [
   "default-src 'self'",
   // 'unsafe-inline' here isn't a shortcut -- verified empirically (see
@@ -26,19 +41,25 @@ const CSP = [
   // since the app has no dangerouslySetInnerHTML anywhere (verified via
   // grep), so React's own escaping already covers the main thing a
   // strict script-src would otherwise buy.
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${ADS_ENABLED ? ADSENSE_SCRIPT_SRC : ""}`,
   // Tailwind/Next's runtime style injection needs inline styles -- this
   // is the standard, common exception for style-src, unlike script-src.
   "style-src 'self' 'unsafe-inline'",
   // sleepercdn.com: PlayerAvatar.tsx loads Sleeper headshots via a raw
   // <img> (see backend's sleeper_avatar_url()), not next/image, so it's
   // a real cross-origin image load, not just the remotePatterns config.
-  `img-src 'self' data: https://sleepercdn.com`,
+  `img-src 'self' data: https://sleepercdn.com${ADS_ENABLED ? ADSENSE_IMG_SRC : ""}`,
   "font-src 'self' data:",
   // supabase.co: the Supabase client exists (src/lib/supabase.ts) but
   // isn't actually wired to any auth flow yet -- included now so turning
   // it on later doesn't also require remembering to update this policy.
-  `connect-src 'self' ${API_ORIGIN} https://*.supabase.co https://*.sentry.io`,
+  `connect-src 'self' ${API_ORIGIN} https://*.supabase.co https://*.sentry.io${ADS_ENABLED ? ADSENSE_CONNECT_SRC : ""}`,
+  // No frame-src before AdSense -- this app has never embedded anything
+  // in an iframe, so it fell back to default-src 'self' (fine, since
+  // nothing needed otherwise). AdSense's actual ad creative renders
+  // inside a sandboxed cross-origin iframe, which needs an explicit
+  // allowance here.
+  `frame-src 'self'${ADS_ENABLED ? ADSENSE_FRAME_SRC : ""}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

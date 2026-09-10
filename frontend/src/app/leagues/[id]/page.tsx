@@ -10,6 +10,7 @@ import PositionBadge from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import Avatar from "@/components/Avatar";
 import AvatarEditor from "@/components/AvatarEditor";
+import AdSlot from "@/components/AdSlot";
 import {
   Trophy,
   Users,
@@ -1675,6 +1676,14 @@ export default function LeagueDetailPage() {
           </div>
         </div>
       </section>
+
+      {/* Renders nothing at all unless AdSense is actually configured --
+          see AdSlot.tsx. Bottom of the page, below every real feature,
+          so it can never push anything else down or compete for
+          attention with something the user came here to do. */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+        <AdSlot placement="league-page-bottom" />
+      </div>
 
       <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>

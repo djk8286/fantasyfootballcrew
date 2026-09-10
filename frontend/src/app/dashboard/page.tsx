@@ -7,6 +7,7 @@ import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import PositionBadge from "@/components/PositionBadge";
 import RankBadge from "@/components/ui/RankBadge";
+import AdSlot from "@/components/AdSlot";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -674,6 +675,12 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* Renders nothing at all unless AdSense is actually configured --
+          see AdSlot.tsx. */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+        <AdSlot placement="dashboard-bottom" />
       </section>
     </div>
   );
