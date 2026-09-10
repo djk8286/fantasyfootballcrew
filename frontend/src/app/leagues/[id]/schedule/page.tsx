@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi } from "@/lib/api-client";
+import { standingsApi, leaguesApi, nflApi } from "@/lib/api-client";
 import { ChevronLeft, ChevronRight as ChevronRightIcon, Calendar, Swords } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -61,21 +61,21 @@ export default function SchedulePage() {
   // fetched separately (see TeamWeeklyScore above), null until it loads
   // or if this week has never been calculated (bye/future week).
   const [breakdownByTeam, setBreakdownByTeam] = useState<Map<string, Record<string, PlayerBreakdownEntry>>>(new Map());
-  const [expandedMatchup, setExpandedMatchup] = useState<number | null>(null);
 
   useEffect(() => {
     Promise.all([
       leaguesApi.get(leagueId) as Promise<LeagueData>,
       standingsApi.getSchedule(leagueId, CURRENT_YEAR) as Promise<{ schedule: ScheduleWeek[] }>,
+      // The real live NFL week (straight from Sleeper) -- not a guess
+      // from whichever matchups happen to still be marked "projected."
+      // Falls back to week 1 if this fails for any reason, same as
+      // before this existed.
+      nflApi.getCurrentWeek().catch(() => null),
     ])
-      .then(([l, s]) => {
+      .then(([l, s, nflState]) => {
         setLeague(l);
         setSchedule(s.schedule || []);
-        // Land on the first week that isn't fully decided yet, if any.
-        const upcoming = (s.schedule || []).find((wk) =>
-          wk.matchups.some((m) => m.team_a.is_projected || m.team_b.is_projected),
-        );
-        setSelectedWeek(upcoming?.week ?? 1);
+        setSelectedWeek(nflState?.week ?? 1);
       })
       .catch(() => setError("Failed to load schedule"))
       .finally(() => setLoading(false));
@@ -85,7 +85,6 @@ export default function SchedulePage() {
   // `schedule` fetch above only ever carries team totals/projections.
   useEffect(() => {
     if (!leagueId || !selectedWeek) return;
-    setExpandedMatchup(null); // collapse on week change, same as before this existed
     standingsApi
       .getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR)
       .then((data) => {
@@ -187,7 +186,6 @@ export default function SchedulePage() {
                 const aBreakdown = breakdownByTeam.get(m.team_a.id);
                 const bBreakdown = breakdownByTeam.get(m.team_b.id);
                 const hasBreakdown = !!(aBreakdown || bBreakdown);
-                const isExpanded = expandedMatchup === i;
                 return (
                   <div key={i} className="border border-surface-700 rounded-xl p-4">
                     <div className="flex items-center justify-between gap-3">
@@ -220,52 +218,44 @@ export default function SchedulePage() {
                         Projected — based on season average so far
                       </p>
                     )}
-                    {/* Per-player scores alongside the team totals above
-                        -- real current scores (calculate_week runs on
-                        every stats sync, so this reflects a game the
-                        moment it's final, not just once the whole
-                        week's slate wraps up), not just team totals. */}
+                    {/* Every player's real score alongside the team
+                        totals above -- always visible, not tucked
+                        behind a toggle, so you can see how each player
+                        is actually contributing to the matchup at a
+                        glance. calculate_week runs on every stats sync,
+                        so this reflects a game the moment it's final,
+                        not just once the whole week's slate wraps up. */}
                     {hasBreakdown && (
-                      <>
-                        <button
-                          onClick={() => setExpandedMatchup(isExpanded ? null : i)}
-                          className="mt-2 text-[11px] text-surface-500 hover:text-gold-400 transition-colors font-medium block mx-auto"
-                        >
-                          {isExpanded ? "▾ Hide player scores" : "▸ Show player scores"}
-                        </button>
-                        {isExpanded && (
-                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                            {[
-                              { label: m.team_a.name, breakdown: aBreakdown },
-                              { label: m.team_b.name, breakdown: bBreakdown },
-                            ].map(({ label, breakdown }) => (
-                              <div key={label} className="bg-surface-900/50 rounded-lg p-2.5">
-                                <p className="text-surface-500 font-semibold uppercase tracking-wider text-[10px] mb-1.5 truncate">
-                                  {label}
-                                </p>
-                                {breakdown ? (
-                                  <ul className="space-y-1">
-                                    {Object.entries(breakdown)
-                                      .sort(([, a], [, b]) => b.score - a.score)
-                                      .map(([pid, p]) => (
-                                        <li key={pid} className="flex items-center justify-between gap-2">
-                                          <span className="text-surface-300 truncate">
-                                            <span className="text-surface-500">{p.position}</span> {p.name}
-                                          </span>
-                                          <span className="text-white font-mono tabular-nums shrink-0">
-                                            {p.score.toFixed(1)}
-                                          </span>
-                                        </li>
-                                      ))}
-                                  </ul>
-                                ) : (
-                                  <p className="text-surface-600 italic">No breakdown yet</p>
-                                )}
-                              </div>
-                            ))}
+                      <div className="mt-3 pt-3 border-t border-surface-700/50 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                        {[
+                          { label: m.team_a.name, breakdown: aBreakdown },
+                          { label: m.team_b.name, breakdown: bBreakdown },
+                        ].map(({ label, breakdown }) => (
+                          <div key={label} className="bg-surface-900/50 rounded-lg p-2.5">
+                            <p className="text-surface-500 font-semibold uppercase tracking-wider text-[10px] mb-1.5 truncate">
+                              {label}
+                            </p>
+                            {breakdown ? (
+                              <ul className="space-y-1">
+                                {Object.entries(breakdown)
+                                  .sort(([, a], [, b]) => b.score - a.score)
+                                  .map(([pid, p]) => (
+                                    <li key={pid} className="flex items-center justify-between gap-2">
+                                      <span className="text-surface-300 truncate">
+                                        <span className="text-surface-500">{p.position}</span> {p.name}
+                                      </span>
+                                      <span className="text-white font-mono tabular-nums shrink-0">
+                                        {p.score.toFixed(1)}
+                                      </span>
+                                    </li>
+                                  ))}
+                              </ul>
+                            ) : (
+                              <p className="text-surface-600 italic">No breakdown yet</p>
+                            )}
                           </div>
-                        )}
-                      </>
+                        ))}
+                      </div>
                     )}
                   </div>
                 );

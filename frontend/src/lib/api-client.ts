@@ -402,6 +402,15 @@ export const standingsApi = {
     apiRequest(`/api/v1/leagues/${leagueId}/standings/schedule?year=${year}&weeks=${weeks}`),
 };
 
+// The real, live "what NFL week is it right now" -- straight from
+// Sleeper (see backend's app/api/v1/nfl.py), not a frontend guess. The
+// single source every page uses to decide which week's scores to show
+// by default.
+export const nflApi = {
+  getCurrentWeek: () =>
+    apiRequest<{ season: number; week: number; season_type: string }>("/api/v1/nfl/current-week"),
+};
+
 // AI
 export const aiApi = {
   lineup: (teamId: string) =>

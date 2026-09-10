@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi, teamsApi } from "@/lib/api-client";
+import { standingsApi, leaguesApi, teamsApi, nflApi } from "@/lib/api-client";
 import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
@@ -258,8 +258,14 @@ export default function StandingsPage() {
     Promise.all([
       leaguesApi.get(leagueId).catch(() => null),
       loadStandings(),
+      // The real live NFL week (straight from Sleeper) -- the old logic
+      // here read a `week` field that Standing/RawStandingEntry never
+      // actually carried, so `(st[0] as any)?.week` was always
+      // undefined and this page silently defaulted to Week 1 no matter
+      // what week it actually was.
+      nflApi.getCurrentWeek().catch(() => null),
     ])
-      .then(([leagueData, st]) => {
+      .then(([leagueData, st, nflState]) => {
         if (!leagueData) {
           setError("League not found");
           return;
@@ -267,8 +273,7 @@ export default function StandingsPage() {
         setLeague(leagueData as LeagueData);
         setStandings(st);
 
-        // Determine max week — try to infer from data or default to 1
-        const wk = st.length > 0 ? Math.max(1, Math.ceil((st[0] as any)?.week || 1)) : 1;
+        const wk = nflState?.week ?? 1;
         setMaxWeek(wk);
         setSelectedWeek(wk);
       })

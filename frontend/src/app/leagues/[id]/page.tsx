@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
+import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, nflApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
 import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import PositionBadge from "@/components/PositionBadge";
@@ -357,29 +357,31 @@ export default function LeagueDetailPage() {
 
   // Each player's REAL current-week score (not last season's total) --
   // "League dashboard/team management: show the team's players and
-  // their active/current scores." Same current-week heuristic the
-  // Schedule page already uses (first week with an undecided/projected
-  // matchup), then the same /standings/weekly breakdown Standings and
-  // Schedule both already render. team_id -> player_id -> {score, ...}.
+  // their active/current scores." Week comes from the real live NFL
+  // state (nflApi.getCurrentWeek -- straight from Sleeper, same as the
+  // backend scheduler uses), not a frontend guess -- that's also what
+  // makes "week 1 started Wednesday, doesn't roll to week 2 until after
+  // Monday night" just work correctly without any date math here.
+  // team_id -> player_id -> {score, ...}. currentWeekLoaded distinguishes
+  // "haven't fetched yet" from "fetched, nobody's played" so a player
+  // isn't shown a wrong/stale number for a split second on load.
   const [currentWeekBreakdown, setCurrentWeekBreakdown] = useState<Record<string, Record<string, { name: string; score: number; position: string }>>>({});
+  const [currentWeekLoaded, setCurrentWeekLoaded] = useState(false);
   useEffect(() => {
     if (!id) return;
-    const year = new Date().getFullYear();
-    standingsApi
-      .getSchedule(id, year)
-      .then(async (s) => {
-        const weeks = (s as { schedule?: { week: number; matchups: { team_a: { is_projected: boolean }; team_b: { is_projected: boolean } }[] }[] })?.schedule || [];
-        const upcoming = weeks.find((wk) => wk.matchups.some((m) => m.team_a.is_projected || m.team_b.is_projected));
-        const week = upcoming?.week ?? 1;
-        const weekly = await standingsApi.getWeeklyScores(id, week, year).catch(() => null);
+    nflApi
+      .getCurrentWeek()
+      .then(async ({ season, week }) => {
+        const weekly = await standingsApi.getWeeklyScores(id, week, season).catch(() => null);
         const teamScores = (weekly as { team_scores?: { team_id: string; lineup_data: { breakdown?: Record<string, { name: string; score: number; position: string }> } | null }[] })?.team_scores || [];
         const byTeam: Record<string, Record<string, { name: string; score: number; position: string }>> = {};
         for (const ts of teamScores) {
           if (ts.lineup_data?.breakdown) byTeam[ts.team_id] = ts.lineup_data.breakdown;
         }
         setCurrentWeekBreakdown(byTeam);
+        setCurrentWeekLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => setCurrentWeekLoaded(true));
   }, [id]);
 
   // Fixed hover card state -- same pattern the draft room already uses.
@@ -1573,23 +1575,23 @@ export default function LeagueDetailPage() {
                       <div className="space-y-1 max-h-40 overflow-y-auto">
                         {roster.map((p) => {
                           const live = currentWeekBreakdown[team.id]?.[p.id];
+                          // This week's real score only -- 0 (not last
+                          // season's total) for a player who simply
+                          // hasn't played yet this week, so the number
+                          // shown here always means "this week," never a
+                          // number that looks current but isn't.
+                          const weeklyScore = live?.score ?? 0;
                           return (
                           <div key={p.id} className="flex items-center gap-1.5 text-xs">
                             <PlayerAvatar player={p as any} size="sm" onHover={handlePlayerHover as any} />
                             <span className="text-surface-300 truncate flex-1">{p.full_name}</span>
-                            {live != null ? (
+                            {currentWeekLoaded && (
                               <span
-                                className="text-[10px] text-green-400 font-semibold shrink-0"
-                                title="This week's actual score so far"
+                                className={`text-[10px] font-semibold shrink-0 ${weeklyScore > 0 ? "text-green-400" : "text-surface-500"}`}
+                                title={live != null ? "This week's actual score so far" : "Hasn't played yet this week"}
                               >
-                                {live.score.toFixed(1)}
+                                {weeklyScore.toFixed(1)}
                               </span>
-                            ) : (
-                              p.season_points != null && (
-                                <span className="text-[10px] text-gold-400/80 font-semibold shrink-0" title="Last season's total">
-                                  {Math.round(p.season_points * 10) / 10}
-                                </span>
-                              )
                             )}
                             <PositionBadge pos={p.position} />
                           </div>
