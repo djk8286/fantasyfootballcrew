@@ -59,6 +59,17 @@ interface Matchup {
   week: number;
 }
 
+// One player's contribution within a team's weekly lineup_data.breakdown
+// (backend: calculate_week builds this, get_weekly_scores enriches it
+// with `name` -- see standings.py). Real per-player scores, not just
+// the team's single total.
+interface PlayerBreakdownEntry {
+  name: string;
+  score: number;
+  position: string;
+  stats?: Record<string, unknown>;
+}
+
 interface TeamWeeklyScore {
   team_id: string;
   total_score: number;
@@ -67,6 +78,7 @@ interface TeamWeeklyScore {
     coach_bonus?: number;
     win_bonus?: number;
     rivalry_bonus?: number;
+    breakdown?: Record<string, PlayerBreakdownEntry>;
     [key: string]: unknown;
   } | null;
 }
@@ -159,8 +171,20 @@ export default function StandingsPage() {
   const [calculating, setCalculating] = useState(false);
   const [calcMessage, setCalcMessage] = useState("");
 
+  // Which matchup card (by index) currently has its per-player score
+  // breakdown expanded -- one at a time, collapsed by default so the
+  // matchup list stays scannable.
+  const [expandedMatchup, setExpandedMatchup] = useState<number | null>(null);
+
   const myTeamId = getMyTeamId(leagueId);
   const currentUserId = getCurrentUserId();
+  // team_id -> that team's per-player score breakdown this week (real
+  // current scores, not just the team total) -- see PlayerBreakdownEntry.
+  const breakdownByTeam = new Map(
+    (weeklyData?.team_scores || [])
+      .filter((ts) => ts.lineup_data?.breakdown)
+      .map((ts) => [ts.team_id, ts.lineup_data!.breakdown as Record<string, PlayerBreakdownEntry>]),
+  );
   // team_id -> that team's coach_bonus/win_bonus/rivalry_bonus
   // contribution this week, for the small badge next to each team's
   // score in the matchup card below (Phase 2 Step 6, extended for
@@ -305,9 +329,19 @@ export default function StandingsPage() {
   };
 
   const handleRefresh = async () => {
+    // Was only re-fetching standings (win/loss records) -- the actual
+    // scores a user watching a live week is staring at (weeklyData, the
+    // per-matchup current totals) never changed, so clicking this button
+    // while games were in progress looked like it did nothing at all.
+    // handleCalculate (below) already refreshed both; this now matches it.
     setLoading(true);
     try {
-      setStandings(await loadStandings());
+      const [newStandings, newWeekly] = await Promise.all([
+        loadStandings(),
+        standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR).catch(() => null),
+      ]);
+      setStandings(newStandings);
+      if (newWeekly) setWeeklyData(newWeekly as WeeklyScoresResponse);
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh");
@@ -786,6 +820,10 @@ export default function StandingsPage() {
                     {weeklyData.matchups.map((m, i) => {
                       const homeBonus = coachBonusByTeam.get(m.home_team_id);
                       const awayBonus = coachBonusByTeam.get(m.away_team_id);
+                      const homeBreakdown = breakdownByTeam.get(m.home_team_id);
+                      const awayBreakdown = breakdownByTeam.get(m.away_team_id);
+                      const hasBreakdown = !!(homeBreakdown || awayBreakdown);
+                      const isExpanded = expandedMatchup === i;
                       return (
                       <div
                         key={i}
@@ -839,6 +877,55 @@ export default function StandingsPage() {
                             </span>
                           </div>
                         </div>
+
+                        {/* Per-player score breakdown -- real current
+                            scores for each player on both rosters, not
+                            just the team totals above. Collapsed by
+                            default; only shown once at least one side
+                            actually has a breakdown to show (a week
+                            that's never been calculated has none). */}
+                        {hasBreakdown && (
+                          <>
+                            <button
+                              onClick={() => setExpandedMatchup(isExpanded ? null : i)}
+                              className="mt-2 text-[11px] text-surface-500 hover:text-gold-400 transition-colors font-medium"
+                            >
+                              {isExpanded ? "▾ Hide player scores" : "▸ Show player scores"}
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                {[
+                                  { label: m.home_team, breakdown: homeBreakdown },
+                                  { label: m.away_team, breakdown: awayBreakdown },
+                                ].map(({ label, breakdown }) => (
+                                  <div key={label} className="bg-surface-900/50 rounded-lg p-2.5">
+                                    <p className="text-surface-500 font-semibold uppercase tracking-wider text-[10px] mb-1.5 truncate">
+                                      {label}
+                                    </p>
+                                    {breakdown ? (
+                                      <ul className="space-y-1">
+                                        {Object.entries(breakdown)
+                                          .sort(([, a], [, b]) => b.score - a.score)
+                                          .map(([pid, p]) => (
+                                            <li key={pid} className="flex items-center justify-between gap-2">
+                                              <span className="text-surface-300 truncate">
+                                                <span className="text-surface-500">{p.position}</span> {p.name}
+                                              </span>
+                                              <span className="text-white font-mono tabular-nums shrink-0">
+                                                {p.score.toFixed(1)}
+                                              </span>
+                                            </li>
+                                          ))}
+                                      </ul>
+                                    ) : (
+                                      <p className="text-surface-600 italic">No breakdown yet</p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                       );
                     })}

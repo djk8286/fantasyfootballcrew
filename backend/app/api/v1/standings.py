@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.league import League, LeagueType
 from app.models.weekly_score import WeeklyScore
+from app.models.player import Player
 from app.models.user import User
 from app.services.standings_service import (
     calculate_week,
@@ -97,15 +98,40 @@ async def get_weekly_scores(
     # Get matchups
     matchups = await get_weekly_matchups(league_id, week, year, db)
 
-    team_scores = [
-        {
+    # Enrich lineup_data.breakdown (player_id -> {score, stats, position},
+    # already computed and stored by calculate_week) with each player's
+    # name -- 2026-09-09, so the frontend can show "who actually
+    # contributed what" instead of just each team's single total. Purely
+    # an API-response enrichment (WeeklyScore.lineup_data itself is
+    # unchanged in the DB) -- a batch lookup here rather than N+1 calls
+    # from the frontend, and rather than denormalizing names into the
+    # stored JSON where they could later go stale against a player's
+    # actual current name.
+    all_player_ids: set[str] = set()
+    for ws in scores:
+        breakdown = (ws.lineup_data or {}).get("breakdown") if ws.lineup_data else None
+        if breakdown:
+            all_player_ids.update(breakdown.keys())
+    players_by_id: dict[str, Player] = {}
+    if all_player_ids:
+        players_result = await db.execute(select(Player).where(Player.id.in_(all_player_ids)))
+        players_by_id = {p.id: p for p in players_result.scalars().all()}
+
+    team_scores = []
+    for ws in scores:
+        lineup_data = ws.lineup_data
+        if lineup_data and lineup_data.get("breakdown"):
+            enriched_breakdown = {
+                pid: {**entry, "name": (f"{p.first_name} {p.last_name}" if (p := players_by_id.get(pid)) else "Unknown Player")}
+                for pid, entry in lineup_data["breakdown"].items()
+            }
+            lineup_data = {**lineup_data, "breakdown": enriched_breakdown}
+        team_scores.append({
             "team_id": ws.team_id,
             "total_score": ws.total_score,
             "projected_score": ws.projected_score,
-            "lineup_data": ws.lineup_data,
-        }
-        for ws in scores
-    ]
+            "lineup_data": lineup_data,
+        })
 
     return {
         "league_id": league_id,
