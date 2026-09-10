@@ -158,6 +158,48 @@ DEFAULT_ROSTER_SLOTS = {
 LONG_TD_YARDAGE_THRESHOLD = 40
 
 
+def _category_applies_to_position(category: str, player_position: str | None) -> bool:
+    """2026-09-10 fix -- a real bug, not a hypothetical: the category
+    loop below used to apply ANY category's rules to ANY player, as long
+    as a matching stat key happened to exist in that player's OWN stats
+    dict, with no regard for whether the category was ever meant to
+    apply to that player's position at all.
+
+    This was invisible under DEFAULT_SCORING's modest 0.02/yd kr_yd/
+    pr_yd rate, but a real beta league had customized "defense.kr_yd" to
+    0.4/yd (a deliberate, reasonable choice for how much a TEAM's return
+    game should be worth) -- and Sleeper's per-player stat line for a WR
+    who also returns kicks includes that SAME kr_yd key on the
+    individual player, not just on the team DEF unit's synthetic entry.
+    The result: a WR with 1 catch for 4 yards and 80 unremarkable kick-
+    return yards scored 33.26 points in a half-PPR league, because his
+    own return yards got priced at the DEFENSE unit's rate. Confirmed
+    against the exact real numbers (0.9 real receiving + 80*0.4 + 9*0.04
+    = 33.26, to the penny) before writing this fix.
+
+    "passing"/"rushing"/"receiving" stay ungated -- a WR/RB legitimately
+    rushing for a TD (an end-around) is common and expected, and
+    DEF/K/IDP stat lines never contain those keys anyway. "defense"/
+    "kicking"/"idp" are now strictly scoped to the position(s) each one
+    was ever conceptually meant for -- individual IDP scoring already
+    has its own dedicated "idp" category for exactly this reason
+    (idp_sack et al, distinct from "defense"'s team-aggregate sack);
+    there was never a legitimate reason for "defense" to score anyone
+    who isn't the team DEF unit itself.
+
+    A None/unrecognized position skips every gated category rather than
+    defaulting to "apply it anyway" -- the whole point of this fix is
+    that an unverified position must never be treated as license to
+    apply team-defense/kicker/IDP rates to someone it wasn't meant for."""
+    if category == "defense":
+        return player_position == "DEF"
+    if category == "kicking":
+        return player_position == "K"
+    if category == "idp":
+        return player_position in ("DB", "DL", "LB")
+    return True  # passing/rushing/receiving, and any future/custom category
+
+
 def calculate_player_score(
     player_stats: Dict[str, Any],
     scoring_config: Dict[str, Any],
@@ -185,6 +227,8 @@ def calculate_player_score(
             continue
         if category == "bonus":
             continue
+        if not _category_applies_to_position(category, player_position):
+            continue
 
         if not isinstance(rules, dict):
             continue
@@ -209,6 +253,7 @@ def calculate_player_score(
 def calculate_player_score_by_category(
     player_stats: Dict[str, Any],
     scoring_config: Dict[str, Any],
+    player_position: str = None,
 ) -> Dict[str, float]:
     """Same category loop as calculate_player_score, but returns the
     per-category point breakdown instead of one summed total -- what
@@ -238,6 +283,8 @@ def calculate_player_score_by_category(
 
     for category, rules in scoring_config.items():
         if category in ("custom", "bonus"):
+            continue
+        if not _category_applies_to_position(category, player_position):
             continue
         if not isinstance(rules, dict):
             continue

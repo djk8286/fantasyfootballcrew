@@ -369,6 +369,54 @@ class TestEdgeCases:
         # -5*0.1 (-0.5) + 1*1 (1) + 8*0.1 (0.8) = 1.3
         assert score == 1.3
 
+    # 2026-09-10: a real, reported bug -- a WR who also returns kicks
+    # got scored using the DEFENSE category's kr_yd/pr_yd rate for his
+    # OWN individual return yards, because Sleeper's per-player stat
+    # line for a returner includes those same keys the team DEF unit's
+    # aggregate uses, and the category loop had no position gating at
+    # all. Exact real numbers from the report: 1 catch/4 yds (half-PPR:
+    # 0.5+0.1*4=0.9), 80 kick-return yds, 9 punt-return yds, in a league
+    # with defense.kr_yd=0.4/pr_yd=0.04 -- the bug priced this at
+    # 0.9 + 80*0.4 + 9*0.04 = 33.26 for a single catch.
+    def test_wr_own_return_yards_not_scored_at_team_defense_rate(self):
+        config = {
+            "receiving": {"rec": 0.5, "rec_yd": 0.1},
+            "defense": {"kr_yd": 0.4, "pr_yd": 0.04},
+        }
+        stats = {"rec": 1, "rec_yd": 4, "kr_yd": 80, "pr_yd": 9}
+        score = calculate_player_score(stats, config, "WR")
+        # Only the real receiving line -- kr_yd/pr_yd belong to the team
+        # DEF unit's own scoring, never an individual offensive player's.
+        assert score == 0.9
+
+    def test_team_defense_still_scores_its_own_return_yards(self):
+        """The fix must not silently zero out kr_yd/pr_yd for the
+        entity the defense category is actually meant to score."""
+        config = {"defense": {"kr_yd": 0.4, "pr_yd": 0.04}}
+        stats = {"kr_yd": 80, "pr_yd": 9}
+        score = calculate_player_score(stats, config, "DEF")
+        assert score == 32.36
+
+    def test_kicking_category_gated_to_kickers(self):
+        config = {"kicking": {"fgm_40_49": 4}}
+        # An offensive player would never realistically carry an fgm_*
+        # key, but the gate must hold regardless of what's in the dict.
+        assert calculate_player_score({"fgm_40_49": 1}, config, "WR") == 0.0
+        assert calculate_player_score({"fgm_40_49": 1}, config, "K") == 4.0
+
+    def test_idp_category_gated_to_idp_positions(self):
+        config = {"idp": {"idp_sack": 4}}
+        assert calculate_player_score({"idp_sack": 1}, config, "WR") == 0.0
+        assert calculate_player_score({"idp_sack": 1}, config, "LB") == 4.0
+
+    def test_unknown_position_skips_gated_categories_not_applies_them(self):
+        """No position info at all must never be treated as license to
+        apply team-defense/kicker/IDP rates to whoever it is."""
+        config = {"defense": {"kr_yd": 0.4}, "receiving": {"rec_yd": 0.1}}
+        stats = {"kr_yd": 80, "rec_yd": 4}
+        score = calculate_player_score(stats, config, None)
+        assert score == 0.4  # only the ungated receiving category applied
+
 
 # ─── Bonus calculations ──────────────────────────────────────────────
 

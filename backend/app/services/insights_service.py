@@ -92,7 +92,8 @@ def _compute_category_variance(weekly_scores: list[WeeklyScore], scoring_config:
         team_week_by_category: dict[str, float] = defaultdict(float)
         for player_entry in breakdown.values():
             stats = player_entry.get("stats") or {}
-            for category, points in calculate_player_score_by_category(stats, scoring_config).items():
+            position = player_entry.get("position")
+            for category, points in calculate_player_score_by_category(stats, scoring_config, position).items():
                 team_week_by_category[category] += points
         for category, total in team_week_by_category.items():
             per_category_team_week_totals[category].append(total)
