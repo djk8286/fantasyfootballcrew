@@ -14,6 +14,12 @@ import {
   Shield,
 } from "lucide-react";
 
+interface CustomBonusRule {
+  stat_name: string;
+  threshold: number;
+  points: number;
+}
+
 interface ScoringConfig {
   passing: Record<string, number>;
   rushing: Record<string, number>;
@@ -21,7 +27,10 @@ interface ScoringConfig {
   defense: Record<string, number>;
   idp?: Record<string, number>;
   kicking: Record<string, number>;
-  bonus: Record<string, number>;
+  // A bonus entry is either the legacy plain number (matched against
+  // scoring_engine.py's fixed bonus_mappings table) or a configurable-
+  // threshold CustomBonusRule -- see _calculate_bonus's docstring.
+  bonus: Record<string, number | CustomBonusRule>;
   [key: string]: unknown;
 }
 
@@ -33,7 +42,7 @@ interface ScoringConfig {
 // button silently produced a scoring_config that scored those categories as
 // 0 for every player, every week. "Reset to Defaults" was never affected --
 // it fetches the real defaults from the backend instead of using these.
-const IDP_DEFAULTS = { idp_tkl_solo: 1, idp_tkl_ast: 0.5, idp_tkl_loss: 2, idp_sack: 4, idp_int: 6, idp_ff: 4, idp_fum_rec: 4, idp_pass_def: 2 };
+const IDP_DEFAULTS = { idp_tkl_solo: 1, idp_tkl_ast: 0.5, idp_tkl_loss: 2, idp_sack: 4, idp_int: 6, idp_ff: 4, idp_fum_rec: 4, idp_pass_def: 2, idp_def_td: 6 };
 
 const PRESETS = [
   {
@@ -45,7 +54,7 @@ const PRESETS = [
       receiving: { rec: 0, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
       defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
       idp: { ...IDP_DEFAULTS },
-      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_60p: 6, xpm: 1 },
       bonus: { pass_300_yds: 0, rush_100_yds: 0, rec_100_yds: 0 },
     }),
   },
@@ -58,7 +67,7 @@ const PRESETS = [
       receiving: { rec: 0.5, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
       defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
       idp: { ...IDP_DEFAULTS },
-      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_60p: 6, xpm: 1 },
       bonus: { pass_300_yds: 0, rush_100_yds: 0, rec_100_yds: 0 },
     }),
   },
@@ -71,7 +80,7 @@ const PRESETS = [
       receiving: { rec: 1.0, rec_yd: 0.1, rec_td: 6, rec_2pt: 2 },
       defense: { sack: 1, int: 2, fum_rec: 2, safe: 2, def_td: 6, st_fum_rec: 2, st_td: 6, kr_yd: 0.02, pr_yd: 0.02 },
       idp: { ...IDP_DEFAULTS },
-      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_50p: 5, xpm: 1 },
+      kicking: { fgm_20_29: 3, fgm_30_39: 3, fgm_40_49: 4, fgm_50_59: 5, fgm_60p: 6, xpm: 1 },
       bonus: { pass_300_yds: 3, rush_100_yds: 3, rec_100_yds: 3 },
     }),
   },
@@ -118,13 +127,24 @@ const LABELS: Record<string, Record<string, string>> = {
     idp_ff: "Forced Fumble",
     idp_fum_rec: "Fumble Recovery",
     idp_pass_def: "Pass Defended",
+    // The defender's OWN touchdown (pick-six, fumble/blocked-kick return
+    // TD) -- previously only ever credited to the team defense slot
+    // ("defense.def_td" above), never to the individual player who
+    // scored it.
+    idp_def_td: "Defensive/Return TD",
   },
   kicking: {
     fgm_20_29: "FG 20-29 yards",
     fgm_30_39: "FG 30-39 yards",
     fgm_40_49: "FG 40-49 yards",
     fgm_50_59: "FG 50-59 yards",
-    fgm_50p: "FG 50+ yards",
+    // Was "fgm_50p" ("FG 50+ yards") -- that key is actually a
+    // cumulative 50-or-more counter that already includes every 50-59
+    // make too, so scoring it alongside fgm_50_59 double-counted every
+    // 50-59 kick and scored a real 60+ kick the same as a 50-59 (no
+    // separate rule existed for it at all). fgm_60p is Sleeper's real,
+    // distinct 60+ bucket -- confirmed against live 2025 stats.
+    fgm_60p: "FG 60+ yards",
     xpm: "Extra Point",
   },
   bonus: {
@@ -145,6 +165,17 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 const CATEGORY_ORDER = ["passing", "rushing", "receiving", "defense", "idp", "kicking", "bonus"];
+
+// Configurable-threshold bonus rows -- see the "bonus" category's custom
+// editor below and scoring_engine.py's _calculate_bonus docstring. One
+// fixed key per stat (not a free-form add-your-own list) keeps this
+// simple to reason about while still covering the exact ask ("allow 400
+// passing yards instead of 300").
+const CUSTOM_BONUS_STATS: { key: string; statName: string; label: string }[] = [
+  { key: "pass_yds_bonus", statName: "pass_yd", label: "Passing Yards" },
+  { key: "rush_yds_bonus", statName: "rush_yd", label: "Rushing Yards" },
+  { key: "rec_yds_bonus", statName: "rec_yd", label: "Receiving Yards" },
+];
 
 export default function ScoringPage() {
   const params = useParams();
@@ -192,6 +223,39 @@ export default function ScoringPage() {
   const applyPreset = (presetIndex: number) => {
     const newConfig = PRESETS[presetIndex].build();
     setConfig(newConfig);
+  };
+
+  // Configurable-threshold bonuses (2026-09-09) -- lets a commissioner
+  // pick ANY yard cutoff (e.g. 400 passing instead of being stuck on the
+  // fixed 300/350/400 options the old bonus keys hardcoded). Stored as a
+  // dict-shaped value under its own bonus key (see scoring_engine.py's
+  // _calculate_bonus docstring) alongside the plain-number legacy bonus
+  // keys, which keeps every already-saved league's bonus config working
+  // completely unchanged unless a commissioner explicitly turns one of
+  // these on.
+  const updateCustomBonus = (key: string, statName: string, field: "threshold" | "points", value: number) => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const bonus = { ...prev.bonus };
+      const current = bonus[key];
+      const existing: CustomBonusRule =
+        current && typeof current === "object" ? current : { stat_name: statName, threshold: 0, points: 0 };
+      bonus[key] = { ...existing, stat_name: statName, [field]: value };
+      return { ...prev, bonus };
+    });
+  };
+
+  const toggleCustomBonus = (key: string, statName: string, enabled: boolean) => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const bonus = { ...prev.bonus };
+      if (enabled) {
+        bonus[key] = { stat_name: statName, threshold: 0, points: 0 };
+      } else {
+        delete bonus[key];
+      }
+      return { ...prev, bonus };
+    });
   };
 
   const resetToDefaults = async () => {
@@ -337,7 +401,7 @@ export default function ScoringPage() {
         {config && (
           <div className="space-y-6">
             {CATEGORY_ORDER.map((category) => {
-              const rules = config[category] as Record<string, number> | undefined;
+              const rules = config[category] as Record<string, number | CustomBonusRule> | undefined;
               if (!rules || Object.keys(rules).length === 0) return null;
               const labels = LABELS[category] || {};
 
@@ -353,7 +417,11 @@ export default function ScoringPage() {
                     </h3>
                   </div>
                   <div className="divide-y divide-surface-700/50">
-                    {Object.entries(rules).map(([stat, value]) => {
+                    {/* Configurable-threshold bonus entries are dict-shaped
+                        ({stat_name, threshold, points}), not a plain
+                        number -- they get their own editor below, not
+                        this generic per-stat number input. */}
+                    {Object.entries(rules).filter((entry): entry is [string, number] => typeof entry[1] === "number").map(([stat, value]) => {
                       const label = labels[stat] || stat;
                       return (
                         <div
@@ -471,6 +539,62 @@ export default function ScoringPage() {
                             {opt.label}
                           </button>
                         ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Configurable-threshold bonuses -- lets a commissioner
+                      pick ANY yard cutoff (e.g. 400 passing) instead of
+                      being limited to the fixed 300/350/400-style keys
+                      above. Stored as a dict-shaped bonus entry (see
+                      scoring_engine.py's _calculate_bonus docstring), so
+                      turning one on adds a NEW key rather than replacing
+                      the quick-toggle keys above -- both kinds of bonus
+                      can be active on the same league at once. */}
+                  {category === "bonus" && (
+                    <div className="px-5 py-3 bg-surface-900/50 border-t border-surface-700/50">
+                      <p className="text-xs text-surface-500 mb-2">
+                        Custom Yardage Bonus <span className="text-surface-600">(pick your own threshold)</span>
+                      </p>
+                      <div className="space-y-2">
+                        {CUSTOM_BONUS_STATS.map(({ key, statName, label }) => {
+                          const rule = rules[key];
+                          const custom = rule && typeof rule === "object" ? rule : null;
+                          return (
+                            <div key={key} className="flex items-center gap-2 flex-wrap">
+                              <label className="flex items-center gap-1.5 text-xs text-surface-300 w-32 shrink-0">
+                                <input
+                                  type="checkbox"
+                                  checked={!!custom}
+                                  onChange={(e) => toggleCustomBonus(key, statName, e.target.checked)}
+                                  className="rounded border-surface-600 bg-surface-900 text-gold-400 focus:ring-gold-400"
+                                />
+                                {label}
+                              </label>
+                              {custom && (
+                                <>
+                                  <span className="text-[11px] text-surface-500">at</span>
+                                  <input
+                                    type="number"
+                                    step="1"
+                                    min="1"
+                                    value={custom.threshold}
+                                    onChange={(e) => updateCustomBonus(key, statName, "threshold", parseFloat(e.target.value) || 0)}
+                                    className="w-20 px-2 py-1 bg-surface-900 border border-surface-600 rounded-lg text-white text-xs text-right focus:outline-none focus:ring-1 focus:ring-gold-400 font-mono"
+                                  />
+                                  <span className="text-[11px] text-surface-500">yds =</span>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={custom.points}
+                                    onChange={(e) => updateCustomBonus(key, statName, "points", parseFloat(e.target.value) || 0)}
+                                    className="w-16 px-2 py-1 bg-surface-900 border border-surface-600 rounded-lg text-white text-xs text-right focus:outline-none focus:ring-1 focus:ring-gold-400 font-mono"
+                                  />
+                                  <span className="text-[11px] text-surface-500">pts</span>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

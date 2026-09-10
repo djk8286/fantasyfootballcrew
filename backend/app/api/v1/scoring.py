@@ -144,7 +144,6 @@ async def calculate_score(request: Request, input: ScoringCalculatorInput):
 
     # Build detailed breakdown by category
     breakdown = {}
-    bonuses = {}
     custom_points = 0.0
 
     for category, rules in input.scoring_config.items():
@@ -153,11 +152,11 @@ async def calculate_score(request: Request, input: ScoringCalculatorInput):
             custom_points = _calculate_custom(input.stats, rules)
             continue
         if category == "bonus":
-            from app.services.scoring_engine import _calculate_bonus
-            bonuses = _calculate_bonus(input.stats, rules)
-            # Convert flat dict if _calculate_bonus returned a float
-            if isinstance(bonuses, dict):
-                pass  # Now _calculate_bonus returns float, so this is legacy
+            # Bonus breakdown (which ones are actually active, and for how
+            # much) is built separately below, from the raw config -- this
+            # branch only needs to skip "bonus" so the generic per-stat
+            # loop below it doesn't try to treat bonus rules as plain
+            # stat->points-per-unit entries.
             continue
 
         if not isinstance(rules, dict):
@@ -172,25 +171,43 @@ async def calculate_score(request: Request, input: ScoringCalculatorInput):
         if category_total != 0:
             breakdown[category] = round(category_total, 2)
 
-    from app.services.scoring_engine import _calculate_bonus
-    bonus_total = _calculate_bonus(input.stats, input.scoring_config.get("bonus", {}))
     bonuses = dict(input.scoring_config.get("bonus", {})) if isinstance(input.scoring_config.get("bonus"), dict) else {}
     active_bonuses = {}
+    threshold_map = {
+        "pass_300_yds": ("pass_yd", 300),
+        "pass_350_yds": ("pass_yd", 350),
+        "pass_400_yds": ("pass_yd", 400),
+        "rush_100_yds": ("rush_yd", 100),
+        "rush_150_yds": ("rush_yd", 150),
+        "rush_200_yds": ("rush_yd", 200),
+        "rec_100_yds": ("rec_yd", 100),
+        "rec_150_yds": ("rec_yd", 150),
+        "rec_200_yds": ("rec_yd", 200),
+    }
     for bonus_name, bonus_val in bonuses.items():
-        threshold_map = {
-            "pass_300_yds": ("pass_yd", 300),
-            "pass_350_yds": ("pass_yd", 350),
-            "pass_400_yds": ("pass_yd", 400),
-            "rush_100_yds": ("rush_yd", 100),
-            "rush_150_yds": ("rush_yd", 150),
-            "rush_200_yds": ("rush_yd", 200),
-            "rec_100_yds": ("rec_yd", 100),
-            "rec_150_yds": ("rec_yd", 150),
-            "rec_200_yds": ("rec_yd", 200),
-        }
+        # Configurable-threshold bonus (dict-shaped, see
+        # scoring_engine._calculate_bonus's docstring) -- arbitrary
+        # stat_name/threshold, not one of the fixed keys below.
+        if isinstance(bonus_val, dict):
+            stat = bonus_val.get("stat_name")
+            thresh = bonus_val.get("threshold")
+            points = bonus_val.get("points", 0)
+            if stat and thresh is not None:
+                stat_value = input.stats.get(stat)
+                # Was `input.stats.get(stat, 0) or 0 >= thresh` -- Python
+                # operator precedence makes that `stats.get(...) or (0 >=
+                # thresh)`, which is `False` for any positive threshold,
+                # collapsing the whole condition to just the stat's own
+                # truthiness -- ANY nonzero stat value counted as an
+                # active bonus regardless of whether it actually crossed
+                # the threshold. Parenthesized explicitly here.
+                if stat_value is not None and float(stat_value) >= float(thresh):
+                    active_bonuses[bonus_name] = float(points)
+            continue
         if bonus_name in threshold_map:
             stat, thresh = threshold_map[bonus_name]
-            if input.stats.get(stat, 0) or 0 >= thresh:
+            stat_value = input.stats.get(stat, 0) or 0
+            if stat_value >= thresh:
                 active_bonuses[bonus_name] = float(bonus_val)
 
     return ScoringCalculatorResult(

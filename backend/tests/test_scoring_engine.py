@@ -201,6 +201,29 @@ class TestKickerScoring:
         # 2*3 (6) + 2*4 (8) + 1*5 (5) + 4*1 (4) = 23
         assert score == 23.0
 
+    # 2026-09-09: fgm_50p removed, fgm_60p added -- confirmed against real
+    # 2025 Sleeper data that fgm_50p is a cumulative "50 or more" counter
+    # that ALREADY INCLUDES every fgm_50_59 make (a real kicker's line:
+    # fgm_50_59=1, fgm_50p=2, fgm_60p=1 -- fgm_50p == fgm_50_59 + fgm_60p),
+    # not a third independent bucket. Scoring both fgm_50_59 AND fgm_50p
+    # (the old default) double-counted every 50-59 make and scored a real
+    # 60+ make the same as a 50-59 (fgm_60p had no rule at all).
+    def test_kicker_50_59_scores_once_not_double_counted(self, default_scoring):
+        stats = {"fga": 1.0, "fgm": 1.0, "fgm_50_59": 1.0, "fgm_50p": 1.0, "fgm_lng": 53.0}
+        score = calculate_player_score(stats, default_scoring, "K")
+        assert score == DEFAULT_SCORING["kicking"]["fgm_50_59"]  # 5, not 10
+
+    def test_kicker_60_plus_scores_its_own_higher_rate(self, default_scoring):
+        stats = {"fga": 1.0, "fgm": 1.0, "fgm_50p": 1.0, "fgm_60p": 1.0, "fgm_lng": 61.0}
+        score = calculate_player_score(stats, default_scoring, "K")
+        assert score == DEFAULT_SCORING["kicking"]["fgm_60p"]  # 6
+        assert score > DEFAULT_SCORING["kicking"]["fgm_50_59"]
+
+    def test_kicker_multi_bucket_game_sums_each_bucket_once(self, default_scoring):
+        stats = {"fga": 2.0, "fgm": 2.0, "fgm_40_49": 1.0, "fgm_50p": 1.0, "fgm_60p": 1.0, "fgm_lng": 60.0}
+        score = calculate_player_score(stats, default_scoring, "K")
+        assert score == DEFAULT_SCORING["kicking"]["fgm_40_49"] + DEFAULT_SCORING["kicking"]["fgm_60p"]
+
 
 # ─── Defense scoring ──────────────────────────────────────────────────
 
@@ -280,6 +303,22 @@ class TestIDPScoring:
 
     def test_empty_idp_stats(self, default_scoring):
         assert calculate_player_score({}, default_scoring, "LB") == 0.0
+
+    # idp_def_td -- an individual defender's OWN touchdown (pick-six,
+    # fumble/blocked-kick return TD), distinct from "defense.def_td"
+    # above which only ever credits the TEAM regardless of which of the
+    # 11 players on the field scored it. Real Sleeper key confirmed
+    # against 2025 week 1 data (a real defender's box score: idp_def_td:
+    # 1.0). Before this, an individual defender's TD was never credited
+    # to them at all -- only to their team's DEF slot.
+    def test_idp_defensive_td_credits_the_individual_player(self, default_scoring):
+        stats = {"idp_tkl_solo": 3.0, "idp_sack": 1.0, "idp_def_td": 1.0}
+        score = calculate_player_score(stats, default_scoring, "LB")
+        assert score == 3 * 1 + 1 * 4 + 1 * 6
+
+    def test_idp_defensive_td_zero_without_the_stat(self, default_scoring):
+        stats = {"idp_tkl_solo": 3.0}
+        assert calculate_player_score(stats, default_scoring, "LB") == 3.0
 
 
 # ─── Edge cases ──────────────────────────────────────────────────────
@@ -384,6 +423,29 @@ class TestBonuses:
         stats = {"pass_yd": None}
         bonus = _calculate_bonus(stats, default_scoring["bonus"])
         assert bonus == 0.0
+
+    # Configurable-threshold bonuses (2026-09-09): a commissioner picks
+    # ANY yard cutoff via a dict-shaped rule ({"stat_name", "threshold",
+    # "points"}), not just one of the fixed pass_300/350/400_yds-style
+    # keys above -- e.g. "allow 400 passing yards instead of 300" with a
+    # single rule rather than being limited to the pre-named options.
+    def test_configurable_bonus_custom_threshold(self):
+        rule = {"pass_yds_bonus": {"stat_name": "pass_yd", "threshold": 400, "points": 5}}
+        assert _calculate_bonus({"pass_yd": 399}, rule) == 0.0
+        assert _calculate_bonus({"pass_yd": 400}, rule) == 5.0
+        assert _calculate_bonus({"pass_yd": 450}, rule) == 5.0
+
+    def test_configurable_bonus_coexists_with_legacy_bonus(self):
+        rules = {
+            "pass_300_yds": 3,
+            "pass_yds_bonus": {"stat_name": "pass_yd", "threshold": 400, "points": 5},
+        }
+        # Crosses both the legacy 300 threshold and the custom 400 one --
+        # both apply independently.
+        assert _calculate_bonus({"pass_yd": 410}, rules) == 8.0
+
+    def test_configurable_bonus_missing_fields_is_ignored(self):
+        assert _calculate_bonus({"pass_yd": 500}, {"broken": {"points": 5}}) == 0.0
 
 
 # ─── Long TD estimation ─────────────────────────────────────────────
@@ -714,6 +776,19 @@ class TestConfigValidation:
         """Unknown category should warn."""
         warnings = validate_scoring_config({"unknown_cat": {"a": 1}})
         assert any("unknown" in w.lower() for w in warnings)
+
+    # Configurable-threshold bonuses (2026-09-09) -- a dict-shaped bonus
+    # value must not be flagged as an "invalid points value" the way a
+    # non-numeric legacy bonus entry correctly would be.
+    def test_configurable_bonus_is_valid(self):
+        config = {"bonus": {"pass_yds_bonus": {"stat_name": "pass_yd", "threshold": 400, "points": 5}}}
+        assert validate_scoring_config(config) == []
+
+    def test_configurable_bonus_missing_fields_warns(self):
+        config = {"bonus": {"pass_yds_bonus": {"points": 5}}}
+        warnings = validate_scoring_config(config)
+        assert len(warnings) == 1
+        assert "pass_yds_bonus" in warnings[0]
 
     def test_invalid_points(self):
         """Invalid points value should warn."""

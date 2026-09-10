@@ -34,8 +34,13 @@ from typing import Dict, Any, Optional, List, Union
 #     since the engine sums whichever keys are present rather than combining
 #     them under one name
 #   - kicking "fg_0_39"/"fg_40_49"/"fg_50_plus" -> Sleeper buckets makes as
-#     fgm_20_29/fgm_30_39/fgm_40_49/fgm_50_59/fgm_50p (no bucket below 20
-#     was observed; omitted rather than guessing a key that may not exist)
+#     fgm_20_29/fgm_30_39/fgm_40_49/fgm_50_59/fgm_60p (no bucket below 20
+#     was observed; omitted rather than guessing a key that may not exist).
+#     Sleeper ALSO exposes fgm_50p, but confirmed against real 2025 data
+#     it's a cumulative "50+" counter equal to fgm_50_59 + fgm_60p, not a
+#     fourth independent bucket -- scoring it alongside the two real
+#     buckets it already contains would double-count every 50+ make, so
+#     it's deliberately left out of DEFAULT_SCORING entirely.
 #   - "xp" -> Sleeper's made-extra-point key is "xpm"
 #   - "idp_*" keys -- an individual defender's OWN stats, distinct from the
 #     "defense" category above (which is the TEAM's aggregate takeaways/
@@ -78,12 +83,28 @@ DEFAULT_SCORING = {
         "kr_yd": 0.02,
         "pr_yd": 0.02,
     },
+    # 2026-09-09: fgm_50p REMOVED and fgm_60p added -- confirmed against
+    # real 2025 Sleeper stats (week 1 payload) that fgm_50p is NOT a
+    # distinct "50-59" bucket the way its name alongside fgm_50_59
+    # suggests -- it's a cumulative "50 yards or more" counter that
+    # ALREADY INCLUDES every fgm_50_59 make too (e.g. one real kicker's
+    # week 1 line: fgm_50_59=1, fgm_50p=2, fgm_60p=1 -- fgm_50p is
+    # exactly fgm_50_59 + fgm_60p, not a third independent bucket).
+    # Scoring both fgm_50_59 AND fgm_50p (the old default) double-counted
+    # every 50-59 yard make (10 pts under a "5-point" label) and scored a
+    # 60+ make as if it were only a 50-59 (fgm_60p had no rule at all --
+    # the exact "60+ is wrong, labeled as 50+" bug this replaces). The
+    # three real, mutually-exclusive length buckets Sleeper actually
+    # provides are fgm_40_49 / fgm_50_59 / fgm_60p -- only those are
+    # scored now, each independently adjustable, with 60+ deliberately
+    # priced a point above 50-59 (a harder kick) rather than left at
+    # parity with it.
     "kicking": {
         "fgm_20_29": 3,
         "fgm_30_39": 3,
         "fgm_40_49": 4,
         "fgm_50_59": 5,
-        "fgm_50p": 5,
+        "fgm_60p": 6,
         "xpm": 1,
     },
     # Individual defensive player (IDP) stats -- DL/LB/DB. Standard,
@@ -100,6 +121,14 @@ DEFAULT_SCORING = {
         "idp_ff": 4,
         "idp_fum_rec": 4,
         "idp_pass_def": 2,
+        # An individual defender's OWN touchdown (pick-six, fumble/blocked-
+        # kick return TD, etc.) -- distinct from "defense.def_td" above,
+        # which only ever credits the TEAM regardless of which of the 11
+        # players on the field scored it. Real Sleeper key confirmed
+        # against 2025 week 1 data (idp_def_td: 1.0 on a real defender's
+        # box score) -- without this key, an individual defender's TD was
+        # only ever credited to their team's defense slot, never to them.
+        "idp_def_td": 6,
     },
     "bonus": {
         "pass_300_yds": 3,
@@ -230,8 +259,24 @@ def calculate_player_score_by_category(
     return by_category
 
 
-def _calculate_bonus(player_stats: Dict[str, Any], bonus_rules: Dict[str, float]) -> float:
-    """Calculate threshold-based bonus points."""
+def _calculate_bonus(player_stats: Dict[str, Any], bonus_rules: Dict[str, Any]) -> float:
+    """Calculate threshold-based bonus points.
+
+    Two rule shapes are supported in the same dict, for backward
+    compatibility:
+    - Legacy: `{"pass_300_yds": 3}` -- a plain number, matched against
+      bonus_mappings' fixed name->(stat, threshold) table below. Every
+      already-saved league's bonus config is this shape; nothing about
+      it changes.
+    - Configurable (2026-09-09): `{"pass_yds_bonus": {"stat_name":
+      "pass_yd", "threshold": 400, "points": 3}}` -- a dict value lets a
+      commissioner pick ANY yard cutoff (e.g. 400 instead of the fixed
+      300/350/400 options above), not just one of the pre-named keys.
+      The key name itself is arbitrary under this shape (unlike the
+      legacy table, nothing here depends on matching a specific string),
+      so a league can define as many custom threshold bonuses as it
+      wants, each under its own key.
+    """
     bonus_points = 0.0
 
     bonus_mappings = {
@@ -247,7 +292,26 @@ def _calculate_bonus(player_stats: Dict[str, Any], bonus_rules: Dict[str, float]
         "long_td_bonus": ("long_td", 1),
     }
 
-    for bonus_name, points in bonus_rules.items():
+    for bonus_name, rule in bonus_rules.items():
+        if isinstance(rule, dict):
+            stat_name = rule.get("stat_name")
+            threshold = rule.get("threshold")
+            points = rule.get("points", 0)
+            if not stat_name or threshold is None:
+                continue
+            stat_value = player_stats.get(stat_name)
+            if stat_value is None:
+                continue
+            try:
+                stat_value = float(stat_value)
+                threshold = float(threshold)
+            except (TypeError, ValueError):
+                continue
+            if stat_value >= threshold:
+                bonus_points += float(points)
+            continue
+
+        points = rule
         if bonus_name in bonus_mappings:
             stat_name, threshold = bonus_mappings[bonus_name]
             stat_value = player_stats.get(stat_name)
@@ -531,6 +595,15 @@ def validate_scoring_config(scoring_config: dict) -> List[str]:
             continue
 
         for stat_name, points in rules.items():
+            # "bonus" alone allows a dict value too -- see _calculate_bonus's
+            # docstring for the configurable-threshold shape
+            # ({"stat_name", "threshold", "points"}), which this must not
+            # flag as an "invalid points value" the way every other
+            # category's plain stat->points mapping would be right to.
+            if category == "bonus" and isinstance(points, dict):
+                if "stat_name" not in points or "threshold" not in points:
+                    warnings.append(f"Custom bonus '{stat_name}' missing 'stat_name' or 'threshold'")
+                continue
             try:
                 float(points)
             except (TypeError, ValueError):
