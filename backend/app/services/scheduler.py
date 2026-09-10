@@ -385,6 +385,29 @@ async def _sync_projections_once() -> None:
         print(f"[scheduler] Projections sync failed: {e}")
 
 
+async def _sync_current_week_scoreboard_once(season: int, week: int) -> None:
+    """Real NFL game status (live/final/not-started) for the CURRENT
+    week, refreshed every stats-sync tick (2026-09-10). Before this,
+    nfl_schedule_service.sync_week_scoreboard only ever ran for the
+    PREVIOUS week, once, at the moment the live week transitioned past
+    it (see _generate_nfl_wide_dashboard_summaries_once below) -- fine
+    for that function's own purpose (a wrap-up recap of a week that's
+    already over), but useless for showing "is this player's game live
+    right now" DURING the current week, which is exactly what the
+    per-player score breakdown (standings.py's get_weekly_scores) needs
+    to report a real LIVE/FINAL/not-started status. Same idempotent
+    upsert sync_week_scoreboard already is (matches by ESPN's own
+    event id), so calling it again every 2 minutes just refreshes each
+    game's current state -- not a duplicate-row risk."""
+    try:
+        async with async_session() as db:
+            count = await nfl_schedule_service.sync_week_scoreboard(season, week, 2, db)  # 2 = regular season, ESPN's enum
+        if count:
+            print(f"[scheduler] Synced {count} live NFL game(s) for week {week}, {season}")
+    except Exception as e:
+        print(f"[scheduler] Current-week scoreboard sync failed: {e}")
+
+
 DRAFT_TIMER_CHECK_INTERVAL = 5  # seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
 
 
@@ -500,6 +523,10 @@ async def run_scheduler() -> None:
                 # Never let an auto-score failure interrupt the sync loop
                 # itself -- stats are already synced for this tick either way.
                 print(f"[scheduler] Auto-score pass failed: {e}")
+            try:
+                await _sync_current_week_scoreboard_once(season, week)
+            except Exception as e:
+                print(f"[scheduler] Current-week scoreboard sync pass failed: {e}")
             try:
                 await _process_all_league_playoffs_once(season, week)
             except Exception as e:

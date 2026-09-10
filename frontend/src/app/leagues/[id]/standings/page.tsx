@@ -7,6 +7,7 @@ import { standingsApi, leaguesApi, teamsApi, nflApi } from "@/lib/api-client";
 import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
+import GameStatusBadge from "@/components/GameStatusBadge";
 import {
   ChevronRight,
   Trophy,
@@ -68,6 +69,11 @@ interface PlayerBreakdownEntry {
   score: number;
   position: string;
   stats?: Record<string, unknown>;
+  // Real LIVE/FINAL/not_started per player, and starter-vs-bench
+  // (2026-09-10) -- see GameStatusBadge and schedule/page.tsx's
+  // identical fields.
+  game_status?: string;
+  is_bench?: boolean;
 }
 
 interface TeamWeeklyScore {
@@ -902,31 +908,57 @@ export default function StandingsPage() {
                                 {[
                                   { label: m.home_team, breakdown: homeBreakdown },
                                   { label: m.away_team, breakdown: awayBreakdown },
-                                ].map(({ label, breakdown }) => (
+                                ].map(({ label, breakdown }) => {
+                                  const entries = breakdown ? Object.entries(breakdown) : [];
+                                  const starters = entries.filter(([, p]) => !p.is_bench).sort(([, a], [, b]) => b.score - a.score);
+                                  const bench = entries.filter(([, p]) => p.is_bench).sort(([, a], [, b]) => b.score - a.score);
+                                  return (
                                   <div key={label} className="bg-surface-900/50 rounded-lg p-2.5">
                                     <p className="text-surface-500 font-semibold uppercase tracking-wider text-[10px] mb-1.5 truncate">
                                       {label}
                                     </p>
-                                    {breakdown ? (
-                                      <ul className="space-y-1">
-                                        {Object.entries(breakdown)
-                                          .sort(([, a], [, b]) => b.score - a.score)
-                                          .map(([pid, p]) => (
+                                    {entries.length > 0 ? (
+                                      <>
+                                        <ul className="space-y-1">
+                                          {starters.map(([pid, p]) => (
                                             <li key={pid} className="flex items-center justify-between gap-2">
                                               <span className="text-surface-300 truncate">
                                                 <span className="text-surface-500">{p.position}</span> {p.name}
                                               </span>
-                                              <span className="text-white font-mono tabular-nums shrink-0">
-                                                {p.score.toFixed(1)}
+                                              <span className="flex items-center gap-1.5 shrink-0">
+                                                <GameStatusBadge status={p.game_status} />
+                                                <span className="text-white font-mono tabular-nums">{p.score.toFixed(1)}</span>
                                               </span>
                                             </li>
                                           ))}
-                                      </ul>
+                                        </ul>
+                                        {bench.length > 0 && (
+                                          <>
+                                            <p className="text-surface-600 font-semibold uppercase tracking-wider text-[9px] mt-2 mb-1">
+                                              Bench
+                                            </p>
+                                            <ul className="space-y-1 opacity-60">
+                                              {bench.map(([pid, p]) => (
+                                                <li key={pid} className="flex items-center justify-between gap-2">
+                                                  <span className="text-surface-400 truncate">
+                                                    <span className="text-surface-500">{p.position}</span> {p.name}
+                                                  </span>
+                                                  <span className="flex items-center gap-1.5 shrink-0">
+                                                    <GameStatusBadge status={p.game_status} />
+                                                    <span className="text-surface-300 font-mono tabular-nums">{p.score.toFixed(1)}</span>
+                                                  </span>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </>
+                                        )}
+                                      </>
                                     ) : (
                                       <p className="text-surface-600 italic">No breakdown yet</p>
                                     )}
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </>

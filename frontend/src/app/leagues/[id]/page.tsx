@@ -11,6 +11,7 @@ import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import Avatar from "@/components/Avatar";
 import AvatarEditor from "@/components/AvatarEditor";
 import AdSlot from "@/components/AdSlot";
+import GameStatusBadge from "@/components/GameStatusBadge";
 import {
   Trophy,
   Users,
@@ -365,7 +366,7 @@ export default function LeagueDetailPage() {
   // team_id -> player_id -> {score, ...}. currentWeekLoaded distinguishes
   // "haven't fetched yet" from "fetched, nobody's played" so a player
   // isn't shown a wrong/stale number for a split second on load.
-  const [currentWeekBreakdown, setCurrentWeekBreakdown] = useState<Record<string, Record<string, { name: string; score: number; position: string }>>>({});
+  const [currentWeekBreakdown, setCurrentWeekBreakdown] = useState<Record<string, Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }>>>({});
   const [currentWeekLoaded, setCurrentWeekLoaded] = useState(false);
   useEffect(() => {
     if (!id) return;
@@ -373,8 +374,8 @@ export default function LeagueDetailPage() {
       .getCurrentWeek()
       .then(async ({ season, week }) => {
         const weekly = await standingsApi.getWeeklyScores(id, week, season).catch(() => null);
-        const teamScores = (weekly as { team_scores?: { team_id: string; lineup_data: { breakdown?: Record<string, { name: string; score: number; position: string }> } | null }[] })?.team_scores || [];
-        const byTeam: Record<string, Record<string, { name: string; score: number; position: string }>> = {};
+        const teamScores = (weekly as { team_scores?: { team_id: string; lineup_data: { breakdown?: Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }> } | null }[] })?.team_scores || [];
+        const byTeam: Record<string, Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }>> = {};
         for (const ts of teamScores) {
           if (ts.lineup_data?.breakdown) byTeam[ts.team_id] = ts.lineup_data.breakdown;
         }
@@ -1582,15 +1583,18 @@ export default function LeagueDetailPage() {
                           // number that looks current but isn't.
                           const weeklyScore = live?.score ?? 0;
                           return (
-                          <div key={p.id} className="flex items-center gap-1.5 text-xs">
+                          <div key={p.id} className={`flex items-center gap-1.5 text-xs ${live?.is_bench ? "opacity-50" : ""}`}>
                             <PlayerAvatar player={p as any} size="sm" onHover={handlePlayerHover as any} />
                             <span className="text-surface-300 truncate flex-1">{p.full_name}</span>
                             {currentWeekLoaded && (
-                              <span
-                                className={`text-[10px] font-semibold shrink-0 ${weeklyScore > 0 ? "text-green-400" : "text-surface-500"}`}
-                                title={live != null ? "This week's actual score so far" : "Hasn't played yet this week"}
-                              >
-                                {weeklyScore.toFixed(1)}
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                <GameStatusBadge status={live?.game_status} />
+                                <span
+                                  className={`text-[10px] font-semibold ${weeklyScore > 0 ? "text-green-400" : "text-surface-500"}`}
+                                  title={live != null ? "This week's actual score so far" : "Hasn't played yet this week"}
+                                >
+                                  {weeklyScore.toFixed(1)}
+                                </span>
                               </span>
                             )}
                             <PositionBadge pos={p.position} />

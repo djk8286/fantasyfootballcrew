@@ -6,6 +6,7 @@ from app.core.limiter import limiter
 from app.models.league import League, LeagueType
 from app.models.weekly_score import WeeklyScore
 from app.models.player import Player
+from app.models.nfl_game import NFLGame
 from app.models.user import User
 from app.services.standings_service import (
     calculate_week,
@@ -16,6 +17,7 @@ from app.services.standings_service import (
     DEFAULT_SEASON_WEEKS,
 )
 from app.services.guillotine_service import process_league_guillotine
+from app.services.nfl_schedule_service import get_week_games
 from app.api.deps import get_current_user, require_commissioner
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
@@ -117,12 +119,42 @@ async def get_weekly_scores(
         players_result = await db.execute(select(Player).where(Player.id.in_(all_player_ids)))
         players_by_id = {p.id: p for p in players_result.scalars().all()}
 
+    # Real game status per player (2026-09-10) -- "live"/"final"/
+    # "not_started", so the frontend can show a real LIVE/FINAL badge
+    # instead of a bare number that could mean either. Cross-referenced
+    # by NFL team abbreviation (Player.team) against NFLGame, which the
+    # scheduler now keeps fresh for the CURRENT week specifically (see
+    # scheduler._sync_current_week_scoreboard_once) -- always regular
+    # season (type=2), same assumption calculate_week already makes
+    # (WeeklyScore rows only ever get created during the regular season).
+    games = await get_week_games(year, week, 2, db)
+    game_by_team: dict[str, NFLGame] = {}
+    for g in games:
+        game_by_team[g.home_team] = g
+        game_by_team[g.away_team] = g
+
+    def _game_status(player: Player | None) -> str:
+        if not player or not player.team:
+            return "not_started"
+        game = game_by_team.get(player.team)
+        if not game:
+            return "not_started"
+        if game.completed:
+            return "final"
+        if game.status_state == "in":
+            return "live"
+        return "not_started"
+
     team_scores = []
     for ws in scores:
         lineup_data = ws.lineup_data
         if lineup_data and lineup_data.get("breakdown"):
             enriched_breakdown = {
-                pid: {**entry, "name": (f"{p.first_name} {p.last_name}" if (p := players_by_id.get(pid)) else "Unknown Player")}
+                pid: {
+                    **entry,
+                    "name": (f"{p.first_name} {p.last_name}" if (p := players_by_id.get(pid)) else "Unknown Player"),
+                    "game_status": _game_status(players_by_id.get(pid)),
+                }
                 for pid, entry in lineup_data["breakdown"].items()
             }
             lineup_data = {**lineup_data, "breakdown": enriched_breakdown}

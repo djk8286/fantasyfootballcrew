@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi, nflApi } from "@/lib/api-client";
 import { ChevronLeft, ChevronRight as ChevronRightIcon, Calendar, Swords } from "lucide-react";
+import GameStatusBadge from "@/components/GameStatusBadge";
 
 // ─── Interfaces ───────────────────────────────────────────────
 
@@ -40,6 +41,14 @@ interface PlayerBreakdownEntry {
   name: string;
   score: number;
   position: string;
+  // Real LIVE/FINAL/not_started per player (2026-09-10) -- see
+  // GameStatusBadge. is_bench separates a team's actual starters
+  // (count toward the team total) from bench (shown, never counted) --
+  // only meaningful for a team that's set a real Lineup for the week;
+  // otherwise every roster player is a "starter" (undefined here reads
+  // as not-bench, same as before this existed).
+  game_status?: string;
+  is_bench?: boolean;
 }
 interface TeamWeeklyScore {
   team_id: string;
@@ -230,31 +239,57 @@ export default function SchedulePage() {
                         {[
                           { label: m.team_a.name, breakdown: aBreakdown },
                           { label: m.team_b.name, breakdown: bBreakdown },
-                        ].map(({ label, breakdown }) => (
+                        ].map(({ label, breakdown }) => {
+                          const entries = breakdown ? Object.entries(breakdown) : [];
+                          const starters = entries.filter(([, p]) => !p.is_bench).sort(([, a], [, b]) => b.score - a.score);
+                          const bench = entries.filter(([, p]) => p.is_bench).sort(([, a], [, b]) => b.score - a.score);
+                          return (
                           <div key={label} className="bg-surface-900/50 rounded-lg p-2.5">
                             <p className="text-surface-500 font-semibold uppercase tracking-wider text-[10px] mb-1.5 truncate">
                               {label}
                             </p>
-                            {breakdown ? (
-                              <ul className="space-y-1">
-                                {Object.entries(breakdown)
-                                  .sort(([, a], [, b]) => b.score - a.score)
-                                  .map(([pid, p]) => (
+                            {entries.length > 0 ? (
+                              <>
+                                <ul className="space-y-1">
+                                  {starters.map(([pid, p]) => (
                                     <li key={pid} className="flex items-center justify-between gap-2">
                                       <span className="text-surface-300 truncate">
                                         <span className="text-surface-500">{p.position}</span> {p.name}
                                       </span>
-                                      <span className="text-white font-mono tabular-nums shrink-0">
-                                        {p.score.toFixed(1)}
+                                      <span className="flex items-center gap-1.5 shrink-0">
+                                        <GameStatusBadge status={p.game_status} />
+                                        <span className="text-white font-mono tabular-nums">{p.score.toFixed(1)}</span>
                                       </span>
                                     </li>
                                   ))}
-                              </ul>
+                                </ul>
+                                {bench.length > 0 && (
+                                  <>
+                                    <p className="text-surface-600 font-semibold uppercase tracking-wider text-[9px] mt-2 mb-1">
+                                      Bench
+                                    </p>
+                                    <ul className="space-y-1 opacity-60">
+                                      {bench.map(([pid, p]) => (
+                                        <li key={pid} className="flex items-center justify-between gap-2">
+                                          <span className="text-surface-400 truncate">
+                                            <span className="text-surface-500">{p.position}</span> {p.name}
+                                          </span>
+                                          <span className="flex items-center gap-1.5 shrink-0">
+                                            <GameStatusBadge status={p.game_status} />
+                                            <span className="text-surface-300 font-mono tabular-nums">{p.score.toFixed(1)}</span>
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </>
+                                )}
+                              </>
                             ) : (
                               <p className="text-surface-600 italic">No breakdown yet</p>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

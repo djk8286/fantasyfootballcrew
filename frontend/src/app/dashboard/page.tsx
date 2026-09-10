@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { leaguesApi, playersApi, dashboardApi, isLoggedIn } from "@/lib/api-client";
+import { leaguesApi, playersApi, dashboardApi, standingsApi, nflApi, isLoggedIn } from "@/lib/api-client";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles, Flame, Radio, Bot } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import PositionBadge from "@/components/PositionBadge";
@@ -506,6 +506,124 @@ function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void
   );
 }
 
+/* ---------- My Live Scores Widget (2026-09-10) ---------- */
+// "A dashboard-level 'your team's live score right now' widget" -- one
+// glance across every league the user is actually playing in this week,
+// not just per-league detail (Standings/Schedule already have that).
+// Only shows leagues where localStorage has a claimed team for this
+// user (the same ffc_user_teams convention Standings/Schedule/the draft
+// room already use) -- a league the user is only watching, not playing
+// in, has nothing to show here.
+
+interface MyLiveTeamScore {
+  leagueId: string;
+  leagueName: string;
+  totalScore: number;
+  liveCount: number;
+  finalCount: number;
+  starterCount: number;
+}
+
+function MyLiveScoresWidget({ leagues }: { leagues: League[] }) {
+  // null = still resolving; [] = resolved, nothing to show (hides the
+  // widget entirely, same "quiet by default" precedent
+  // TopPerformersWidget/NFLScoresWidget already follow).
+  const [rows, setRows] = useState<MyLiveTeamScore[] | null>(null);
+
+  useEffect(() => {
+    if (leagues.length === 0) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const nflState = await nflApi.getCurrentWeek().catch(() => null);
+      if (!nflState) {
+        if (!cancelled) setRows([]);
+        return;
+      }
+
+      let claimedTeams: Record<string, string> = {};
+      try {
+        claimedTeams = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
+      } catch {}
+
+      const results = await Promise.all(
+        leagues.map(async (l): Promise<MyLiveTeamScore | null> => {
+          const teamId = claimedTeams[l.id];
+          if (!teamId) return null;
+
+          const weekly = await standingsApi.getWeeklyScores(l.id, nflState.week, nflState.season).catch(() => null);
+          const teamScores = (weekly as {
+            team_scores?: {
+              team_id: string;
+              total_score: number;
+              lineup_data: { breakdown?: Record<string, { is_bench?: boolean; game_status?: string }> } | null;
+            }[];
+          } | null)?.team_scores;
+          const row = teamScores?.find((ts) => ts.team_id === teamId);
+          if (!row) return null;
+
+          const starters = Object.values(row.lineup_data?.breakdown || {}).filter((p) => !p.is_bench);
+          return {
+            leagueId: l.id,
+            leagueName: l.name,
+            totalScore: row.total_score,
+            liveCount: starters.filter((p) => p.game_status === "live").length,
+            finalCount: starters.filter((p) => p.game_status === "final").length,
+            starterCount: starters.length,
+          };
+        }),
+      );
+      if (!cancelled) setRows(results.filter((r): r is MyLiveTeamScore => r !== null));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [leagues]);
+
+  if (rows === null) {
+    return (
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex items-center justify-center h-24">
+        <div className="w-5 h-5 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
+        <Radio className="w-4 h-4 text-gold-400" />
+        Your Teams -- This Week
+      </h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {rows.map((r) => (
+          <Link
+            key={r.leagueId}
+            href={`/leagues/${r.leagueId}/standings`}
+            className="bg-surface-900/50 border border-surface-700/60 rounded-xl p-4 hover:border-gold-400/40 transition-colors"
+          >
+            <p className="text-surface-400 text-xs truncate mb-1">{r.leagueName}</p>
+            <div className="flex items-center justify-between">
+              <span className="text-white font-bold text-2xl font-mono tabular-nums">{r.totalScore.toFixed(1)}</span>
+              {r.liveCount > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-400 uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                  {r.liveCount} live
+                </span>
+              )}
+            </div>
+            <p className="text-surface-500 text-[10px] mt-1">
+              {r.finalCount}/{r.starterCount} final
+            </p>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Dashboard Page ---------- */
 
 export default function DashboardPage() {
@@ -595,6 +713,12 @@ export default function DashboardPage() {
         <NFLScoresWidget onHasData={setNflScoresHasData} />
       </section>
       ) : null}
+
+      {/* Your Teams -- live current-week scores across every league
+          you're actually playing in, not just per-league detail. */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+        <MyLiveScoresWidget leagues={leagues} />
+      </section>
 
       {/* Top Draft Prospects */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

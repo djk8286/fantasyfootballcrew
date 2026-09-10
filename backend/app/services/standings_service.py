@@ -405,13 +405,15 @@ async def calculate_week(
             total_score = 0.0
             lineup_data = {"total": 0.0, "breakdown": {}}
         else:
-            # Build per-player stats dict. player_id_to_sleeper/
+            # Build per-player stats dict over the WHOLE roster, not just
+            # roster_ids (2026-09-10) -- bench players get a breakdown
+            # entry too now (see below, is_bench), so their stats need
+            # to be available here just like starters'. player_id_to_sleeper/
             # players_by_id are the league-wide batch built above --
-            # every roster_ids entry is already covered by it (roster_ids
-            # is always a subset of all_player_ids), so no query needed
-            # here at all, including in the fallback branch.
+            # every full_roster entry is already covered by it, so no
+            # query needed here at all, including in the fallback branch.
             week_stats: Dict[str, Dict[str, Any]] = {}
-            for pid in roster_ids:
+            for pid in full_roster:
                 if use_sleeper and pid in player_id_to_sleeper:
                     sleeper_id = player_id_to_sleeper[pid]
                     stats = sleeper_stats.get(sleeper_id, {})
@@ -451,7 +453,7 @@ async def calculate_week(
                 auto_starter_ids = [a["player_id"] for a in optimal["lineup"]]
                 roster_ids = auto_starter_ids
 
-            # Calculate score per player
+            # Calculate score per player -- starters count toward total_score.
             breakdown = {}
             total_score = 0.0
             for pid in roster_ids:
@@ -462,8 +464,28 @@ async def calculate_week(
                     "score": player_score,
                     "stats": stats,
                     "position": position,
+                    "is_bench": False,
                 }
                 total_score += player_score
+
+            # Bench players (2026-09-10) -- real per-week score, same
+            # calculate_player_score call as starters, just never added
+            # to total_score. "what am I sitting" is only useful if it's
+            # this week's actual number, not last season's. Only a real
+            # distinction when a Lineup was actually set (roster_ids is a
+            # strict subset of full_roster then) -- a team that's never
+            # touched the lineup feature scores (and now shows) its whole
+            # roster as "started", matching the no-Lineup precedent above.
+            for pid in full_roster - set(roster_ids):
+                stats = week_stats.get(pid, {})
+                position = player_positions.get(pid, "UNKNOWN")
+                player_score = calculate_player_score(stats, scoring_config, position)
+                breakdown[pid] = {
+                    "score": player_score,
+                    "stats": stats,
+                    "position": position,
+                    "is_bench": True,
+                }
 
             total_score = round(total_score, 2)
             lineup_data = {"total": total_score, "breakdown": breakdown}
