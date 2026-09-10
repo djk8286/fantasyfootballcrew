@@ -9,7 +9,7 @@ import uuid
 import pytest
 from datetime import datetime, timedelta, timezone
 from app.models.user import User
-from app.models.league import League, LeagueVisibility
+from app.models.league import League, LeagueVisibility, LeagueType
 from app.models.team import Team
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
@@ -26,10 +26,10 @@ async def _make_user(db_session_factory):
         return user, token
 
 
-async def _make_league(db_session_factory, commissioner_id, visibility):
+async def _make_league(db_session_factory, commissioner_id, visibility, league_type=LeagueType.STANDARD):
     async with db_session_factory() as db:
         league = League(id=str(uuid.uuid4()), name="Claim Gating Test League", commissioner_id=commissioner_id,
-                         visibility=visibility, scoring_config={}, roster_slots={})
+                         visibility=visibility, scoring_config={}, roster_slots={}, league_type=league_type)
         db.add(league)
         await db.commit()
         return league.id
@@ -176,16 +176,34 @@ async def test_claim_co_owner_blocked_on_invite_only_without_access(client, db_s
 
 @pytest.mark.asyncio
 async def test_claim_co_owner_allowed_with_accepted_invite(client, db_session_factory):
+    # Co-Owner (2-Man Teams) is TWO_MAN-league-only -- see teams.py's
+    # league_type gate.
     owner, _owner_token = await _make_user(db_session_factory)
     team_owner, _team_owner_token = await _make_user(db_session_factory)
     invitee, invitee_token = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.INVITE_ONLY)
+    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.INVITE_ONLY, league_type=LeagueType.TWO_MAN)
     team_id = await _make_claimed_team(db_session_factory, league_id, team_owner.id)
     await _grant_accepted_invite(db_session_factory, league_id, owner.id, invitee.id)
 
     client.headers["Authorization"] = f"Bearer {invitee_token}"
     r = await client.post(f"/teams/{team_id}/claim-co-owner")
     assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_claim_co_owner_blocked_outside_two_man_league(client, db_session_factory):
+    """Co-Owner (2-Man Teams) is hidden and non-functional everywhere
+    except TWO_MAN leagues -- see teams.py's league_type gate."""
+    owner, _owner_token = await _make_user(db_session_factory)
+    team_owner, _team_owner_token = await _make_user(db_session_factory)
+    joiner, joiner_token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN, league_type=LeagueType.STANDARD)
+    team_id = await _make_claimed_team(db_session_factory, league_id, team_owner.id)
+
+    client.headers["Authorization"] = f"Bearer {joiner_token}"
+    r = await client.post(f"/teams/{team_id}/claim-co-owner")
+    assert r.status_code == 400
+    assert "2-Man" in r.json()["detail"]
 
 
 # ─── Guillotine (Phase 4) -- eliminated-team gates ──────────────────────
@@ -201,10 +219,16 @@ async def _eliminate_team(db_session_factory, team_id, week=1):
 
 @pytest.mark.asyncio
 async def test_claim_co_owner_blocked_on_eliminated_team(client, db_session_factory):
+    # Co-Owner (2-Man Teams) is TWO_MAN-league-only -- see teams.py's
+    # league_type gate. In real production eliminated_week is only ever
+    # set by guillotine_service for GUILLOTINE leagues, so this exact
+    # TWO_MAN+eliminated combination can't occur outside a test -- this
+    # still exercises claim_co_owner's own defensive eliminated_week
+    # check on its own terms, independent of how a team got there.
     owner, _owner_token = await _make_user(db_session_factory)
     team_owner, _team_owner_token = await _make_user(db_session_factory)
     joiner, joiner_token = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN)
+    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN, league_type=LeagueType.TWO_MAN)
     team_id = await _make_claimed_team(db_session_factory, league_id, team_owner.id)
     await _eliminate_team(db_session_factory, team_id)
 
@@ -224,7 +248,7 @@ async def test_eliminated_teams_owner_can_join_a_survivor_team_in_same_league(cl
     owner, _owner_token = await _make_user(db_session_factory)
     eliminated_owner, eliminated_owner_token = await _make_user(db_session_factory)
     survivor_owner, _survivor_owner_token = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN)
+    league_id = await _make_league(db_session_factory, owner.id, LeagueVisibility.OPEN, league_type=LeagueType.TWO_MAN)
     dead_team_id = await _make_claimed_team(db_session_factory, league_id, eliminated_owner.id)
     await _eliminate_team(db_session_factory, dead_team_id)
     survivor_team_id = await _make_claimed_team(db_session_factory, league_id, survivor_owner.id)

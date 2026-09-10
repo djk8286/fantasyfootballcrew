@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
-import { ArrowLeft, Save, Loader2, RefreshCw, Trophy, Swords } from "lucide-react";
+import { isLeagueManagerOf } from "@/lib/leagueAccess";
+import { ArrowLeft, Save, Loader2, RefreshCw, Trophy, Swords, Shield } from "lucide-react";
 
 interface PlayoffSettings {
   enabled: boolean;
@@ -28,7 +29,7 @@ export default function PlayoffSettingsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [league, setLeague] = useState<{ name: string; league_type: string } | null>(null);
+  const [league, setLeague] = useState<{ name: string; league_type: string; commissioner_id?: string; co_commissioner_ids?: string[] | null } | null>(null);
   const [settings, setSettings] = useState<PlayoffSettings | null>(null);
   const [original, setOriginal] = useState<PlayoffSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,7 +51,7 @@ export default function PlayoffSettingsPage() {
       leaguesApi.getRivalryWeekSettings(id).catch(() => null),
     ])
       .then(([leagueData, settingsData, rivalryData]) => {
-        if (leagueData) setLeague(leagueData as { name: string; league_type: string });
+        if (leagueData) setLeague(leagueData as { name: string; league_type: string; commissioner_id?: string; co_commissioner_ids?: string[] | null });
         if (settingsData) {
           setSettings(settingsData as PlayoffSettings);
           setOriginal(JSON.parse(JSON.stringify(settingsData)));
@@ -118,6 +119,25 @@ export default function PlayoffSettingsPage() {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
           <span className="text-surface-400">Loading playoff settings...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Client-side mirror of the backend's require_commissioner check -- see
+  // lib/leagueAccess.ts.
+  if (!isLeagueManagerOf(league)) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <Shield className="w-10 h-10 text-surface-600 mx-auto mb-4" />
+          <h1 className="text-white font-bold text-lg mb-2">Commissioner access required</h1>
+          <p className="text-surface-400 text-sm mb-6">
+            Only {league?.name || "this league"}&apos;s commissioner or co-commissioners can view this page.
+          </p>
+          <Link href={`/leagues/${id}`} className="text-gold-400 hover:text-gold-300 font-medium text-sm">
+            Back to league
+          </Link>
         </div>
       </div>
     );

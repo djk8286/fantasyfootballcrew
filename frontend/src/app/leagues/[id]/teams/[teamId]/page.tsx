@@ -48,6 +48,7 @@ interface Team {
 interface LeagueData {
   id: string;
   name: string;
+  league_type?: string;
   conference_a_name?: string | null;
   conference_b_name?: string | null;
 }
@@ -332,7 +333,9 @@ export default function TeamPage() {
                       &middot; {team.co_owner_id === currentUserId ? "you're co-owner" : "has a co-owner"}
                     </span>
                   )}
-                  {!team.co_owner_id && team.owner_id !== currentUserId && team.eliminated_week == null && isLoggedIn() && (
+                  {/* Co-Owner (2-Man Teams) only makes sense for TWO_MAN
+                      leagues -- see teams.py's matching server-side gate. */}
+                  {league?.league_type === "two_man" && !team.co_owner_id && team.owner_id !== currentUserId && team.eliminated_week == null && isLoggedIn() && (
                     <button
                       onClick={handleClaimCoOwner}
                       disabled={claimingCoOwner}

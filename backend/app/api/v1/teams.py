@@ -47,6 +47,9 @@ async def create_team(
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
 
+    if team_data.co_owner_id and league.league_type != LeagueType.TWO_MAN:
+        raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
+
     validate_avatar_url(team_data.avatar_url)
     team = Team(
         name=team_data.name,
@@ -93,6 +96,16 @@ async def update_team(
         validate_avatar_url(update_data.avatar_url)
         team.avatar_url = update_data.avatar_url
     if update_data.co_owner_id is not None:
+        # Co-Owner (2-Man Teams) is scoped to TWO_MAN leagues everywhere
+        # else in the app (claim_co_owner/assign_co_owner below both
+        # reject it outright for any other league_type) -- this generic
+        # PATCH was the one path that never checked league_type at all.
+        # None here means "field not provided" (Pydantic default), not
+        # "clear" -- there's no way to null out co_owner_id through this
+        # endpoint either way (that's remove_co_owner's job), so every
+        # branch that reaches here is genuinely trying to SET one.
+        if league.league_type != LeagueType.TWO_MAN:
+            raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
         team.co_owner_id = update_data.co_owner_id
     if update_data.conference is not None:
         if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
@@ -197,6 +210,8 @@ async def claim_co_owner(
     if not await user_can_join_league(db, league, current_user):
         raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
 
+    if league.league_type != LeagueType.TWO_MAN:
+        raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
     if team.is_cpu:
         raise HTTPException(status_code=400, detail="Claim this team as owner first, not co-owner")
     if team.eliminated_week is not None:
@@ -366,6 +381,8 @@ async def assign_co_owner(
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
 
+    if league.league_type != LeagueType.TWO_MAN:
+        raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
     if team.is_cpu:
         raise HTTPException(status_code=400, detail="Assign this team's owner first, not a co-owner")
     if team.co_owner_id:

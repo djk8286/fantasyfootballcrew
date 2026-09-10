@@ -8,7 +8,7 @@ a commissioner had no way to fix a wrong claim or hand-assign teams.
 import uuid
 import pytest
 from app.models.user import User
-from app.models.league import League, LeagueVisibility
+from app.models.league import League, LeagueVisibility, LeagueType
 from app.models.team import Team
 from app.services.auth_service import create_access_token
 
@@ -23,10 +23,10 @@ async def _make_user(db_session_factory, username=None):
         return user, token
 
 
-async def _make_league(db_session_factory, commissioner_id):
+async def _make_league(db_session_factory, commissioner_id, league_type=LeagueType.STANDARD):
     async with db_session_factory() as db:
         league = League(id=str(uuid.uuid4()), name="Team Mgmt Test League", commissioner_id=commissioner_id,
-                         visibility=LeagueVisibility.OPEN, scoring_config={}, roster_slots={})
+                         visibility=LeagueVisibility.OPEN, scoring_config={}, roster_slots={}, league_type=league_type)
         db.add(league)
         await db.commit()
         return league.id
@@ -215,10 +215,12 @@ async def test_assign_owner_fails_if_user_not_found(client, db_session_factory):
 
 @pytest.mark.asyncio
 async def test_assign_co_owner_by_username(client, db_session_factory):
+    # Co-Owner (2-Man Teams) is TWO_MAN-league-only -- see teams.py's
+    # league_type gate added alongside this test's update.
     commissioner, commissioner_token = await _make_user(db_session_factory)
     owner, _ = await _make_user(db_session_factory)
     target, _ = await _make_user(db_session_factory, username="CoOwnerPlayer")
-    league_id = await _make_league(db_session_factory, commissioner.id)
+    league_id = await _make_league(db_session_factory, commissioner.id, league_type=LeagueType.TWO_MAN)
     team_id = await _make_team(db_session_factory, league_id, owner_id=owner.id)
 
     client.headers["Authorization"] = f"Bearer {commissioner_token}"
@@ -228,12 +230,28 @@ async def test_assign_co_owner_by_username(client, db_session_factory):
 
 
 @pytest.mark.asyncio
+async def test_assign_co_owner_blocked_outside_two_man_league(client, db_session_factory):
+    """Co-Owner (2-Man Teams) is hidden and non-functional everywhere
+    except TWO_MAN leagues -- see teams.py's league_type gate."""
+    commissioner, commissioner_token = await _make_user(db_session_factory)
+    owner, _ = await _make_user(db_session_factory)
+    target, _ = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, commissioner.id, league_type=LeagueType.STANDARD)
+    team_id = await _make_team(db_session_factory, league_id, owner_id=owner.id)
+
+    client.headers["Authorization"] = f"Bearer {commissioner_token}"
+    r = await client.post(f"/teams/{team_id}/assign-co-owner", json={"identifier": target.username})
+    assert r.status_code == 400
+    assert "2-Man" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_assign_co_owner_fails_if_already_has_one(client, db_session_factory):
     commissioner, commissioner_token = await _make_user(db_session_factory)
     owner, _ = await _make_user(db_session_factory)
     existing_co, _ = await _make_user(db_session_factory)
     target, _ = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, commissioner.id)
+    league_id = await _make_league(db_session_factory, commissioner.id, league_type=LeagueType.TWO_MAN)
     team_id = await _make_team(db_session_factory, league_id, owner_id=owner.id, co_owner_id=existing_co.id)
 
     client.headers["Authorization"] = f"Bearer {commissioner_token}"
@@ -245,7 +263,7 @@ async def test_assign_co_owner_fails_if_already_has_one(client, db_session_facto
 async def test_assign_co_owner_fails_if_team_still_cpu(client, db_session_factory):
     commissioner, commissioner_token = await _make_user(db_session_factory)
     target, _ = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, commissioner.id)
+    league_id = await _make_league(db_session_factory, commissioner.id, league_type=LeagueType.TWO_MAN)
     team_id = await _make_team(db_session_factory, league_id, is_cpu=True)
 
     client.headers["Authorization"] = f"Bearer {commissioner_token}"
@@ -257,7 +275,7 @@ async def test_assign_co_owner_fails_if_team_still_cpu(client, db_session_factor
 async def test_assign_co_owner_fails_if_target_is_owner(client, db_session_factory):
     commissioner, commissioner_token = await _make_user(db_session_factory)
     owner, _ = await _make_user(db_session_factory)
-    league_id = await _make_league(db_session_factory, commissioner.id)
+    league_id = await _make_league(db_session_factory, commissioner.id, league_type=LeagueType.TWO_MAN)
     team_id = await _make_team(db_session_factory, league_id, owner_id=owner.id)
 
     client.headers["Authorization"] = f"Bearer {commissioner_token}"

@@ -258,6 +258,9 @@ export default function LeagueDetailPage() {
   const isCommissioner = league && getCurrentUserId() === league.commissioner_id;
   const isCoCommissioner = league && league.co_commissioner_ids?.includes(getCurrentUserId());
   const isLeagueManager = isCommissioner || isCoCommissioner;
+  // Co-Owner (2-Man Teams) only makes sense for TWO_MAN leagues -- see
+  // teams.py's matching server-side gate on claim/assign-co-owner.
+  const isTwoMan = league?.league_type === "two_man";
   // Backend's claim_team/claim_co_owner (Step 6) already enforce this --
   // this just keeps the buttons from being shown (and dead-ending in a
   // 403) to someone who can't actually use them. "eligible" covers OPEN
@@ -939,41 +942,51 @@ export default function LeagueDetailPage() {
                   Commissioner
                 </Link>
               )}
-              <Link
-                href={`/leagues/${id}/scoring`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Settings className="w-4 h-4" />
-                Scoring
-              </Link>
-              <Link
-                href={`/leagues/${id}/roster-slots`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <ListChecks className="w-4 h-4" />
-                Roster Slots
-              </Link>
-              <Link
-                href={`/leagues/${id}/playoff-settings`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Settings className="w-4 h-4" />
-                Playoff Settings
-              </Link>
-              <Link
-                href={`/leagues/${id}/salary-cap-settings`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <DollarSign className="w-4 h-4" />
-                Salary Cap Settings
-              </Link>
-              <Link
-                href={`/leagues/${id}/best-ball-settings`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Sparkles className="w-4 h-4" />
-                Best-Ball Settings
-              </Link>
+              {/* Settings pages are all commissioner/co-commissioner-only
+                  server-side (require_commissioner) -- showing these links
+                  to a member just walked them into a page that either
+                  403s on save or (before the settings-page gate added
+                  alongside this) rendered the full editor UI for
+                  something they could never actually change. */}
+              {isLeagueManager && (
+                <>
+                  <Link
+                    href={`/leagues/${id}/scoring`}
+                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Scoring
+                  </Link>
+                  <Link
+                    href={`/leagues/${id}/roster-slots`}
+                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                  >
+                    <ListChecks className="w-4 h-4" />
+                    Roster Slots
+                  </Link>
+                  <Link
+                    href={`/leagues/${id}/playoff-settings`}
+                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Playoff Settings
+                  </Link>
+                  <Link
+                    href={`/leagues/${id}/salary-cap-settings`}
+                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                  >
+                    <DollarSign className="w-4 h-4" />
+                    Salary Cap Settings
+                  </Link>
+                  <Link
+                    href={`/leagues/${id}/best-ball-settings`}
+                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Best-Ball Settings
+                  </Link>
+                </>
+              )}
               <Link
                 href={`/leagues/${id}/standings`}
                 className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
@@ -1010,28 +1023,36 @@ export default function LeagueDetailPage() {
                 Waivers
               </Link>
               {league.draft_status === "not_started" ? (
-                <button
-                  onClick={async () => {
-                    setLoading(true);
-                    try {
-                      const draftRes = await draftsApi.create(league.id, 15) as { id: string };
-                      window.location.href = `/draft/${draftRes.id}`;
-                    } catch (err) {
-                      // Was a hardcoded "make sure you have 2 teams" message
-                      // regardless of the real cause -- actively misled a
-                      // real user (their league had 4 teams; the actual
-                      // failure was transient/unrelated) into thinking
-                      // their own setup was the problem.
-                      setActionError(err instanceof Error ? err.message : "Failed to create draft.");
-                      setLoading(false);
-                    }
-                  }}
-                  disabled={loading}
-                  className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? "Creating Draft..." : "Start Draft"}
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                // Commissioner-only server-side (create_draft's
+                // require_commissioner) -- a member seeing this button at
+                // all just walked into a guaranteed 403, which used to
+                // show as a confusing generic error (see the comment
+                // below on the catch block). Members instead see nothing
+                // here until the commissioner actually starts the draft.
+                isLeagueManager && (
+                  <button
+                    onClick={async () => {
+                      setLoading(true);
+                      try {
+                        const draftRes = await draftsApi.create(league.id, 15) as { id: string };
+                        window.location.href = `/draft/${draftRes.id}`;
+                      } catch (err) {
+                        // Was a hardcoded "make sure you have 2 teams" message
+                        // regardless of the real cause -- actively misled a
+                        // real user (their league had 4 teams; the actual
+                        // failure was transient/unrelated) into thinking
+                        // their own setup was the problem.
+                        setActionError(err instanceof Error ? err.message : "Failed to create draft.");
+                        setLoading(false);
+                      }
+                    }}
+                    disabled={loading}
+                    className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? "Creating Draft..." : "Start Draft"}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )
               ) : (
                 <Link
                   href={`/draft/${draftId || league.id}`}
@@ -1318,7 +1339,16 @@ export default function LeagueDetailPage() {
                               <UserCheck className="w-3.5 h-3.5" />
                               {owner.label}
                             </span>
-                            {!team.co_owner_id && !owner.isMe && (isLeagueManager || canSelfClaim) && (
+                            {/* Co-Owner (2-Man Teams) is a TWO_MAN-league-only
+                                concept -- hidden and non-functional in every
+                                other league type (see teams.py's matching
+                                server-side league_type == TWO_MAN gate on
+                                claim/assign-co-owner). A team that already
+                                has a co_owner_id from before this gate (or
+                                because its league's type changed since) can
+                                still have it removed either way -- that's
+                                cleanup, not a new co-own assignment. */}
+                            {isTwoMan && !team.co_owner_id && !owner.isMe && (isLeagueManager || canSelfClaim) && (
                               <button
                                 onClick={() => handleClaimCoOwner(team.id)}
                                 disabled={claimingTeamId === team.id}
@@ -1350,7 +1380,7 @@ export default function LeagueDetailPage() {
                                   >
                                     Remove Co-Owner
                                   </button>
-                                ) : (
+                                ) : isTwoMan ? (
                                   <button
                                     onClick={() => handleAssignCoOwner(team.id)}
                                     disabled={claimingTeamId === team.id}
@@ -1359,7 +1389,7 @@ export default function LeagueDetailPage() {
                                   >
                                     Assign Co-Owner
                                   </button>
-                                )}
+                                ) : null}
                               </>
                             )}
                           </div>

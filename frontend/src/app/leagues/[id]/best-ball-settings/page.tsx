@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
-import { ArrowLeft, Save, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { isLeagueManagerOf } from "@/lib/leagueAccess";
+import { ArrowLeft, Save, Loader2, RefreshCw, Sparkles, Shield } from "lucide-react";
 
 interface BestBallSettings {
   enabled: boolean;
@@ -34,7 +35,7 @@ export default function BestBallSettingsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [league, setLeague] = useState<{ name: string } | null>(null);
+  const [league, setLeague] = useState<{ name: string; commissioner_id?: string; co_commissioner_ids?: string[] | null } | null>(null);
   const [settings, setSettings] = useState<BestBallSettings | null>(null);
   const [original, setOriginal] = useState<BestBallSettings | null>(null);
   const [windowStatus, setWindowStatus] = useState<ManagementWindow | null>(null);
@@ -51,7 +52,7 @@ export default function BestBallSettingsPage() {
       leaguesApi.getManagementWindow(id).catch(() => null),
     ])
       .then(([leagueData, settingsData, windowData]) => {
-        if (leagueData) setLeague(leagueData as { name: string });
+        if (leagueData) setLeague(leagueData as { name: string; commissioner_id?: string; co_commissioner_ids?: string[] | null });
         if (settingsData) {
           setSettings(settingsData as BestBallSettings);
           setOriginal(JSON.parse(JSON.stringify(settingsData)));
@@ -96,6 +97,25 @@ export default function BestBallSettingsPage() {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
           <span className="text-surface-400">Loading Best-Ball settings...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Client-side mirror of the backend's require_commissioner check -- see
+  // lib/leagueAccess.ts.
+  if (!isLeagueManagerOf(league)) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <Shield className="w-10 h-10 text-surface-600 mx-auto mb-4" />
+          <h1 className="text-white font-bold text-lg mb-2">Commissioner access required</h1>
+          <p className="text-surface-400 text-sm mb-6">
+            Only {league?.name || "this league"}&apos;s commissioner or co-commissioners can view this page.
+          </p>
+          <Link href={`/leagues/${id}`} className="text-gold-400 hover:text-gold-300 font-medium text-sm">
+            Back to league
+          </Link>
         </div>
       </div>
     );

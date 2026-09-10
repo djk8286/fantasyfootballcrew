@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
-import { ArrowLeft, Save, Loader2, RefreshCw } from "lucide-react";
+import { isLeagueManagerOf } from "@/lib/leagueAccess";
+import { ArrowLeft, Save, Loader2, RefreshCw, Shield } from "lucide-react";
 
 interface RosterSlots {
   QB: number;
@@ -48,7 +49,7 @@ export default function RosterSlotsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [league, setLeague] = useState<{ name: string } | null>(null);
+  const [league, setLeague] = useState<{ name: string; commissioner_id?: string; co_commissioner_ids?: string[] | null } | null>(null);
   const [slots, setSlots] = useState<RosterSlots | null>(null);
   const [originalSlots, setOriginalSlots] = useState<RosterSlots | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,7 +64,7 @@ export default function RosterSlotsPage() {
       leaguesApi.getRosterSlots(id).catch(() => null),
     ])
       .then(([leagueData, slotsData]) => {
-        if (leagueData) setLeague(leagueData as { name: string });
+        if (leagueData) setLeague(leagueData as { name: string; commissioner_id?: string; co_commissioner_ids?: string[] | null });
         if (slotsData) {
           setSlots(slotsData as RosterSlots);
           setOriginalSlots(JSON.parse(JSON.stringify(slotsData)));
@@ -106,6 +107,27 @@ export default function RosterSlotsPage() {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
           <span className="text-surface-400">Loading roster settings...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Client-side mirror of the backend's require_commissioner check -- see
+  // lib/leagueAccess.ts. Blocks the settings editor from rendering at all
+  // for a member who navigates here directly; every save on this page
+  // already 403s for them server-side regardless.
+  if (!isLeagueManagerOf(league)) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <Shield className="w-10 h-10 text-surface-600 mx-auto mb-4" />
+          <h1 className="text-white font-bold text-lg mb-2">Commissioner access required</h1>
+          <p className="text-surface-400 text-sm mb-6">
+            Only {league?.name || "this league"}&apos;s commissioner or co-commissioners can view this page.
+          </p>
+          <Link href={`/leagues/${id}`} className="text-gold-400 hover:text-gold-300 font-medium text-sm">
+            Back to league
+          </Link>
         </div>
       </div>
     );
