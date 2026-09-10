@@ -976,11 +976,23 @@ async def get_ai_mock_pick(
         if pos not in pos_rank:
             continue
 
-        tier = get_percentile_tier(get_rank_score(player, rank_by_id), total_ranked)
+        # Continuous rank-based score (2026-09-09 fix), NOT the old
+        # discrete 5-tier bucket (get_percentile_tier) -- that gave every
+        # player in the same tier the EXACT SAME tier_score regardless of
+        # true rank within it, and tiers 3/4 alone each span 30% of the
+        # entire ranked pool. Combined with the ~40-point randomization
+        # window below, that meant a player ranked #50 and one ranked
+        # #490 could tie on tier_score and become equally likely picks --
+        # confirmed as the real cause of "Auto-Fill picks random, not
+        # even good, players": the AI wasn't actually broken, it was
+        # choosing uniformly across enormous same-tier bands. This scales
+        # real rank linearly across the same 0-400 range the old bucket
+        # score used, so every other constant below (pos_bonus's *10,
+        # need_penalty's 20/300, the endgame override's -1000) still
+        # means the same relative thing without needing to be retuned.
+        rank = get_rank_score(player, rank_by_id)
+        tier_score = ((rank - 1) / max(total_ranked - 1, 1)) * 400
 
-        # Base score from tier (lower tier number = better)
-        tier_score = (tier - 1) * 100  # Tier 1 = 0, Tier 5 = 400
-        
         # Position priority bonus (lower = better)
         pos_bonus = pos_rank.get(pos, 99) * 10
 
@@ -1030,7 +1042,15 @@ async def get_ai_mock_pick(
 
     if scored_players:
         best_score = scored_players[0][0]
-        # Pick from top contenders with some randomness
+        # Pick from top contenders with some randomness -- real drafters
+        # (human or CPU) don't take the literal #1 rated player 100% of
+        # the time, so a little randomness among genuinely close
+        # contenders is realistic. The window was previously 40 points,
+        # which under the OLD discrete tier_score (0/100/200/300/400)
+        # meant "anywhere in the same tier" -- now that tier_score is
+        # continuous (see above), 40 points is a real, roughly-nearby
+        # rank gap on the 0-400 scale, so this is left as-is rather than
+        # needing to shrink further.
         top_tier_count = 3 if current_round <= 5 else 5
         top_tier = [p for s, p in scored_players if s <= best_score + 40]
         candidates = top_tier[:max(top_tier_count * 2, 6)]
