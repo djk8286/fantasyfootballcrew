@@ -16,6 +16,7 @@ from app.models.user import User
 from app.services.ai_service import AIService
 from app.services.standings_service import get_standings, get_combined_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
+from app.services.ai_usage_service import record_ai_usage
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -172,6 +173,8 @@ async def analyze_lineup(
         coaching_staff=coaching_staff, salary_context=salary_context,
         partner_context=partner_context,
     )
+    await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
+    await db.commit()
     return {"analysis": analysis}
 
 
@@ -235,6 +238,8 @@ async def analyze_trade(
         team_a_salary=team_a_salary, team_b_salary=team_b_salary,
         team_a_partner=team_a_partner, team_b_partner=team_b_partner,
     )
+    await record_ai_usage(db, "trade", league_id=trade.league_id, user_id=current_user.id)
+    await db.commit()
     return {"analysis": analysis}
 
 
@@ -262,4 +267,8 @@ async def analyze_bet(
     analysis = await service.analyze_bet(
         matchup={"description": body.prompt}, lines={}, verified_players=verified_players,
     )
+    # No league_id -- this tool isn't scoped to any league (freeform
+    # personal betting question). See AIUsageEvent's model docstring.
+    await record_ai_usage(db, "bet", user_id=current_user.id)
+    await db.commit()
     return {"analysis": analysis}

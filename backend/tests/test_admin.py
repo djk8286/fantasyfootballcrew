@@ -109,6 +109,11 @@ async def test_ai_usage_totals_and_breakdowns(client, db_session_factory):
         db.add(AIUsageEvent(league_id=league.id, endpoint="digest_generate"))
         db.add(AIUsageEvent(league_id=league.id, endpoint="digest_generate"))
         db.add(AIUsageEvent(league_id=league.id, endpoint="chat"))
+        # 2026-09-09: the personal-tools endpoints (lineup/trade/bet) --
+        # bet deliberately has no league_id (freeform, not league-scoped)
+        # but DOES have a user_id, which is what by_user surfaces.
+        db.add(AIUsageEvent(league_id=league.id, endpoint="lineup", user_id=commissioner.id))
+        db.add(AIUsageEvent(endpoint="bet", user_id=commissioner.id))
         await db.commit()
         league_id = league.id
 
@@ -116,14 +121,19 @@ async def test_ai_usage_totals_and_breakdowns(client, db_session_factory):
     r = await client.get("/admin/ai-usage")
     assert r.status_code == 200
     data = r.json()
-    assert data["total"] >= 3
-    assert data["last_24h"] >= 3
+    assert data["total"] >= 5
+    assert data["last_24h"] >= 5
     endpoint_counts = {row["endpoint"]: row["count"] for row in data["by_endpoint"]}
     assert endpoint_counts["digest_generate"] >= 2
     assert endpoint_counts["chat"] >= 1
+    assert endpoint_counts["lineup"] >= 1
+    assert endpoint_counts["bet"] >= 1
     league_row = next(row for row in data["by_league"] if row["league_id"] == league_id)
     assert league_row["league_name"] == "AI Usage Test League"
-    assert league_row["count"] == 3
+    assert league_row["count"] == 4  # the league-less "bet" row is excluded
+    user_row = next(row for row in data["by_user"] if row["user_id"] == commissioner.id)
+    assert user_row["username"] == commissioner.username
+    assert user_row["count"] == 2  # lineup + bet, the two rows with a user_id
 
 
 # ─── /admin/league-health ────────────────────────────────────────────

@@ -41,6 +41,11 @@ interface AiUsage {
   last_24h: number;
   by_endpoint: { endpoint: string; count: number }[];
   by_league: { league_id: string; league_name: string; count: number }[];
+  // Per-user breakdown (2026-09-09) -- lineup/trade/bet analysis calls
+  // previously made real LLM calls with NO usage record at all, and
+  // aren't tied to a league the way by_league needs (bet analysis is
+  // freeform, not league-scoped) -- this is what actually surfaces them.
+  by_user: { user_id: string; username: string; count: number }[];
 }
 
 interface LeagueHealthRow {
@@ -322,9 +327,9 @@ export default function AdminPage() {
               </div>
             )}
             <p className="text-surface-500 text-xs">
-              Call counts only -- not dollars. Every AI Co-Commissioner feature (digest, trade review, chat, message drafts, recaps) logs one row per call here regardless of league.
+              Call counts only -- not dollars. Every real LLM call logs one row here -- AI Co-Commissioner features (digest, trade review, chat, message drafts, recaps) as well as the personal tools (lineup analysis, trade analysis, bet analysis).
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
                 <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
                   <h3 className="text-white font-bold text-sm">By Feature</h3>
@@ -356,6 +361,25 @@ export default function AdminPage() {
                       aiUsage!.by_league.map((row) => (
                         <tr key={row.league_id}>
                           <td className="px-4 py-2.5 text-surface-300">{row.league_name}</td>
+                          <td className="px-4 py-2.5 text-white font-medium text-right">{row.count.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
+                  <h3 className="text-white font-bold text-sm">Top Users</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-surface-700/60">
+                    {(aiUsage?.by_user.length ?? 0) === 0 ? (
+                      <tr><td className="px-4 py-4 text-surface-500 text-center">No AI usage yet.</td></tr>
+                    ) : (
+                      aiUsage!.by_user.map((row) => (
+                        <tr key={row.user_id}>
+                          <td className="px-4 py-2.5 text-surface-300">{row.username}</td>
                           <td className="px-4 py-2.5 text-white font-medium text-right">{row.count.toLocaleString()}</td>
                         </tr>
                       ))

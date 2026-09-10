@@ -120,12 +120,13 @@ async def get_ai_usage(
     _admin: User = Depends(require_admin),
 ):
     """Real LLM-spend activity (see AIUsageEvent's docstring -- one row
-    per digest/trade-review/message-draft/chat/recap call). Call counts
-    only, not tokens or dollars -- there's no cost data captured
-    anywhere yet, this is "how much is this feature being used," not
-    "what is this costing us." Excludes mock leagues (practice drafts
-    never touch AI Co-Commissioner features, but the filter is here for
-    when/if that changes)."""
+    per digest/trade-review/message-draft/chat/recap/lineup/trade/bet
+    call -- the last three of those were completely unrecorded before
+    2026-09-09, which is why this previously undercounted real usage).
+    Call counts only, not tokens or dollars -- there's no cost data
+    captured anywhere yet, this is "how much is this feature being
+    used," not "what is this costing us." by_league excludes rows with
+    no league_id (bet analysis) -- those only show up in by_user."""
     since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
 
     total = (await db.execute(select(func.count(AIUsageEvent.id)))).scalar()
@@ -142,6 +143,7 @@ async def get_ai_usage(
 
     by_league_result = await db.execute(
         select(AIUsageEvent.league_id, func.count(AIUsageEvent.id))
+        .where(AIUsageEvent.league_id.isnot(None))
         .group_by(AIUsageEvent.league_id)
         .order_by(func.count(AIUsageEvent.id).desc())
         .limit(10)
@@ -161,7 +163,37 @@ async def get_ai_usage(
         for lid, count in league_rows
     ]
 
-    return {"total": total, "last_24h": last_24h, "by_endpoint": by_endpoint, "by_league": by_league}
+    # Per-user breakdown (2026-09-09) -- only populated for calls made
+    # since user_id was added; older rows (all from before the personal
+    # AI tools were even tracked) simply have no user_id and are
+    # excluded here the same way league-less rows are excluded from
+    # by_league above.
+    by_user_result = await db.execute(
+        select(AIUsageEvent.user_id, func.count(AIUsageEvent.id))
+        .where(AIUsageEvent.user_id.isnot(None))
+        .group_by(AIUsageEvent.user_id)
+        .order_by(func.count(AIUsageEvent.id).desc())
+        .limit(10)
+    )
+    user_rows = by_user_result.all()
+    user_ids = [uid for uid, _ in user_rows]
+    users_by_id: dict[str, User] = {}
+    if user_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        users_by_id = {u.id: u for u in users_result.scalars().all()}
+    by_user = [
+        {
+            "user_id": uid,
+            "username": users_by_id[uid].username if uid in users_by_id else "(deleted user)",
+            "count": count,
+        }
+        for uid, count in user_rows
+    ]
+
+    return {
+        "total": total, "last_24h": last_24h,
+        "by_endpoint": by_endpoint, "by_league": by_league, "by_user": by_user,
+    }
 
 
 @router.get("/league-health")

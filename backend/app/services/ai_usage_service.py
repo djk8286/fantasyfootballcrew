@@ -57,3 +57,20 @@ async def check_and_record_ai_usage(league_id: str, endpoint: str, db: AsyncSess
             ),
         )
     db.add(AIUsageEvent(league_id=league_id, endpoint=endpoint))
+
+
+async def record_ai_usage(db: AsyncSession, endpoint: str, league_id: str | None = None, user_id: str | None = None) -> None:
+    """Pure usage logging, no cap enforcement -- for the personal-tools
+    AI endpoints (POST /ai/lineup, /ai/trade, /ai/bet), which previously
+    made real LLM calls with NO usage record at all (the actual reason
+    the admin AI-usage dashboard undercounted real spend: three whole
+    endpoints just never wrote a row). These already have their own
+    per-IP rate limit (@limiter.limit("10/hour")) and don't need a
+    second, stricter per-league daily ceiling layered on top the way the
+    AI Co-Commissioner surface does -- so this is deliberately NOT
+    check_and_record_ai_usage (no 429, no cap check), just the append.
+
+    league_id is optional -- bet analysis isn't scoped to any league at
+    all. Fire-and-forget within the caller's own transaction, same as
+    check_and_record_ai_usage."""
+    db.add(AIUsageEvent(league_id=league_id, endpoint=endpoint, user_id=user_id))
