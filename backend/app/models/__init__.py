@@ -26,6 +26,7 @@ from app.models.team_weekly_recap import TeamWeeklyRecap
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.models.nfl_game import NFLGame
+from app.models.draft_queue_entry import DraftQueueEntry
 
 __all__ = [
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
@@ -46,4 +47,5 @@ __all__ = [
     "WeeklyTopPlayersSummary",
     "WeeklyScoresRecap",
     "NFLGame",
+    "DraftQueueEntry",
 ]

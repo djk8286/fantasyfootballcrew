@@ -361,6 +361,20 @@ export const draftsApi = {
       method: "PATCH",
       body: { timer_seconds: timerSeconds },
     }),
+  // Server-persisted pick queue (2026-09-09) -- survives a page refresh,
+  // unlike the old purely-client-state version. See app/api/v1/drafts.py.
+  getQueue: (draftId: string, teamId: string) =>
+    apiRequest<{ player_ids: string[] }>(`/api/v1/drafts/${draftId}/queue?team_id=${encodeURIComponent(teamId)}`),
+  addToQueue: (draftId: string, teamId: string, playerId: string) =>
+    apiRequest<{ player_ids: string[] }>(`/api/v1/drafts/${draftId}/queue/add`, {
+      method: "POST",
+      body: { team_id: teamId, player_id: playerId },
+    }),
+  removeFromQueue: (draftId: string, teamId: string, playerId: string) =>
+    apiRequest<{ player_ids: string[] }>(`/api/v1/drafts/${draftId}/queue/remove`, {
+      method: "POST",
+      body: { team_id: teamId, player_id: playerId },
+    }),
   quickstartMock: (numTeams: number, totalRounds: number, draftPosition?: number) =>
     apiRequest("/api/v1/drafts/mock/quickstart", {
       method: "POST",

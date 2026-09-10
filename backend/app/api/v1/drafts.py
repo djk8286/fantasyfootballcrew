@@ -9,7 +9,10 @@ from app.services.draft_manager import (
     make_pick,
     get_draft_state,
     run_mock_draft,
-    get_ai_mock_pick,
+    get_next_pick_for_team,
+    get_team_queue,
+    add_to_queue,
+    remove_from_queue,
     quickstart_mock_draft,
 )
 from app.models.draft import Draft, DraftPick, DraftRunStatus
@@ -34,6 +37,11 @@ class MockDraftRequest(BaseModel):
     """Request to run a (potentially hybrid) mock draft.
     Teams in skip_team_ids will NOT get auto-picked — they stay open for manual drafting."""
     skip_team_ids: list[str] = []
+
+
+class QueueMutation(BaseModel):
+    team_id: str
+    player_id: str
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -252,8 +260,12 @@ async def api_auto_pick(
         _, league = await _get_draft_and_league_or_404(draft_id, db)
         await _require_pick_access(state["current_team_id"], league, current_user, db)
 
-        # Get AI pick
-        player = await get_ai_mock_pick(db, draft_id, state["current_team_id"])
+        # Queue-first, AI-ranking-fallback -- see get_next_pick_for_team's
+        # docstring. Same function the timer-expiry watchdog uses, so a
+        # timed-out human's own queue is respected identically whether
+        # THEY triggered this (tab open, timer hit zero client-side) or
+        # nobody did (watchdog forced it because no tab was even open).
+        player = await get_next_pick_for_team(db, draft_id, state["current_team_id"])
         if not player:
             raise HTTPException(status_code=400, detail="No available players to pick")
 
@@ -290,3 +302,77 @@ async def api_set_timer(
     draft.timer_seconds = timer_data.timer_seconds
     await db.commit()
     return {"timer_seconds": draft.timer_seconds}
+
+
+# ─── Pick queue (2026-09-09) ───────────────────────────────────────────
+#
+# Server-persisted so a team's queue survives a page refresh -- the old
+# version lived only in the draft page's React state, gone the instant
+# the tab reloaded. Access mirrors require_team_or_league_access
+# directly (not _require_pick_access's CPU-permissive version above): a
+# CPU team has no human to queue anything for, so there's nothing for
+# any "any participant can nudge a CPU team" exception to apply to here.
+
+
+async def _require_queue_access(team_id: str, league: League, current_user: User, db: AsyncSession) -> Team:
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if team.league_id != league.id:
+        raise HTTPException(status_code=400, detail="Team does not belong to this draft's league")
+    if team.is_cpu:
+        raise HTTPException(status_code=400, detail="CPU teams don't have a pick queue")
+    require_team_or_league_access(team, league, current_user)
+    return team
+
+
+@router.get("/{draft_id}/queue")
+async def api_get_queue(
+    draft_id: str,
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """A team's queue, in pick order. Restricted to that team's own
+    owner/co-owner or the commissioner -- same visibility as the queue
+    itself is used for (nobody else can act on it, so nobody else needs
+    to see it)."""
+    _, league = await _get_draft_and_league_or_404(draft_id, db)
+    await _require_queue_access(team_id, league, current_user, db)
+    entries = await get_team_queue(db, draft_id, team_id)
+    return {"player_ids": [e.player_id for e in entries]}
+
+
+@router.post("/{draft_id}/queue/add")
+@limiter.limit("120/hour")
+async def api_add_to_queue(
+    request: Request,
+    draft_id: str,
+    data: QueueMutation,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Append a player to the end of a team's queue."""
+    _, league = await _get_draft_and_league_or_404(draft_id, db)
+    await _require_queue_access(data.team_id, league, current_user, db)
+    await add_to_queue(db, draft_id, data.team_id, data.player_id)
+    entries = await get_team_queue(db, draft_id, data.team_id)
+    return {"player_ids": [e.player_id for e in entries]}
+
+
+@router.post("/{draft_id}/queue/remove")
+@limiter.limit("120/hour")
+async def api_remove_from_queue(
+    request: Request,
+    draft_id: str,
+    data: QueueMutation,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove a player from a team's queue."""
+    _, league = await _get_draft_and_league_or_404(draft_id, db)
+    await _require_queue_access(data.team_id, league, current_user, db)
+    await remove_from_queue(db, draft_id, data.team_id, data.player_id)
+    entries = await get_team_queue(db, draft_id, data.team_id)
+    return {"player_ids": [e.player_id for e in entries]}

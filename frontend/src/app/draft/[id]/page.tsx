@@ -198,7 +198,11 @@ export default function DraftPage() {
     }
   }, []);
 
-  // Queue system
+  // Queue system -- server-persisted (2026-09-09) so it survives a page
+  // refresh; local state here is just a client-side mirror, kept in sync
+  // via the effect below and optimistic updates in toggleQueue. See
+  // api-client.ts's draftsApi.getQueue/addToQueue/removeFromQueue and
+  // the backend's draft_queue_entries table.
   const [queue, setQueue] = useState<Player[]>([]);
 
   // Filter + search players. Memoized -- available_players can be
@@ -291,6 +295,32 @@ export default function DraftPage() {
   useEffect(() => {
     setSelectedTeamId(myTeamId);
   }, [myTeamId]);
+
+  // Load this team's persisted queue from the server the moment
+  // myTeamId is known -- on first mount (claimed team resolved from
+  // localStorage), on claim/unclaim, and again if the user switches
+  // which team they're managing. This is what makes the queue survive
+  // an actual page refresh: the browser tab reloading loses all React
+  // state, but not what's saved server-side. Player objects are
+  // resolved from the already-loaded available_players list (same
+  // shape the rest of the page already uses); a queued player who's
+  // since been drafted won't resolve here, but the server already
+  // dropped that row too (see draft_manager.make_pick's queue cleanup),
+  // so there's nothing stale left to reconcile.
+  useEffect(() => {
+    if (!myTeamId || !draft?.available_players) return;
+    draftsApi.getQueue(id, myTeamId)
+      .then((res) => {
+        const ids = (res as { player_ids: string[] }).player_ids;
+        const byId = new Map(draft.available_players.map((p) => [p.id, p]));
+        setQueue(ids.map((pid) => byId.get(pid)).filter((p): p is Player => !!p));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately
+    // NOT re-running on every available_players reference change (the 5s
+    // poll) -- only when the team being managed actually changes. Once
+    // loaded, local toggles + the make-pick cleanup keep it in sync.
+  }, [myTeamId, id]);
 
   const fetchState = useCallback(async () => {
     try {
@@ -517,12 +547,20 @@ export default function DraftPage() {
   };
 
   const toggleQueue = useCallback((player: Player) => {
-    setQueue(prev => {
-      const exists = prev.find(p => p.id === player.id);
-      if (exists) return prev.filter(p => p.id !== player.id);
-      return [...prev, player];
+    const wasQueued = queue.some(p => p.id === player.id);
+    // Optimistic local update -- instant feedback, same as before this
+    // was server-persisted. Reverted if the server call fails (e.g. a
+    // dropped connection), so local state can't silently drift from
+    // what's actually saved.
+    setQueue(prev => (wasQueued ? prev.filter(p => p.id !== player.id) : [...prev, player]));
+    if (!myTeamId) return; // no team claimed yet -- nothing to persist against
+    const call = wasQueued
+      ? draftsApi.removeFromQueue(id, myTeamId, player.id)
+      : draftsApi.addToQueue(id, myTeamId, player.id);
+    call.catch(() => {
+      setQueue(prev => (wasQueued ? [...prev, player] : prev.filter(p => p.id !== player.id)));
     });
-  }, []);
+  }, [queue, myTeamId, id]);
 
   const isQueued = useCallback((playerId: string) => queue.some(p => p.id === playerId), [queue]);
 

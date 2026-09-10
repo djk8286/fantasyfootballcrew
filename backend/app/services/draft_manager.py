@@ -10,12 +10,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, update
+from sqlalchemy import select, and_, or_, update, delete, func
 from sqlalchemy.exc import IntegrityError
 from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League, DraftStatus, LeagueType, DraftType
+from app.models.draft_queue_entry import DraftQueueEntry
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.models.contract import Contract
@@ -423,6 +424,19 @@ async def make_pick(
                     signed_year=datetime.now(timezone.utc).year, source="draft", is_active=True,
                 ))
 
+    # Drop this player from EVERY team's queue in this draft, not just the
+    # picking team's own -- once drafted, they're unavailable to anyone,
+    # so a stale queue entry on another team would otherwise sit there
+    # forever (get_next_pick_for_team already skips drafted players when
+    # reading the queue, but there's no reason to let the table grow
+    # unbounded with dead rows). Same transaction as the pick itself.
+    await db.execute(
+        delete(DraftQueueEntry).where(
+            DraftQueueEntry.draft_id == draft_id,
+            DraftQueueEntry.player_id == player_id,
+        )
+    )
+
     await db.commit()
     await db.refresh(draft_pick)
     return draft_pick
@@ -764,6 +778,93 @@ def get_percentile_tier(rank: int, total: int) -> int:
     elif pct <= 0.80:
         return 4
     return 5
+
+
+async def get_team_queue(db: AsyncSession, draft_id: str, team_id: str) -> list[DraftQueueEntry]:
+    """A team's queue, in pick order (position ascending). Includes
+    entries for players who may have since been drafted by someone else
+    -- callers that need "still available" should cross-check against
+    current picks themselves (see get_next_pick_for_team), same as the
+    frontend already does for its own local queue state."""
+    result = await db.execute(
+        select(DraftQueueEntry)
+        .where(DraftQueueEntry.draft_id == draft_id, DraftQueueEntry.team_id == team_id)
+        .order_by(DraftQueueEntry.position)
+    )
+    return list(result.scalars().all())
+
+
+async def add_to_queue(db: AsyncSession, draft_id: str, team_id: str, player_id: str) -> None:
+    """Append a player to the end of a team's queue. No-ops (doesn't
+    raise) if already queued -- toggling a player that's already in the
+    queue is a client bug, not a real conflict worth a 400 for."""
+    existing = await db.execute(
+        select(DraftQueueEntry).where(
+            DraftQueueEntry.draft_id == draft_id,
+            DraftQueueEntry.team_id == team_id,
+            DraftQueueEntry.player_id == player_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return
+    max_position = await db.scalar(
+        select(func.max(DraftQueueEntry.position)).where(
+            DraftQueueEntry.draft_id == draft_id, DraftQueueEntry.team_id == team_id
+        )
+    )
+    db.add(DraftQueueEntry(
+        draft_id=draft_id, team_id=team_id, player_id=player_id,
+        position=(max_position + 1) if max_position is not None else 0,
+    ))
+    await db.commit()
+
+
+async def remove_from_queue(db: AsyncSession, draft_id: str, team_id: str, player_id: str) -> None:
+    """Remove one player from a team's queue. Leaves the remaining
+    entries' `position` values as-is (gaps are fine -- get_team_queue
+    only ever needs relative order, never contiguous integers)."""
+    await db.execute(
+        delete(DraftQueueEntry).where(
+            DraftQueueEntry.draft_id == draft_id,
+            DraftQueueEntry.team_id == team_id,
+            DraftQueueEntry.player_id == player_id,
+        )
+    )
+    await db.commit()
+
+
+async def get_next_pick_for_team(
+    db: AsyncSession,
+    draft_id: str,
+    team_id: str,
+    current_round: Optional[int] = None,
+    total_rounds: Optional[int] = None,
+    available_players: Optional[list[Player]] = None,
+) -> Optional[Player]:
+    """Server-authoritative "what should this team pick right now" --
+    the single function both the manual /auto-pick endpoint and the
+    timer-expiry watchdog (scheduler.py) call, so the two paths can never
+    disagree. Checks the team's persisted queue FIRST, in order, skipping
+    anyone already drafted (by this team or anyone else) -- only falls
+    back to the AI ranking (get_ai_mock_pick) once the queue is empty or
+    fully exhausted. This is what makes "auto-pick takes from the queue"
+    true unconditionally, not just when the owning client's own browser
+    tab happens to be open and running its own client-side queue check."""
+    queue = await get_team_queue(db, draft_id, team_id)
+    if queue:
+        drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
+        drafted_ids = {row[0] for row in drafted_result.all()}
+        for entry in queue:
+            if entry.player_id in drafted_ids:
+                continue
+            player_result = await db.execute(select(Player).where(Player.id == entry.player_id))
+            player = player_result.scalar_one_or_none()
+            if player:
+                return player
+    return await get_ai_mock_pick(
+        db, draft_id, team_id,
+        current_round=current_round, total_rounds=total_rounds, available_players=available_players,
+    )
 
 
 async def get_ai_mock_pick(

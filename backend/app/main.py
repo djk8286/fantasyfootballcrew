@@ -12,7 +12,7 @@ from app.core.database import engine
 from app.core.limiter import limiter
 from app.core.sentry import init_sentry
 from app.core.security_headers import SecurityHeadersMiddleware
-from app.services.scheduler import run_scheduler
+from app.services.scheduler import run_scheduler, run_draft_timer_watchdog
 from app.api.v1 import (
     auth_router, users_router, leagues_router,
     teams_router, players_router, scoring_router,
@@ -45,14 +45,22 @@ async def lifespan(app: FastAPI):
     # after every deploy" step documented in DEPLOYMENT.md.
     scheduler_task = asyncio.create_task(run_scheduler())
 
+    # Draft timer enforcement (2026-09-09) -- a separate task, not folded
+    # into run_scheduler's loop, since a draft pick timer needs a much
+    # tighter poll interval (a few seconds) than the 2-minute stats-sync
+    # cadence. See run_draft_timer_watchdog's docstring.
+    draft_timer_task = asyncio.create_task(run_draft_timer_watchdog())
+
     yield
 
     # Shutdown
     scheduler_task.cancel()
-    try:
-        await scheduler_task
-    except asyncio.CancelledError:
-        pass
+    draft_timer_task.cancel()
+    for task in (scheduler_task, draft_timer_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await engine.dispose()
 
 

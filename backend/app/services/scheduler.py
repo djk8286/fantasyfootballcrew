@@ -34,7 +34,7 @@ The manual commissioner button still exists unchanged, as a force-recalc
 option (e.g. after a late roster correction).
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 from app.core.database import async_session
@@ -44,7 +44,9 @@ from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.services.waiver_service import process_league_waivers
+from app.services.draft_manager import get_draft_state, get_next_pick_for_team, make_pick
 from app.models.league import League, DraftStatus, LeagueType
+from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
 from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service
 from app.services.ai_service import AIService
@@ -381,6 +383,85 @@ async def _sync_projections_once() -> None:
         print(f"[scheduler] Synced week {week}, {season} ({season_type}) projections for {count} players")
     except Exception as e:
         print(f"[scheduler] Projections sync failed: {e}")
+
+
+DRAFT_TIMER_CHECK_INTERVAL = 5  # seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
+
+
+async def _process_expired_draft_picks_once() -> None:
+    """Server-authoritative timer enforcement (2026-09-09): forces an
+    auto-pick the moment a draft's current pick's clock runs out, whether
+    or not any browser tab is even open to notice. Before this, timer
+    expiry was purely client-driven (draft/[id]/page.tsx scheduling a
+    setTimeout against the deadline) -- if nobody connected to that
+    draft had a tab open when the clock hit zero, the pick simply never
+    happened until someone did. This is the same job any connected
+    client's own expiry timer already does (POST /drafts/{id}/auto-pick),
+    just running independently of whether one exists.
+
+    Runs make_pick through the exact same CAS-protected path everything
+    else does (get_next_pick_for_team -> make_pick), so a human picking
+    at the exact same moment this fires just makes the loser of that
+    race raise "someone else just picked" -- caught and logged below,
+    not a correctness issue. One draft's failure (a data problem, a
+    player pool exhausted, etc.) is isolated so it can't block every
+    other in-progress draft's own check this tick."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Draft).where(
+                Draft.status == DraftRunStatus.IN_PROGRESS,
+                Draft.timer_seconds > 0,
+                Draft.current_pick_started_at.isnot(None),
+            )
+        )
+        drafts = result.scalars().all()
+
+        now = datetime.now(timezone.utc)
+        forced = 0
+        for draft in drafts:
+            started_at = draft.current_pick_started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            deadline = started_at + timedelta(seconds=draft.timer_seconds)
+            if now < deadline:
+                continue
+            try:
+                state = await get_draft_state(db, draft.id)
+                team_id = state["current_team_id"]
+                if not team_id or state["draft"]["status"] != "in_progress":
+                    continue
+                player = await get_next_pick_for_team(db, draft.id, team_id)
+                if not player:
+                    continue
+                await make_pick(db, draft.id, team_id, player.id)
+                forced += 1
+            except ValueError:
+                # "It's not your turn" (someone else picked in the same
+                # instant), "Draft is not in progress" (finished between
+                # the query above and now), etc. -- not an error worth
+                # logging, just a lost race or stale read.
+                pass
+            except Exception as e:
+                print(f"[draft_timer] auto-pick failed for draft {draft.id}: {e}")
+
+    if forced:
+        print(f"[draft_timer] Forced {forced} expired-timer auto-pick(s)")
+
+
+async def run_draft_timer_watchdog() -> None:
+    """Entry point -- launched as its own background task at app startup
+    (see main.py), independent of run_scheduler's much slower stats-sync
+    cadence. A draft timer can be as short as a few seconds (commissioner-
+    configurable, see api_set_timer's 0-600s range), so this needs its
+    own tight poll loop rather than sharing STATS_SYNC_INTERVAL's 2
+    minutes."""
+    print(f"[draft_timer] Starting -- checking every {DRAFT_TIMER_CHECK_INTERVAL}s for expired draft picks")
+    while True:
+        try:
+            await _process_expired_draft_picks_once()
+        except Exception as e:
+            print(f"[draft_timer] Check iteration failed: {e}")
+        await asyncio.sleep(DRAFT_TIMER_CHECK_INTERVAL)
 
 
 async def run_scheduler() -> None:
