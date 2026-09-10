@@ -1016,8 +1016,13 @@ export default function LeagueDetailPage() {
                     try {
                       const draftRes = await draftsApi.create(league.id, 15) as { id: string };
                       window.location.href = `/draft/${draftRes.id}`;
-                    } catch {
-                      setActionError("Failed to create draft. Make sure your league has at least 2 teams.");
+                    } catch (err) {
+                      // Was a hardcoded "make sure you have 2 teams" message
+                      // regardless of the real cause -- actively misled a
+                      // real user (their league had 4 teams; the actual
+                      // failure was transient/unrelated) into thinking
+                      // their own setup was the problem.
+                      setActionError(err instanceof Error ? err.message : "Failed to create draft.");
                       setLoading(false);
                     }
                   }}
