@@ -56,11 +56,21 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
+_docs_enabled = settings.ENVIRONMENT != "production"
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="Customizable Fantasy Football Platform",
     version="0.1.0",
     lifespan=lifespan,
+    # /docs, /redoc, and the raw /openapi.json schema they're built from
+    # were all publicly world-readable -- doesn't leak secrets or let
+    # anyone bypass auth, but does hand out a complete map of every
+    # endpoint/field for free. Still on locally (ENVIRONMENT defaults to
+    # "development") since they're genuinely useful during dev.
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # Rate limiting -- see app/core/limiter.py. Per-route limits (login/register)
