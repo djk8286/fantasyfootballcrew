@@ -14,9 +14,10 @@ from app.models.coach import Coach
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.services.ai_service import AIService
-from app.services.standings_service import get_standings, get_combined_standings
+from app.services.standings_service import get_standings, get_combined_standings, get_season_schedule, DEFAULT_SEASON_WEEKS
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.services.ai_usage_service import record_ai_usage
+from app.services.scheduler import fetch_nfl_state
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -126,6 +127,61 @@ async def _partner_summary(team: Team, league: League, db: AsyncSession) -> dict
     return row or {}
 
 
+async def _current_matchup_context(team: Team, league: League | None, db: AsyncSession) -> tuple[dict, dict]:
+    """This team's REAL current-week opponent roster + matchup context,
+    for threading into the AI lineup prompt (2026-09-09). Previously
+    analyze_lineup passed opponent_roster={} and matchups={}
+    unconditionally -- the AI could only ever compare a lineup against
+    generic rankings, never against what's actually happening in the
+    team's own matchup this week. Reuses get_season_schedule (the same
+    real/projected-score schedule the Schedule page itself renders) to
+    find this week's opponent, rather than a second, parallel
+    "who do I play this week" implementation.
+
+    No-ops to ({}, {}) for a mock/practice-draft league, a league with
+    no schedule this week (bye week, an odd team out, or Guillotine's
+    finale pairing not applying), or if the live NFL week can't be
+    fetched -- same "meaningless but harmless" precedent every other
+    optional context helper here (_salary_summary, _partner_summary)
+    already follows for a case it doesn't apply to."""
+    if not league or league.is_mock:
+        return {}, {}
+    try:
+        state = await fetch_nfl_state()
+        season = int(state["season"])
+        week = int(state["week"])
+    except Exception:
+        return {}, {}
+
+    schedule = await get_season_schedule(league.id, season, db, num_weeks=DEFAULT_SEASON_WEEKS)
+    week_entry = next((w for w in schedule if w["week"] == week), None)
+    if not week_entry:
+        return {}, {}
+
+    opponent_id = my_entry = opp_entry = None
+    for m in week_entry["matchups"]:
+        if m["team_a"]["id"] == team.id:
+            opponent_id, my_entry, opp_entry = m["team_b"]["id"], m["team_a"], m["team_b"]
+            break
+        if m["team_b"]["id"] == team.id:
+            opponent_id, my_entry, opp_entry = m["team_a"]["id"], m["team_b"], m["team_a"]
+            break
+    if not opponent_id:
+        return {}, {}  # bye week / eliminated / odd team out this week
+
+    opp_result = await db.execute(select(Team).where(Team.id == opponent_id))
+    opponent = opp_result.scalar_one_or_none()
+    opponent_roster = await _roster_summary(opponent, db) if opponent else {}
+
+    matchups = {
+        "week": week,
+        "opponent_team_name": opponent.name if opponent else "Unknown",
+        "my_projected_score": my_entry["projected_score"],
+        "opponent_projected_score": opp_entry["projected_score"],
+    }
+    return opponent_roster, matchups
+
+
 class LineupAnalysisRequest(BaseModel):
     team_id: str
 
@@ -166,10 +222,15 @@ async def analyze_lineup(
     coaching_staff = await _coach_summary(team, db)
     salary_context = await _salary_summary(team, league, db)
     partner_context = await _partner_summary(team, league, db)
+    # This team's REAL current-week opponent + matchup context -- was
+    # hardcoded empty, so the AI could only ever compare a lineup
+    # against generic rankings, never against what's actually happening
+    # in the team's own matchup this week. See _current_matchup_context.
+    opponent_roster, matchups = await _current_matchup_context(team, league, db)
 
     service = _get_ai_service()
     analysis = await service.analyze_lineup(
-        roster=roster, opponent_roster={}, matchups={}, scoring=scoring,
+        roster=roster, opponent_roster=opponent_roster, matchups=matchups, scoring=scoring,
         coaching_staff=coaching_staff, salary_context=salary_context,
         partner_context=partner_context,
     )
