@@ -428,6 +428,13 @@ export const aiApi = {
       method: "POST",
       body: { prompt },
     }),
+  // Past results for one tool (lineup/trade/bet), newest first --
+  // leagueId narrows Lineup/Trade to the currently-selected league;
+  // Bet has none, so callers just omit it.
+  history: (analysisType: "lineup" | "trade" | "bet", leagueId?: string) =>
+    apiRequest(
+      `/api/v1/ai/history?analysis_type=${analysisType}${leagueId ? `&league_id=${leagueId}` : ""}`
+    ),
 };
 
 // Dashboard AI Summaries -- NFL-wide panels (top real performers, NFL

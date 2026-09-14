@@ -23,6 +23,14 @@ interface TradeItem {
   details?: { target_team_id?: string; offered_player_ids?: string[]; requested_player_ids?: string[] };
 }
 
+interface HistoryItem {
+  id: string;
+  league_id: string | null;
+  summary: string;
+  result: string;
+  created_at: string | null;
+}
+
 type Tab = "lineup" | "trade" | "bet";
 
 export default function AIAnalysisPage() {
@@ -102,6 +110,38 @@ function AnalysisResult({ analysis }: { analysis: string }) {
   );
 }
 
+// Past results for the current tool (scoped by league where the tool
+// itself is), newest first. Clicking one just redisplays its saved
+// result -- these tools are one-shot Q&A, not a re-runnable chat, so
+// there's nothing to "continue," only to look back at.
+function HistoryList({ items, onSelect }: { items: HistoryItem[]; onSelect: (result: string) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wide mb-2">
+        Recent
+      </h3>
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelect(item.result)}
+            className="w-full flex items-center justify-between gap-3 text-left px-3 py-2 rounded-lg bg-surface-800/50 border border-surface-700 hover:border-gold-400/40 text-sm text-surface-300 hover:text-white transition-all"
+          >
+            <span className="truncate">{item.summary}</span>
+            {item.created_at && (
+              <span className="text-xs text-surface-500 shrink-0">
+                {new Date(item.created_at).toLocaleDateString()}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LineupTab() {
   const [leagues, setLeagues] = useState<League[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -110,8 +150,16 @@ function LineupTab() {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
 
   const userId = getCurrentUserId();
+
+  const loadHistory = useCallback((lid: string) => {
+    aiApi
+      .history("lineup", lid || undefined)
+      .then((data) => setHistory((data as { history: HistoryItem[] }).history))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     leaguesApi
@@ -137,6 +185,12 @@ function LineupTab() {
       .catch(() => {});
   }, [leagueId, userId]);
 
+  // Past lineup analyses -- scoped to whichever league is selected (or
+  // this user's lineup history across every league, before one is).
+  useEffect(() => {
+    loadHistory(leagueId);
+  }, [leagueId, loadHistory]);
+
   const handleSubmit = async () => {
     if (!teamId) return;
     setLoading(true);
@@ -145,6 +199,7 @@ function LineupTab() {
     try {
       const res = (await aiApi.lineup(teamId)) as { analysis: string };
       setAnalysis(res.analysis);
+      loadHistory(leagueId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to get analysis");
     } finally {
@@ -201,6 +256,7 @@ function LineupTab() {
       </button>
 
       {analysis && <AnalysisResult analysis={analysis} />}
+      <HistoryList items={history} onSelect={setAnalysis} />
     </div>
   );
 }
@@ -213,6 +269,14 @@ function TradeTab() {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const loadHistory = useCallback((lid: string) => {
+    aiApi
+      .history("trade", lid || undefined)
+      .then((data) => setHistory((data as { history: HistoryItem[] }).history))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     leaguesApi
@@ -241,6 +305,12 @@ function TradeTab() {
     loadTrades(leagueId);
   }, [leagueId, loadTrades]);
 
+  // Past trade evaluations -- scoped to whichever league is selected
+  // (or this user's trade history across every league, before one is).
+  useEffect(() => {
+    loadHistory(leagueId);
+  }, [leagueId, loadHistory]);
+
   const handleSubmit = async () => {
     if (!tradeId) return;
     setLoading(true);
@@ -249,6 +319,7 @@ function TradeTab() {
     try {
       const res = (await aiApi.trade(tradeId)) as { analysis: string };
       setAnalysis(res.analysis);
+      loadHistory(leagueId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to get analysis");
     } finally {
@@ -310,6 +381,7 @@ function TradeTab() {
       </button>
 
       {analysis && <AnalysisResult analysis={analysis} />}
+      <HistoryList items={history} onSelect={setAnalysis} />
     </div>
   );
 }
@@ -319,6 +391,21 @@ function BetTab() {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const loadHistory = useCallback(() => {
+    aiApi
+      .history("bet")
+      .then((data) => setHistory((data as { history: HistoryItem[] }).history))
+      .catch(() => {});
+  }, []);
+
+  // Bet analysis isn't scoped to a league, so history loads once,
+  // up front, rather than re-keying off a league selector like the
+  // other two tabs.
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
 
   const handleSubmit = async () => {
     if (!prompt.trim()) return;
@@ -328,6 +415,7 @@ function BetTab() {
     try {
       const res = (await aiApi.bet(prompt)) as { analysis: string };
       setAnalysis(res.analysis);
+      loadHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to get analysis");
     } finally {
@@ -359,6 +447,7 @@ function BetTab() {
       </button>
 
       {analysis && <AnalysisResult analysis={analysis} />}
+      <HistoryList items={history} onSelect={setAnalysis} />
     </div>
   );
 }

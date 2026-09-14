@@ -20,6 +20,7 @@ from app.models.contract import Contract, DeadMoney
 from app.models.commissioner_digest import CommissionerDigest
 from app.models.chat_message import ChatMessage
 from app.models.ai_usage_event import AIUsageEvent
+from app.models.ai_analysis_history import AIAnalysisHistory
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.email_send_log import EmailSendLog
 from app.models.team_weekly_recap import TeamWeeklyRecap
@@ -41,6 +42,7 @@ __all__ = [
     "CommissionerDigest",
     "ChatMessage",
     "AIUsageEvent",
+    "AIAnalysisHistory",
     "EmailVerificationToken",
     "EmailSendLog",
     "TeamWeeklyRecap",

@@ -17,6 +17,7 @@ from app.services.ai_service import AIService
 from app.services.standings_service import get_standings, get_combined_standings, get_season_schedule, DEFAULT_SEASON_WEEKS
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.services.ai_usage_service import record_ai_usage
+from app.services.ai_history_service import record_analysis, get_analysis_history
 from app.services.scheduler import fetch_nfl_state
 from app.api.deps import get_current_user
 
@@ -235,6 +236,10 @@ async def analyze_lineup(
         partner_context=partner_context,
     )
     await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
+    await record_analysis(
+        db, user_id=current_user.id, analysis_type="lineup", league_id=team.league_id,
+        summary=f"{team.name} — {league.name}" if league else team.name, result=analysis,
+    )
     await db.commit()
     return {"analysis": analysis}
 
@@ -300,6 +305,10 @@ async def analyze_trade(
         team_a_partner=team_a_partner, team_b_partner=team_b_partner,
     )
     await record_ai_usage(db, "trade", league_id=trade.league_id, user_id=current_user.id)
+    await record_analysis(
+        db, user_id=current_user.id, analysis_type="trade", league_id=trade.league_id,
+        summary=f"{proposer.name} ↔ {target.name}", result=analysis,
+    )
     await db.commit()
     return {"analysis": analysis}
 
@@ -331,5 +340,37 @@ async def analyze_bet(
     # No league_id -- this tool isn't scoped to any league (freeform
     # personal betting question). See AIUsageEvent's model docstring.
     await record_ai_usage(db, "bet", user_id=current_user.id)
+    summary = body.prompt if len(body.prompt) <= 140 else body.prompt[:137] + "..."
+    await record_analysis(
+        db, user_id=current_user.id, analysis_type="bet", summary=summary, result=analysis,
+    )
     await db.commit()
     return {"analysis": analysis}
+
+
+def _history_dict(h) -> dict:
+    return {
+        "id": h.id,
+        "league_id": h.league_id,
+        "summary": h.summary,
+        "result": h.result,
+        "created_at": h.created_at.isoformat() if h.created_at else None,
+    }
+
+
+@router.get("/history")
+async def get_history(
+    analysis_type: str,
+    league_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """This user's past results for one AI Analysis tool, newest first
+    -- see ai_history_service.py. No LLM call, so unrated (unlike
+    /lineup, /trade, /bet above)."""
+    if analysis_type not in {"lineup", "trade", "bet"}:
+        raise HTTPException(status_code=422, detail="analysis_type must be one of: lineup, trade, bet")
+    history = await get_analysis_history(
+        db, user_id=current_user.id, analysis_type=analysis_type, league_id=league_id,
+    )
+    return {"history": [_history_dict(h) for h in history]}
