@@ -196,7 +196,7 @@ function ConfirmDeleteDialog({
     <div
       ref={backdropRef}
       onMouseDown={handleBackdropMouseDown}
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
@@ -278,7 +278,7 @@ function LeagueDetailModal({
     <div
       ref={backdropRef}
       onMouseDown={handleBackdropMouseDown}
-      className="fixed inset-0 z-40 bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-[60] bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
     >
