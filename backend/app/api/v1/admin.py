@@ -1,15 +1,22 @@
 """
-Read-only dev/management dashboard for David and anyone he grants
-is_admin to (see User.is_admin, deps.require_admin). Deliberately
-read-only -- no delete/edit endpoints here. The 2026-09-08 incident this
-exists to prevent wasn't a bad delete so much as a delete made without
-knowing who was actually using the app; the fix for that is visibility,
-not a more convenient delete button. Destructive league/user cleanup
-stays a deliberate one-off script against prod, same as it's always
-been -- see [[ffc-beta-draft-readiness]] in project memory.
+Dev/management dashboard for David and anyone he grants is_admin to
+(see User.is_admin, deps.require_admin). Was deliberately read-only
+until 2026-09-22 -- the 2026-09-08 incident this originally existed to
+prevent wasn't a bad delete so much as a delete made without knowing
+who was actually using the app, and the fix for THAT was visibility,
+not a delete button. That reasoning still holds, which is why
+get_league_detail below exists at all: an admin can now actually look
+at a league's real drafts/teams/scoring before deciding whether it's
+dead, instead of deleting blind. Deletion itself is now a real,
+explicit admin ask (leagues and unverified/inactive users specifically)
+-- delete_league/delete_user_account below are the same one-off-script
+logic this docstring used to point at, just reachable from the
+dashboard instead of a shell. Every league/user list endpoint here
+already IS the visibility check; deletion doesn't skip it, since the
+frontend always shows this same data before offering a delete.
 """
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -21,6 +28,8 @@ from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.email_send_log import EmailSendLog
 from app.api.deps import require_admin
+from app.services.league_deletion_service import delete_league as _delete_league
+from app.services.account_deletion_service import delete_user_account
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -112,6 +121,138 @@ async def list_leagues(
         }
         for l in leagues
     ]
+
+
+@router.get("/leagues/{league_id}")
+async def get_league_detail(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Everything about one league in a single read-only view: its real
+    teams (with owners), drafts (with pick progress), and scoring/
+    roster-slot layout -- exactly what an admin needs to tell a real,
+    active league apart from a dead shell BEFORE deciding to delete it
+    (see module docstring). No write path here -- changing anything
+    about a league still only ever happens through the normal
+    commissioner endpoints, never this dashboard."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+
+    teams_result = await db.execute(select(Team).where(Team.league_id == league_id).order_by(Team.name))
+    teams = teams_result.scalars().all()
+
+    user_ids = {league.commissioner_id}
+    user_ids |= {t.owner_id for t in teams if t.owner_id}
+    user_ids |= {t.co_owner_id for t in teams if t.co_owner_id}
+    users_by_id: dict[str, User] = {}
+    if user_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        users_by_id = {u.id: u for u in users_result.scalars().all()}
+
+    drafts_result = await db.execute(
+        select(Draft).where(Draft.league_id == league_id).order_by(Draft.created_at.desc())
+    )
+    drafts = drafts_result.scalars().all()
+    pick_counts: dict[str, int] = {}
+    if drafts:
+        pick_count_result = await db.execute(
+            select(DraftPick.draft_id, func.count(DraftPick.id))
+            .where(DraftPick.draft_id.in_([d.id for d in drafts]))
+            .group_by(DraftPick.draft_id)
+        )
+        pick_counts = dict(pick_count_result.all())
+
+    return {
+        "id": league.id,
+        "name": league.name,
+        "description": league.description,
+        "commissioner_username": users_by_id[league.commissioner_id].username if league.commissioner_id in users_by_id else None,
+        "commissioner_email": users_by_id[league.commissioner_id].email if league.commissioner_id in users_by_id else None,
+        "league_type": league.league_type.value,
+        "visibility": league.visibility.value,
+        "draft_status": league.draft_status.value,
+        "draft_type": league.draft_type.value,
+        "max_teams": league.max_teams,
+        "is_mock": league.is_mock,
+        "created_at": league.created_at,
+        "scoring_config": league.scoring_config,
+        "roster_slots": league.roster_slots,
+        "teams": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "owner_username": users_by_id[t.owner_id].username if t.owner_id in users_by_id else None,
+                "co_owner_username": users_by_id[t.co_owner_id].username if t.co_owner_id in users_by_id else None,
+                "is_cpu": t.is_cpu,
+                "wins": t.wins, "losses": t.losses, "ties": t.ties,
+                "points_for": t.points_for, "points_against": t.points_against,
+                "roster_size": len(t.roster or []),
+            }
+            for t in teams
+        ],
+        "drafts": [
+            {
+                "id": d.id,
+                "status": d.status.value,
+                "draft_type": d.draft_type,
+                "current_round": d.current_round,
+                "current_pick": d.current_pick,
+                "total_rounds": d.total_rounds,
+                "timer_seconds": d.timer_seconds,
+                "picks_made": pick_counts.get(d.id, 0),
+                "created_at": d.created_at,
+            }
+            for d in drafts
+        ],
+    }
+
+
+@router.delete("/leagues/{league_id}")
+async def admin_delete_league(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Permanently and irreversibly deletes a league and every row
+    scoped to it -- see league_deletion_service.delete_league for the
+    full cascade. The frontend requires typing the league's exact name
+    to confirm before ever calling this; nothing enforces that
+    server-side beyond admin gating, same trust level every other admin
+    endpoint here already has."""
+    result = await db.execute(select(League).where(League.id == league_id))
+    league = result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    await _delete_league(db, league)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/users/{user_id}")
+async def admin_delete_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Permanently and irreversibly deletes a user account -- same
+    cleanup as the self-service DELETE /users/me (see
+    account_deletion_service.delete_user_account), minus the password
+    confirmation (the admin isn't the account owner). 409s the same way
+    self-service deletion does if this user is the sole real member of
+    a league they commission -- delete that league first (see DELETE
+    /admin/leagues/{league_id} above) or reassign it."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Use account settings to delete your own account")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await delete_user_account(db, user)
+    await db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/ai-usage")

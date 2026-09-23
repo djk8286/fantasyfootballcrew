@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { adminApi } from "@/lib/api-client";
-import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle } from "lucide-react";
+import { adminApi, getCurrentUserId } from "@/lib/api-client";
+import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle, Trash2, X, Swords, DollarSign } from "lucide-react";
 
 interface Stats {
   users: number;
@@ -69,6 +69,51 @@ interface EmailLogRow {
   created_at: string;
 }
 
+interface AdminLeagueTeam {
+  id: string;
+  name: string;
+  owner_username: string | null;
+  co_owner_username: string | null;
+  is_cpu: boolean;
+  wins: number;
+  losses: number;
+  ties: number;
+  points_for: number;
+  points_against: number;
+  roster_size: number;
+}
+
+interface AdminLeagueDraft {
+  id: string;
+  status: string;
+  draft_type: string;
+  current_round: number;
+  current_pick: number;
+  total_rounds: number;
+  timer_seconds: number;
+  picks_made: number;
+  created_at: string;
+}
+
+interface AdminLeagueDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  commissioner_username: string | null;
+  commissioner_email: string | null;
+  league_type: string;
+  visibility: string;
+  draft_status: string;
+  draft_type: string;
+  max_teams: number;
+  is_mock: boolean;
+  created_at: string;
+  scoring_config: Record<string, unknown>;
+  roster_slots: Record<string, unknown>;
+  teams: AdminLeagueTeam[];
+  drafts: AdminLeagueDraft[];
+}
+
 type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log";
 
 const FLAG_LABELS: Record<string, string> = {
@@ -105,6 +150,242 @@ function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
+// Deliberately friction-full -- destructive and irreversible, so
+// there's a real difference between clicking a button twice and
+// actually typing the exact name/username being deleted. Matches the
+// "visibility before deletion" spirit this dashboard has always had
+// (see admin.py's module docstring): you have to actually read and
+// retype the thing you're about to erase.
+function ConfirmDeleteDialog({
+  title, itemLabel, warning, onConfirm, onCancel, error,
+}: {
+  title: string;
+  itemLabel: string;
+  warning: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  error: string | null;
+}) {
+  const [typed, setTyped] = useState("");
+  const canConfirm = typed === itemLabel;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="bg-surface-800 border border-red-500/30 rounded-2xl p-6 max-w-md w-full">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle className="w-5 h-5 text-red-400" />
+          <h2 className="text-white font-bold text-lg">{title}</h2>
+        </div>
+        <p className="text-surface-300 text-sm mb-4">{warning}</p>
+        {error && (
+          <div className="p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+        <label className="block text-xs text-surface-400 mb-1.5">
+          Type <span className="text-white font-semibold">{itemLabel}</span> to confirm
+        </label>
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className="w-full px-3 py-2.5 bg-surface-900 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-red-400 mb-4"
+          autoFocus
+        />
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-surface-300 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!canConfirm}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-red-500 hover:bg-red-400 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Delete permanently
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LeagueDetailModal({
+  leagueId, onClose, onDeleted,
+}: {
+  leagueId: string;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [detail, setDetail] = useState<AdminLeagueDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    adminApi
+      .getLeagueDetail(leagueId)
+      .then((data) => setDetail(data as AdminLeagueDetail))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load league"))
+      .finally(() => setLoading(false));
+  }, [leagueId]);
+
+  const handleDelete = () => {
+    adminApi
+      .deleteLeague(leagueId)
+      .then(() => {
+        setConfirmingDelete(false);
+        onDeleted();
+      })
+      .catch((err: unknown) => setDeleteError(err instanceof Error ? err.message : "Failed to delete league"));
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true">
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 max-w-3xl w-full my-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-white font-bold text-lg flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-gold-400" />
+            {detail?.name || "League"}
+          </h2>
+          <button onClick={onClose} aria-label="Close" className="text-surface-400 hover:text-white transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-6 h-6 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : error ? (
+          <p className="text-red-400 text-sm">{error}</p>
+        ) : detail ? (
+          <div className="space-y-5">
+            <p className="text-surface-500 text-xs">
+              Read-only -- this dashboard can view and delete a league, but never edit its
+              settings. Changes still only happen through the normal commissioner tools.
+            </p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <div>
+                <p className="text-surface-500 text-xs">Commissioner</p>
+                <p className="text-white">{detail.commissioner_username || "—"}</p>
+              </div>
+              <div>
+                <p className="text-surface-500 text-xs">Type</p>
+                <p className="text-white">{detail.league_type}</p>
+              </div>
+              <div>
+                <p className="text-surface-500 text-xs">Visibility</p>
+                <p className="text-white">{detail.visibility}</p>
+              </div>
+              <div>
+                <p className="text-surface-500 text-xs">Draft Status</p>
+                <p className="text-white">{detail.draft_status.replace("_", " ")}</p>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                <Users className="w-4 h-4 text-gold-400" /> Teams ({detail.teams.length})
+              </h3>
+              {detail.teams.length === 0 ? (
+                <p className="text-surface-500 text-sm">No teams yet.</p>
+              ) : (
+                <div className="bg-surface-900/50 border border-surface-700 rounded-xl overflow-hidden overflow-x-auto">
+                  <table className="w-full text-sm min-w-[520px]">
+                    <thead>
+                      <tr className="border-b border-surface-700 text-left text-surface-400 text-xs uppercase tracking-wider">
+                        <th className="px-3 py-2 font-medium">Team</th>
+                        <th className="px-3 py-2 font-medium">Owner</th>
+                        <th className="px-3 py-2 font-medium text-right">Record</th>
+                        <th className="px-3 py-2 font-medium text-right">Roster</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-700/60">
+                      {detail.teams.map((t) => (
+                        <tr key={t.id}>
+                          <td className="px-3 py-2 text-white">{t.name}{t.is_cpu && <span className="ml-2 text-[9px] text-surface-500 uppercase bg-surface-700 px-1.5 py-0.5 rounded">CPU</span>}</td>
+                          <td className="px-3 py-2 text-surface-300">{t.owner_username || "—"}{t.co_owner_username && <span className="text-surface-500"> + {t.co_owner_username}</span>}</td>
+                          <td className="px-3 py-2 text-surface-300 text-right">{t.wins}-{t.losses}{t.ties ? `-${t.ties}` : ""}</td>
+                          <td className="px-3 py-2 text-surface-300 text-right">{t.roster_size}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                <Swords className="w-4 h-4 text-gold-400" /> Drafts ({detail.drafts.length})
+              </h3>
+              {detail.drafts.length === 0 ? (
+                <p className="text-surface-500 text-sm">No drafts started.</p>
+              ) : (
+                <div className="bg-surface-900/50 border border-surface-700 rounded-xl overflow-hidden overflow-x-auto">
+                  <table className="w-full text-sm min-w-[480px]">
+                    <thead>
+                      <tr className="border-b border-surface-700 text-left text-surface-400 text-xs uppercase tracking-wider">
+                        <th className="px-3 py-2 font-medium">Status</th>
+                        <th className="px-3 py-2 font-medium">Type</th>
+                        <th className="px-3 py-2 font-medium text-right">Round</th>
+                        <th className="px-3 py-2 font-medium text-right">Picks Made</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-700/60">
+                      {detail.drafts.map((d) => (
+                        <tr key={d.id}>
+                          <td className="px-3 py-2 text-white">{d.status.replace("_", " ")}</td>
+                          <td className="px-3 py-2 text-surface-300">{d.draft_type}</td>
+                          <td className="px-3 py-2 text-surface-300 text-right">{d.current_round} / {d.total_rounds}</td>
+                          <td className="px-3 py-2 text-surface-300 text-right">{d.picks_made}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-gold-400" /> Scoring Layout
+              </h3>
+              <pre className="bg-surface-900/50 border border-surface-700 rounded-xl p-3 text-xs text-surface-300 overflow-x-auto whitespace-pre-wrap">
+                {JSON.stringify(detail.scoring_config, null, 2)}
+              </pre>
+            </div>
+
+            <div className="pt-2 border-t border-surface-700 flex justify-end">
+              <button
+                onClick={() => { setDeleteError(null); setConfirmingDelete(true); }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Delete League
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {confirmingDelete && detail && (
+        <ConfirmDeleteDialog
+          title="Delete this league?"
+          itemLabel={detail.name}
+          warning="This permanently deletes the league, its teams, drafts, scoring config, and every transaction/score tied to it. This cannot be undone."
+          error={deleteError}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -117,6 +398,10 @@ export default function AdminPage() {
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("leagues");
+  const [selectedLeagueId, setSelectedLeagueId] = useState<string | null>(null);
+  const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
+  const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
+  const currentUserId = getCurrentUserId();
 
   useEffect(() => {
     Promise.all([
@@ -147,6 +432,31 @@ export default function AdminPage() {
       .then((data) => setEmailLog(data as EmailLogRow[]))
       .catch(() => {});
   }, []);
+
+  // Re-fetches the leagues list after a delete -- simplest correct way
+  // to keep the table's team_count/etc. in sync, and cheap (this whole
+  // dashboard already re-fetches everything on mount).
+  const refreshLeagues = useCallback(() => {
+    adminApi.getLeagues()
+      .then((data) => setLeagues(data as AdminLeague[]))
+      .catch(() => {});
+  }, []);
+
+  const handleLeagueDeleted = useCallback(() => {
+    setSelectedLeagueId(null);
+    refreshLeagues();
+  }, [refreshLeagues]);
+
+  const handleDeleteUser = useCallback(() => {
+    if (!deletingUser) return;
+    adminApi.deleteUser(deletingUser.id)
+      .then(() => {
+        setUsers((prev) => prev.filter((u) => u.id !== deletingUser.id));
+        setDeletingUser(null);
+        setDeleteUserError(null);
+      })
+      .catch((err: unknown) => setDeleteUserError(err instanceof Error ? err.message : "Failed to delete user"));
+  }, [deletingUser]);
 
   useEffect(() => {
     if (!loading) loadEmailLog(emailStatusFilter);
@@ -242,16 +552,21 @@ export default function AdminPage() {
                   <th className="px-4 py-3 font-medium">Draft</th>
                   <th className="px-4 py-3 font-medium text-right">Teams</th>
                   <th className="px-4 py-3 font-medium">Created</th>
+                  <th className="px-4 py-3 font-medium" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-700/60">
                 {leagues.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-center text-surface-500">No leagues.</td>
+                    <td colSpan={8} className="px-4 py-6 text-center text-surface-500">No leagues.</td>
                   </tr>
                 ) : (
                   leagues.map((l) => (
-                    <tr key={l.id} className="hover:bg-surface-900/40 transition-colors">
+                    <tr
+                      key={l.id}
+                      onClick={() => setSelectedLeagueId(l.id)}
+                      className="hover:bg-surface-900/40 transition-colors cursor-pointer"
+                    >
                       <td className="px-4 py-3 text-white font-medium">
                         {l.name}
                         {l.is_mock && (
@@ -269,6 +584,9 @@ export default function AdminPage() {
                       <td className="px-4 py-3 text-surface-400">{l.draft_status.replace("_", " ")}</td>
                       <td className="px-4 py-3 text-surface-300 text-right">{l.team_count}</td>
                       <td className="px-4 py-3 text-surface-500 text-xs">{fmtDate(l.created_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-gold-400 hover:text-gold-300 text-xs font-semibold">View</span>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -288,31 +606,48 @@ export default function AdminPage() {
                   <th className="px-4 py-3 font-medium">Verified</th>
                   <th className="px-4 py-3 font-medium">Admin</th>
                   <th className="px-4 py-3 font-medium">Joined</th>
+                  <th className="px-4 py-3 font-medium" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-700/60">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-surface-900/40 transition-colors">
-                    <td className="px-4 py-3 text-white font-medium">{u.username}</td>
-                    <td className="px-4 py-3 text-surface-300">{u.email}</td>
-                    <td className="px-4 py-3 text-surface-400">{u.provider}</td>
-                    <td className="px-4 py-3">
-                      {u.email_verified ? (
-                        <span className="text-green-400 text-xs">Yes</span>
-                      ) : (
-                        <span className="text-surface-500 text-xs">No</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {u.is_admin && (
-                        <span className="inline-flex items-center gap-1 text-gold-400 text-xs font-semibold">
-                          <Shield className="w-3 h-3" /> Admin
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-surface-500 text-xs">{fmtDate(u.created_at)}</td>
-                  </tr>
-                ))}
+                {users.map((u) => {
+                  const daysSinceJoined = Math.floor((Date.now() - new Date(u.created_at).getTime()) / 86400000);
+                  return (
+                    <tr key={u.id} className="hover:bg-surface-900/40 transition-colors">
+                      <td className="px-4 py-3 text-white font-medium">{u.username}</td>
+                      <td className="px-4 py-3 text-surface-300">{u.email}</td>
+                      <td className="px-4 py-3 text-surface-400">{u.provider}</td>
+                      <td className="px-4 py-3">
+                        {u.email_verified ? (
+                          <span className="text-green-400 text-xs">Yes</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-amber-400 text-xs">
+                            <AlertTriangle className="w-3 h-3" /> No, {daysSinceJoined}d ago
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {u.is_admin && (
+                          <span className="inline-flex items-center gap-1 text-gold-400 text-xs font-semibold">
+                            <Shield className="w-3 h-3" /> Admin
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-surface-500 text-xs">{fmtDate(u.created_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        {u.id !== currentUserId && (
+                          <button
+                            onClick={() => { setDeleteUserError(null); setDeletingUser(u); }}
+                            aria-label={`Delete ${u.username}`}
+                            className="text-surface-500 hover:text-red-400 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -502,6 +837,25 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      {selectedLeagueId && (
+        <LeagueDetailModal
+          leagueId={selectedLeagueId}
+          onClose={() => setSelectedLeagueId(null)}
+          onDeleted={handleLeagueDeleted}
+        />
+      )}
+
+      {deletingUser && (
+        <ConfirmDeleteDialog
+          title="Delete this user?"
+          itemLabel={deletingUser.username}
+          warning="This permanently deletes the account. Leagues they solely commission must be deleted or reassigned first -- this will fail with an explanation if that's the case."
+          error={deleteUserError}
+          onConfirm={handleDeleteUser}
+          onCancel={() => setDeletingUser(null)}
+        />
+      )}
     </div>
   );
 }

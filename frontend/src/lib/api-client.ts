@@ -479,6 +479,11 @@ export const adminApi = {
   getStats: () => apiRequest("/api/v1/admin/stats"),
   getUsers: () => apiRequest("/api/v1/admin/users"),
   getLeagues: () => apiRequest("/api/v1/admin/leagues"),
+  getLeagueDetail: (leagueId: string) => apiRequest(`/api/v1/admin/leagues/${leagueId}`),
+  deleteLeague: (leagueId: string) =>
+    apiRequest(`/api/v1/admin/leagues/${leagueId}`, { method: "DELETE" }),
+  deleteUser: (userId: string) =>
+    apiRequest(`/api/v1/admin/users/${userId}`, { method: "DELETE" }),
   getAiUsage: () => apiRequest("/api/v1/admin/ai-usage"),
   getLeagueHealth: () => apiRequest("/api/v1/admin/league-health"),
   getEmailLog: (status?: string) =>

@@ -1,14 +1,18 @@
 """
-Tests for the read-only admin dashboard (app/api/v1/admin.py) -- gated
-entirely on User.is_admin, not on being a specific hardcoded account.
+Tests for the admin dashboard (app/api/v1/admin.py) -- gated entirely
+on User.is_admin, not on being a specific hardcoded account. Mostly
+read-only; the league-detail drill-down and delete_league/
+delete_user endpoints (2026-09-22) are the deliberate exceptions -- see
+the module's own docstring for why deletion belongs here now.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 import pytest
+from sqlalchemy import select
 from app.models.user import User
-from app.models.league import League, DraftStatus
+from app.models.league import League, LeagueType, DraftStatus
 from app.models.team import Team
-from app.models.draft import DraftPick
+from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.email_send_log import EmailSendLog
 from app.services.auth_service import hash_password, create_access_token
@@ -37,6 +41,24 @@ async def test_non_admin_gets_403_on_every_admin_route(client, db_session_factor
     for path in ["/admin/stats", "/admin/users", "/admin/leagues"]:
         r = await client.get(path)
         assert r.status_code == 403, path
+
+
+@pytest.mark.asyncio
+async def test_non_admin_gets_403_on_league_detail_and_deletes(client, db_session_factory):
+    _user, token = await _make_user(db_session_factory, is_admin=False)
+    commissioner, _ = await _make_user(db_session_factory)
+    other, _ = await _make_user(db_session_factory)
+    async with db_session_factory() as db:
+        league = League(id=str(uuid.uuid4()), name="Gated League", commissioner_id=commissioner.id,
+                         league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
+        db.add(league)
+        await db.commit()
+        league_id = league.id
+
+    client.headers["Authorization"] = f"Bearer {token}"
+    assert (await client.get(f"/admin/leagues/{league_id}")).status_code == 403
+    assert (await client.delete(f"/admin/leagues/{league_id}")).status_code == 403
+    assert (await client.delete(f"/admin/users/{other.id}")).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -257,3 +279,155 @@ async def test_email_log_returns_recent_and_filters_by_status(client, db_session
     rows = r.json()
     assert all(row["status"] == "failed" for row in rows)
     assert any(row["to_email"] == "b@test.local" and row["error_detail"] == "403 Forbidden" for row in rows)
+
+
+# ─── /admin/leagues/{id} (detail drill-down) ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_league_detail_shows_teams_drafts_and_scoring(client, db_session_factory):
+    _admin, token = await _make_user(db_session_factory, is_admin=True)
+    commissioner, _ = await _make_user(db_session_factory)
+    owner, _ = await _make_user(db_session_factory)
+
+    async with db_session_factory() as db:
+        league = League(
+            id=str(uuid.uuid4()), name="Detail View League", commissioner_id=commissioner.id,
+            league_type=LeagueType.STANDARD, scoring_config={"passing": {"pass_yd": 0.04}},
+            roster_slots={"QB": 1},
+        )
+        db.add(league)
+        await db.flush()
+        team = Team(id=str(uuid.uuid4()), name="Real Team", league_id=league.id,
+                     owner_id=owner.id, roster=[str(uuid.uuid4()), str(uuid.uuid4())], wins=3, losses=1)
+        db.add(team)
+        await db.flush()
+        draft = Draft(id=str(uuid.uuid4()), league_id=league.id, status=DraftRunStatus.IN_PROGRESS,
+                       current_round=2, total_rounds=15)
+        db.add(draft)
+        await db.flush()
+        db.add(DraftPick(id=str(uuid.uuid4()), draft_id=draft.id, league_id=league.id,
+                          team_id=team.id, player_id=str(uuid.uuid4()), round=1, pick_number=1))
+        await db.commit()
+        league_id, team_id, draft_id = league.id, team.id, draft.id
+
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.get(f"/admin/leagues/{league_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["commissioner_username"] == commissioner.username
+    assert body["scoring_config"] == {"passing": {"pass_yd": 0.04}}
+    assert body["roster_slots"] == {"QB": 1}
+
+    team_row = next(t for t in body["teams"] if t["id"] == team_id)
+    assert team_row["owner_username"] == owner.username
+    assert team_row["roster_size"] == 2
+    assert team_row["wins"] == 3
+
+    draft_row = next(d for d in body["drafts"] if d["id"] == draft_id)
+    assert draft_row["status"] == "in_progress"
+    assert draft_row["picks_made"] == 1
+    assert draft_row["current_round"] == 2
+
+
+@pytest.mark.asyncio
+async def test_league_detail_404s_for_unknown_league(client, db_session_factory):
+    _admin, token = await _make_user(db_session_factory, is_admin=True)
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.get("/admin/leagues/does-not-exist")
+    assert r.status_code == 404
+
+
+# ─── DELETE /admin/leagues/{id} ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_admin_delete_league_removes_it_and_its_teams(client, db_session_factory):
+    _admin, token = await _make_user(db_session_factory, is_admin=True)
+    commissioner, _ = await _make_user(db_session_factory)
+
+    async with db_session_factory() as db:
+        league = League(id=str(uuid.uuid4()), name="Dead League", commissioner_id=commissioner.id,
+                         league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
+        db.add(league)
+        await db.flush()
+        team = Team(id=str(uuid.uuid4()), name="Dead Team", league_id=league.id, is_cpu=True, roster=[])
+        db.add(team)
+        await db.commit()
+        league_id, team_id = league.id, team.id
+
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.delete(f"/admin/leagues/{league_id}")
+    assert r.status_code == 200
+
+    async with db_session_factory() as db:
+        assert (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none() is None
+        assert (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none() is None
+        # The commissioner account itself is untouched by deleting their league.
+        assert (await db.execute(select(User).where(User.id == commissioner.id))).scalar_one_or_none() is not None
+
+    assert (await client.get(f"/admin/leagues/{league_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_league_404s_for_unknown_league(client, db_session_factory):
+    _admin, token = await _make_user(db_session_factory, is_admin=True)
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.delete("/admin/leagues/does-not-exist")
+    assert r.status_code == 404
+
+
+# ─── DELETE /admin/users/{id} ───────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_admin_delete_user_removes_the_account(client, db_session_factory):
+    admin, token = await _make_user(db_session_factory, is_admin=True)
+    target, _ = await _make_user(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    r = await client.delete(f"/admin/users/{target.id}")
+    assert r.status_code == 200
+
+    async with db_session_factory() as db:
+        assert (await db.execute(select(User).where(User.id == target.id))).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_user_404s_for_unknown_user(client, db_session_factory):
+    _admin, token = await _make_user(db_session_factory, is_admin=True)
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.delete("/admin/users/does-not-exist")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_their_own_account_via_this_endpoint(client, db_session_factory):
+    admin, token = await _make_user(db_session_factory, is_admin=True)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    r = await client.delete(f"/admin/users/{admin.id}")
+    assert r.status_code == 400
+
+    async with db_session_factory() as db:
+        assert (await db.execute(select(User).where(User.id == admin.id))).scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_user_409s_when_sole_commissioner_of_a_league(client, db_session_factory):
+    admin, token = await _make_user(db_session_factory, is_admin=True)
+    target, _ = await _make_user(db_session_factory)
+
+    async with db_session_factory() as db:
+        league = League(id=str(uuid.uuid4()), name="Solely Commissioned League", commissioner_id=target.id,
+                         league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
+        db.add(league)
+        await db.flush()
+        # Only a CPU team -- no real successor exists.
+        db.add(Team(id=str(uuid.uuid4()), name="CPU Team", league_id=league.id, is_cpu=True, roster=[]))
+        await db.commit()
+
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.delete(f"/admin/users/{target.id}")
+    assert r.status_code == 409
+
+    async with db_session_factory() as db:
+        # Blocked -- the account must still exist.
+        assert (await db.execute(select(User).where(User.id == target.id))).scalar_one_or_none() is not None
