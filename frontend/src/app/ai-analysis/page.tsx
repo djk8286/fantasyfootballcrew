@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2 } from "lucide-react";
-import { leaguesApi, teamsApi, tradesApi, aiApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
+import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
+import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
 
 interface League {
   id: string;
@@ -31,7 +31,20 @@ interface HistoryItem {
   created_at: string | null;
 }
 
-type Tab = "lineup" | "trade" | "bet";
+interface RosterTeam {
+  id: string;
+  name: string;
+  roster: string[] | null;
+}
+
+interface RosterPlayerOption {
+  id: string;
+  first_name: string;
+  last_name: string;
+  position: string;
+}
+
+type Tab = "lineup" | "trade" | "bet" | "compare-teams" | "compare-players";
 
 export default function AIAnalysisPage() {
   const [activeTab, setActiveTab] = useState<Tab>("lineup");
@@ -63,17 +76,19 @@ export default function AIAnalysisPage() {
           </div>
         ) : (
           <>
-            <div className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700 mb-8">
+            <div className="flex flex-wrap gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700 mb-8">
               {[
                 { id: "lineup" as Tab, label: "Lineup", icon: Sparkles },
                 { id: "trade" as Tab, label: "Trade", icon: ArrowLeftRight },
                 { id: "bet" as Tab, label: "Bet", icon: TrendingUp },
+                { id: "compare-teams" as Tab, label: "Compare Teams", icon: Users },
+                { id: "compare-players" as Tab, label: "Compare Players", icon: Scale },
               ].map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   type="button"
                   onClick={() => setActiveTab(id)}
-                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  className={`flex-1 min-w-[calc(50%-0.125rem)] sm:min-w-0 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                     activeTab === id
                       ? "bg-surface-700 text-white shadow-sm"
                       : "text-surface-400 hover:text-white"
@@ -88,6 +103,8 @@ export default function AIAnalysisPage() {
             {activeTab === "lineup" && <LineupTab />}
             {activeTab === "trade" && <TradeTab />}
             {activeTab === "bet" && <BetTab />}
+            {activeTab === "compare-teams" && <CompareTeamsTab />}
+            {activeTab === "compare-players" && <ComparePlayersTab />}
           </>
         )}
       </section>
@@ -378,6 +395,349 @@ function TradeTab() {
       >
         {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         Evaluate Trade
+      </button>
+
+      {analysis && <AnalysisResult analysis={analysis} />}
+      <HistoryList items={history} onSelect={setAnalysis} />
+    </div>
+  );
+}
+
+function CompareTeamsTab() {
+  const [leagues, setLeagues] = useState<League[]>([]);
+  const [teams, setTeams] = useState<RosterTeam[]>([]);
+  const [leagueId, setLeagueId] = useState("");
+  const [teamAId, setTeamAId] = useState("");
+  const [teamBId, setTeamBId] = useState("");
+  const [analysis, setAnalysis] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const loadHistory = useCallback((lid: string) => {
+    aiApi
+      .history("team_compare", lid || undefined)
+      .then((data) => setHistory((data as { history: HistoryItem[] }).history))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    leaguesApi
+      .list({ mine: true })
+      .then((data) => setLeagues(Array.isArray(data) ? (data as League[]) : []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!leagueId) {
+      setTeams([]);
+      setTeamAId("");
+      setTeamBId("");
+      return;
+    }
+    teamsApi
+      .getByLeague(leagueId)
+      .then((data) => {
+        const all = Array.isArray(data) ? (data as RosterTeam[]) : [];
+        setTeams(all);
+        setTeamAId(all[0]?.id || "");
+        setTeamBId(all[1]?.id || all[0]?.id || "");
+      })
+      .catch(() => {});
+  }, [leagueId]);
+
+  useEffect(() => {
+    loadHistory(leagueId);
+  }, [leagueId, loadHistory]);
+
+  const handleSubmit = async () => {
+    if (!teamAId || !teamBId || teamAId === teamBId) return;
+    setLoading(true);
+    setError("");
+    setAnalysis("");
+    try {
+      const res = (await aiApi.teamComparison(teamAId, teamBId)) as { analysis: string };
+      setAnalysis(res.analysis);
+      loadHistory(leagueId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to get comparison");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-surface-400 mb-1.5">League</label>
+          <select
+            value={leagueId}
+            onChange={(e) => setLeagueId(e.target.value)}
+            className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+          >
+            <option value="">Select a league...</option>
+            {leagues.map((l) => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+        </div>
+        {leagueId && teams.length >= 2 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-surface-400 mb-1.5">Team A</label>
+              <select
+                value={teamAId}
+                onChange={(e) => setTeamAId(e.target.value)}
+                className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+              >
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-surface-400 mb-1.5">Team B</label>
+              <select
+                value={teamBId}
+                onChange={(e) => setTeamBId(e.target.value)}
+                className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+              >
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+        {leagueId && teams.length < 2 && (
+          <p className="text-surface-500 text-sm">This league needs at least 2 teams to compare.</p>
+        )}
+      </div>
+
+      {teamAId && teamBId && teamAId === teamBId && (
+        <p className="text-red-400 text-sm mt-3">Pick two different teams.</p>
+      )}
+      {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
+
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={!teamAId || !teamBId || teamAId === teamBId || loading}
+        className="mt-5 inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+      >
+        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        Compare Season Trends
+      </button>
+
+      {analysis && <AnalysisResult analysis={analysis} />}
+      <HistoryList items={history} onSelect={setAnalysis} />
+    </div>
+  );
+}
+
+// Shared by ComparePlayersTab's two independent sides -- resolves a
+// team's roster player IDs into real name/position data, same
+// Promise.all-over-playersApi.get pattern the team detail page already
+// uses for its own roster grid.
+function usePlayersForTeam(teamId: string): RosterPlayerOption[] {
+  const [players, setPlayers] = useState<RosterPlayerOption[]>([]);
+
+  useEffect(() => {
+    if (!teamId) {
+      setPlayers([]);
+      return;
+    }
+    let cancelled = false;
+    teamsApi
+      .get(teamId)
+      .then(async (data) => {
+        const roster = (data as RosterTeam).roster || [];
+        const resolved = await Promise.all(
+          roster.map((pid) =>
+            playersApi
+              .get(pid)
+              .then((p) => p as RosterPlayerOption)
+              .catch(() => null),
+          ),
+        );
+        if (!cancelled) setPlayers(resolved.filter((p): p is RosterPlayerOption => p !== null));
+      })
+      .catch(() => {
+        if (!cancelled) setPlayers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
+
+  return players;
+}
+
+function TeamPlayerPicker({
+  label, teams, teamId, setTeamId, playerId, setPlayerId,
+}: {
+  label: string;
+  teams: RosterTeam[];
+  teamId: string;
+  setTeamId: (id: string) => void;
+  playerId: string;
+  setPlayerId: (id: string) => void;
+}) {
+  const players = usePlayersForTeam(teamId);
+
+  // Re-picks a default player whenever the team (or its resolved
+  // roster) changes -- mirrors LineupTab's own "default to the first
+  // option" behavior for its team dropdown.
+  useEffect(() => {
+    setPlayerId(players[0]?.id || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId, players.length]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-semibold text-surface-400 uppercase tracking-wide">{label}</p>
+      <div>
+        <label className="block text-xs text-surface-400 mb-1.5">Team</label>
+        <select
+          value={teamId}
+          onChange={(e) => setTeamId(e.target.value)}
+          className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+        >
+          <option value="">Select a team...</option>
+          {teams.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
+      {teamId && (
+        <div>
+          <label className="block text-xs text-surface-400 mb-1.5">Player</label>
+          {players.length === 0 ? (
+            <p className="text-surface-500 text-sm">This team has no rostered players.</p>
+          ) : (
+            <select
+              value={playerId}
+              onChange={(e) => setPlayerId(e.target.value)}
+              className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+            >
+              {players.map((p) => (
+                <option key={p.id} value={p.id}>{p.first_name} {p.last_name} ({p.position})</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ComparePlayersTab() {
+  const [leagues, setLeagues] = useState<League[]>([]);
+  const [teams, setTeams] = useState<RosterTeam[]>([]);
+  const [leagueId, setLeagueId] = useState("");
+  const [teamAId, setTeamAId] = useState("");
+  const [playerAId, setPlayerAId] = useState("");
+  const [teamBId, setTeamBId] = useState("");
+  const [playerBId, setPlayerBId] = useState("");
+  const [analysis, setAnalysis] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const loadHistory = useCallback((lid: string) => {
+    aiApi
+      .history("player_compare", lid || undefined)
+      .then((data) => setHistory((data as { history: HistoryItem[] }).history))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    leaguesApi
+      .list({ mine: true })
+      .then((data) => setLeagues(Array.isArray(data) ? (data as League[]) : []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!leagueId) {
+      setTeams([]);
+      setTeamAId("");
+      setTeamBId("");
+      return;
+    }
+    teamsApi
+      .getByLeague(leagueId)
+      .then((data) => setTeams(Array.isArray(data) ? (data as RosterTeam[]) : []))
+      .catch(() => {});
+  }, [leagueId]);
+
+  useEffect(() => {
+    loadHistory(leagueId);
+  }, [leagueId, loadHistory]);
+
+  const handleSubmit = async () => {
+    if (!playerAId || !playerBId || playerAId === playerBId) return;
+    setLoading(true);
+    setError("");
+    setAnalysis("");
+    try {
+      const res = (await aiApi.playerComparison(playerAId, playerBId, leagueId)) as { analysis: string };
+      setAnalysis(res.analysis);
+      loadHistory(leagueId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to get comparison");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-surface-400 mb-1.5">League</label>
+          <select
+            value={leagueId}
+            onChange={(e) => setLeagueId(e.target.value)}
+            className="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-gold-400"
+          >
+            <option value="">Select a league...</option>
+            {leagues.map((l) => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {leagueId && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <TeamPlayerPicker
+              label="Player A" teams={teams}
+              teamId={teamAId} setTeamId={setTeamAId}
+              playerId={playerAId} setPlayerId={setPlayerAId}
+            />
+            <TeamPlayerPicker
+              label="Player B" teams={teams}
+              teamId={teamBId} setTeamId={setTeamBId}
+              playerId={playerBId} setPlayerId={setPlayerBId}
+            />
+          </div>
+        )}
+      </div>
+
+      {playerAId && playerBId && playerAId === playerBId && (
+        <p className="text-red-400 text-sm mt-3">Pick two different players.</p>
+      )}
+      {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
+
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={!playerAId || !playerBId || playerAId === playerBId || loading}
+        className="mt-5 inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+      >
+        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        Get Start/Sit Verdict
       </button>
 
       {analysis && <AnalysisResult analysis={analysis} />}

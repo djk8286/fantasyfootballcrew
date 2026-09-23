@@ -19,7 +19,9 @@ from app.services.salary_cap_service import get_salary_cap_settings, team_cap_su
 from app.services.ai_usage_service import record_ai_usage
 from app.services.ai_history_service import record_analysis, get_analysis_history
 from app.services.scheduler import fetch_nfl_state
-from app.api.deps import get_current_user
+from app.services.team_comparison_service import build_team_trend
+from app.services.player_comparison_service import build_player_profile
+from app.api.deps import get_current_user, require_league_participant
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -195,6 +197,17 @@ class BetAnalysisRequest(BaseModel):
     prompt: str
 
 
+class TeamComparisonRequest(BaseModel):
+    team_a_id: str
+    team_b_id: str
+
+
+class PlayerComparisonRequest(BaseModel):
+    player_a_id: str
+    player_b_id: str
+    league_id: str
+
+
 @router.post("/lineup")
 @limiter.limit("10/hour")
 async def analyze_lineup(
@@ -348,6 +361,96 @@ async def analyze_bet(
     return {"analysis": analysis}
 
 
+@router.post("/team-comparison")
+@limiter.limit("10/hour")
+async def analyze_team_comparison(
+    request: Request,
+    body: TeamComparisonRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Full-season trend comparison between two teams in the same
+    league -- see team_comparison_service.build_team_trend for the
+    weekly points/consistency/position-group-strength shape. Distinct
+    from analyze_lineup's opponent context (a single week's matchup);
+    this is deliberately a whole-season read."""
+    if body.team_a_id == body.team_b_id:
+        raise HTTPException(status_code=422, detail="Pick two different teams to compare")
+
+    a_result = await db.execute(select(Team).where(Team.id == body.team_a_id))
+    team_a = a_result.scalar_one_or_none()
+    b_result = await db.execute(select(Team).where(Team.id == body.team_b_id))
+    team_b = b_result.scalar_one_or_none()
+    if not team_a or not team_b:
+        raise HTTPException(status_code=404, detail="One of the teams no longer exists")
+    if team_a.league_id != team_b.league_id:
+        raise HTTPException(status_code=422, detail="Both teams must be in the same league")
+
+    league_result = await db.execute(select(League).where(League.id == team_a.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    await require_league_participant(league, current_user, db)
+
+    scoring = league.scoring_config or {}
+    team_a_trend = await build_team_trend(team_a, db, scoring)
+    team_b_trend = await build_team_trend(team_b, db, scoring)
+
+    service = _get_ai_service()
+    analysis = await service.analyze_team_comparison(
+        league_name=league.name, team_a_trend=team_a_trend, team_b_trend=team_b_trend, scoring=scoring,
+    )
+    await record_ai_usage(db, "team_comparison", league_id=league.id, user_id=current_user.id)
+    await record_analysis(
+        db, user_id=current_user.id, analysis_type="team_compare", league_id=league.id,
+        summary=f"{team_a.name} vs {team_b.name}", result=analysis,
+    )
+    await db.commit()
+    return {"analysis": analysis, "team_a_trend": team_a_trend, "team_b_trend": team_b_trend}
+
+
+@router.post("/player-comparison")
+@limiter.limit("10/hour")
+async def analyze_player_comparison(
+    request: Request,
+    body: PlayerComparisonRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Season-stats start/sit verdict between two players, under one
+    specific league's own scoring rules -- see
+    player_comparison_service.build_player_profile."""
+    if body.player_a_id == body.player_b_id:
+        raise HTTPException(status_code=422, detail="Pick two different players to compare")
+
+    league_result = await db.execute(select(League).where(League.id == body.league_id))
+    league = league_result.scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    await require_league_participant(league, current_user, db)
+
+    a_result = await db.execute(select(Player).where(Player.id == body.player_a_id))
+    player_a = a_result.scalar_one_or_none()
+    b_result = await db.execute(select(Player).where(Player.id == body.player_b_id))
+    player_b = b_result.scalar_one_or_none()
+    if not player_a or not player_b:
+        raise HTTPException(status_code=404, detail="One of the players was not found")
+
+    scoring = league.scoring_config or {}
+    profile_a = build_player_profile(player_a, scoring)
+    profile_b = build_player_profile(player_b, scoring)
+
+    service = _get_ai_service()
+    analysis = await service.analyze_player_comparison(player_a=profile_a, player_b=profile_b, scoring=scoring)
+    await record_ai_usage(db, "player_comparison", league_id=league.id, user_id=current_user.id)
+    await record_analysis(
+        db, user_id=current_user.id, analysis_type="player_compare", league_id=league.id,
+        summary=f"{profile_a['name']} vs {profile_b['name']}", result=analysis,
+    )
+    await db.commit()
+    return {"analysis": analysis, "player_a": profile_a, "player_b": profile_b}
+
+
 def _history_dict(h) -> dict:
     return {
         "id": h.id,
@@ -368,8 +471,11 @@ async def get_history(
     """This user's past results for one AI Analysis tool, newest first
     -- see ai_history_service.py. No LLM call, so unrated (unlike
     /lineup, /trade, /bet above)."""
-    if analysis_type not in {"lineup", "trade", "bet"}:
-        raise HTTPException(status_code=422, detail="analysis_type must be one of: lineup, trade, bet")
+    if analysis_type not in {"lineup", "trade", "bet", "team_compare", "player_compare"}:
+        raise HTTPException(
+            status_code=422,
+            detail="analysis_type must be one of: lineup, trade, bet, team_compare, player_compare",
+        )
     history = await get_analysis_history(
         db, user_id=current_user.id, analysis_type=analysis_type, league_id=league_id,
     )

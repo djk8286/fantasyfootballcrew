@@ -191,6 +191,67 @@ Provide:
 4. Counter-offer suggestion if unbalanced
 """
 
+TEAM_COMPARISON_PROMPT = """
+You are an expert fantasy football analyst. Compare these two teams'
+FULL-SEASON performance so far -- not just an upcoming matchup -- using
+ONLY plain text, no markdown syntax.
+
+**League:** {league_name}
+
+**Team A -- {team_a_name}:**
+{team_a_trend}
+
+**Team B -- {team_b_name}:**
+{team_b_trend}
+
+**League Scoring Settings:**
+{scoring_settings}
+
+Write, covering:
+1. SCORING TREND -- is each team trending up, down, or steady over the
+   season (cite the actual weekly point totals given, and each team's
+   "trend" label)?
+2. CONSISTENCY -- which team is more consistent week to week (use the
+   given average and consistency_stdev -- lower stdev means steadier),
+   and what that means for the rest of the season?
+3. POSITION-GROUP STRENGTH -- based on the given position_group_points,
+   where does each team's real production edge come from?
+4. VERDICT -- which team has the stronger season-long profile right
+   now, and why -- this is about the whole season, not who'd win one
+   specific week
+A team with very few games_played (early season) has a thinner sample --
+say so explicitly rather than overstating an early trend. Do not invent
+stats or context beyond what's given above.
+"""
+
+PLAYER_COMPARISON_PROMPT = """
+You are an expert fantasy football analyst, giving a clear start/sit
+verdict between two specific players. Plain text only, no markdown.
+
+**Player A -- {player_a_name} ({player_a_position}, {player_a_team}):**
+{player_a_stats}
+
+**Player B -- {player_b_name} ({player_b_position}, {player_b_team}):**
+{player_b_stats}
+
+**League Scoring Settings:**
+{scoring_settings}
+
+Your response MUST start with exactly one line:
+START: <the player's name you recommend>
+then a blank line, then your reasoning, covering:
+1. SEASON PRODUCTION -- who's actually produced more under this
+   league's own scoring (season_points), and how close is it?
+2. CONSISTENCY vs. UPSIDE -- boom/bust profile from the weekly_points
+   given for each player
+3. CURRENT FORM -- injury_status, and projected_points_this_week if
+   given (note explicitly if one or both have no projection synced yet)
+4. THE CALL -- a direct, confident recommendation -- hedge only if the
+   numbers given are genuinely this close
+Do not invent stats, injuries, or matchup context beyond what's given
+above.
+"""
+
 COMMISSIONER_DIGEST_PROMPT = """
 You are an expert fantasy football commissioner's assistant. Write a
 weekly digest for this league using ONLY plain text -- no markdown
@@ -588,6 +649,72 @@ rather than treating them as unknown):**
 - Historical matchups: {history}
 """
 
+# No-search fallback -- used only when the configured provider isn't
+# OpenAI (see generate_team_player_news), same reasoning
+# BET_ANALYSIS_PROMPT's own comment gives: stays honest about having
+# no search tool rather than claiming one it can't back up. All this
+# path has to work with is `detected_changes` -- real, structured
+# injury-status/team changes this app itself noticed since the last
+# check (see team_news_service._detect_changes), which costs nothing
+# to compute (no LLM call) and needs no search to be accurate.
+TEAM_PLAYER_NEWS_PROMPT = """
+You are a fantasy football news desk, writing a short news digest for
+one fantasy team's roster. Plain text only, no markdown syntax.
+
+**Team:** {team_name}
+
+**Real changes detected on this roster since the last check (trust
+this over anything you think you know -- synced data, not training
+memory or search):**
+{detected_changes}
+
+Write one short sentence per change listed above. If the list is
+empty, say plainly that nothing new has been detected on this roster
+since the last check -- do not invent news, injuries, or storylines
+for any player not listed above.
+"""
+
+# Real search path (see generate_team_player_news) -- reuses
+# _call_openai_search, the exact same Responses API + hosted
+# web_search tool analyze_bet already uses. Deliberately narrower scope
+# than BET_ANALYSIS_SEARCH_SYSTEM_PROMPT (no betting/market framing
+# needed here) but the same integrity rules: real sources only, skip a
+# player rather than invent something for them.
+TEAM_PLAYER_NEWS_SEARCH_SYSTEM_PROMPT = """
+You are a fantasy football news desk with live web search, covering
+one specific fantasy team's roster. Plain text only, no markdown
+syntax.
+
+{grounding}
+
+For EACH player listed, search for real recent news (roughly the last
+week) -- injury updates, depth chart/role changes, trades, suspensions,
+a notably big or bad game. Write ONE short sentence per player who has
+real recent news. If a player has no real recent news, SKIP them
+entirely -- never pad with generic filler like "remains a solid
+starter" for a player search turned up nothing new on. If truly
+nothing turned up for any player on the roster, say so plainly in one
+line rather than inventing storylines.
+
+Never fabricate a headline, injury, trade, or source. Weave in the
+structured "detected changes" you're given (real, already-confirmed
+data from this app's own sync) rather than just repeating them
+verbatim -- your live search should add real color/context to them,
+not contradict them.
+"""
+
+TEAM_PLAYER_NEWS_SEARCH_INPUT = """
+**Team:** {team_name}
+
+**Roster to research (name, position, current NFL team, last known
+injury status):**
+{players}
+
+**Structured changes already detected by this app since the last check
+(real, synced data):**
+{detected_changes}
+"""
+
 
 class AIService:
     """Service for AI-powered fantasy football analysis."""
@@ -646,6 +773,86 @@ class AIService:
             team_b_salary=json.dumps(team_b_salary or {}, indent=2),
             team_a_partner=json.dumps(team_a_partner or {}, indent=2),
             team_b_partner=json.dumps(team_b_partner or {}, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def analyze_team_comparison(
+        self,
+        league_name: str,
+        team_a_trend: Dict[str, Any],
+        team_b_trend: Dict[str, Any],
+        scoring: Dict[str, Any],
+    ) -> str:
+        """Full-season trend comparison between two teams in the same
+        league -- see team_comparison_service.build_team_trend for the
+        weekly_points/average/consistency_stdev/trend/
+        position_group_points shape each trend dict carries. team_name
+        is threaded through each trend dict already, not passed
+        separately."""
+        prompt = TEAM_COMPARISON_PROMPT.format(
+            league_name=league_name,
+            team_a_name=team_a_trend.get("team_name", "Team A"),
+            team_b_name=team_b_trend.get("team_name", "Team B"),
+            team_a_trend=json.dumps(team_a_trend, indent=2),
+            team_b_trend=json.dumps(team_b_trend, indent=2),
+            scoring_settings=json.dumps(scoring, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def analyze_player_comparison(
+        self,
+        player_a: Dict[str, Any],
+        player_b: Dict[str, Any],
+        scoring: Dict[str, Any],
+    ) -> str:
+        """Season-stats start/sit verdict between two players -- see
+        player_comparison_service.build_player_profile for the
+        name/position/team/injury_status/season_points/weekly_points/
+        projected_points_this_week shape each profile dict carries."""
+        prompt = PLAYER_COMPARISON_PROMPT.format(
+            player_a_name=player_a.get("name", "Player A"),
+            player_a_position=player_a.get("position", "?"),
+            player_a_team=player_a.get("team", "?"),
+            player_a_stats=json.dumps(player_a, indent=2),
+            player_b_name=player_b.get("name", "Player B"),
+            player_b_position=player_b.get("position", "?"),
+            player_b_team=player_b.get("team", "?"),
+            player_b_stats=json.dumps(player_b, indent=2),
+            scoring_settings=json.dumps(scoring, indent=2),
+        )
+        return await self._call_llm(prompt)
+
+    async def generate_team_player_news(
+        self,
+        team_name: str,
+        players: list,
+        detected_changes: Optional[list] = None,
+    ) -> str:
+        """Per-team player news digest (2026-09-22) -- a mix of real
+        web-search headlines (OpenAI path) and this app's own free,
+        structured injury/team-change detection (see
+        team_news_service._detect_changes), same shape as analyze_bet's
+        search/no-search split: routes to the real live-web-search path
+        when OpenAI is the configured provider, otherwise falls back to
+        the structured-changes-only prompt rather than claiming a
+        search capability it can't back up.
+
+        players: this team's full roster (name/position/team/
+        injury_status) for the search path to research -- unused by the
+        no-search fallback, which only has detected_changes to work
+        with."""
+        if self.provider == "openai" and self.api_key:
+            input_text = TEAM_PLAYER_NEWS_SEARCH_INPUT.format(
+                team_name=team_name,
+                players=json.dumps(players, indent=2),
+                detected_changes=json.dumps(detected_changes or [], indent=2),
+            )
+            system = TEAM_PLAYER_NEWS_SEARCH_SYSTEM_PROMPT.format(grounding=_grounding_preamble())
+            return await self._call_openai_search(system, input_text)
+
+        prompt = TEAM_PLAYER_NEWS_PROMPT.format(
+            team_name=team_name,
+            detected_changes=json.dumps(detected_changes or [], indent=2),
         )
         return await self._call_llm(prompt)
 

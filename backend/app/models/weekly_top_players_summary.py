@@ -31,3 +31,10 @@ class WeeklyTopPlayersSummary(Base):
     # to the AI text without re-deriving it or re-querying Player.
     top_players: Mapped[list] = mapped_column(MutableList.as_mutable(JSON), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Bumped on every regenerate (unlike created_at, which only ever
+    # reflects when this row was FIRST created for this week) -- the
+    # scheduler's daily refresh check (see scheduler.py
+    # _maybe_refresh_dashboard_summaries_once) reads this to decide
+    # whether a rolling 24h has passed since the content was last
+    # actually regenerated, not just whether a row exists.
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

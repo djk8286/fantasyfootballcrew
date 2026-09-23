@@ -48,9 +48,11 @@ from app.services.draft_manager import get_draft_state, get_next_pick_for_team, 
 from app.models.league import League, DraftStatus, LeagueType
 from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
-from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service
+from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service
 from app.services.ai_service import AIService
 from app.models.weekly_scores_recap import WeeklyScoresRecap
+from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
+from app.models.team import Team
 
 PLAYER_SYNC_INTERVAL = 60 * 60  # 1 hour -- injury designations/roster moves change closer to gameday than the rest of a player's metadata
 STATS_SYNC_INTERVAL = 2 * 60    # 2 minutes -- as live as practical without hammering Sleeper's free API
@@ -185,13 +187,6 @@ async def _process_all_league_guillotines_once(season: int, week: int) -> None:
 # correctness issue for anything else in this file).
 _last_seen_week: tuple[int, int] | None = None
 
-# Dashboard AI Summaries: same in-memory-only tradeoff, but tracked
-# separately from _last_seen_week above -- this one updates every tick
-# regardless of season_type (see _generate_nfl_wide_dashboard_summaries_once's
-# docstring for why it can't share _last_seen_week's regular-season-only
-# update). (season_type, season, week).
-_last_seen_dashboard_week: tuple[str, int, int] | None = None
-
 # Best-Ball (Phase 6): same in-memory-only tradeoff as _last_seen_week
 # above, deliberately NOT the correctness gate itself (is_window_open is
 # pure wall-clock math, recomputed fresh every tick -- a redeploy just
@@ -272,7 +267,13 @@ async def _generate_team_recaps_for_all_leagues_once(season: int, week: int) -> 
     created by _calculate_all_league_scores_once, which is itself
     gated to real regular season, so there's nothing to summarize
     outside it anyway. generate_and_save_recap no-ops (returns None)
-    for a league with no scored data yet, rather than erroring."""
+    for a league with no scored data yet, rather than erroring.
+
+    NOTE: this per-league recap is a SEPARATE feature from the NFL-wide
+    Dashboard AI Summaries below (_maybe_refresh_dashboard_summaries_once)
+    -- still transition-triggered/in-memory (_last_seen_week), unlike
+    that one's since-fixed durable daily refresh. Not touched as part of
+    that fix; flagged here in case this needs the same treatment later."""
     async with async_session() as db:
         result = await db.execute(select(League))
         leagues = [l for l in result.scalars().all() if _league_is_auto_scorable(l)]
@@ -312,10 +313,11 @@ async def _generate_nfl_wide_dashboard_summaries_once(season_type: str, season: 
     are. That gate exists because preseason FANTASY stats are noise for
     real league SCORING; neither of these panels is fantasy scoring --
     "who had a big real game" and "what happened in real NFL games" are
-    both just as real and fun to read about in preseason. Called from
-    its own independent week-transition check (see run_scheduler),
-    using Sleeper's live state directly rather than _last_seen_week
-    (which only ever updates during regular season, since it's set from
+    both just as real and fun to read about in preseason. Called by
+    _maybe_refresh_dashboard_summaries_once's durable daily-refresh
+    check below, targeting whatever week THAT determined is current --
+    deliberately not using _last_seen_week itself (which only ever
+    updates during regular season, since it's set from
     _sync_stats_once's return value)."""
     espn_season_type = _ESPN_SEASON_TYPE.get(season_type, 2)
 
@@ -353,6 +355,111 @@ async def _generate_nfl_wide_dashboard_summaries_once(season_type: str, season: 
             print(f"[scheduler] NFL scores recap generation failed: {e}")
 
     print(f"[scheduler] Generated dashboard summaries for week {week}, {season} ({season_type})")
+
+
+DASHBOARD_SUMMARY_REFRESH_INTERVAL = timedelta(hours=24)
+
+
+def _is_fresh(updated_at: datetime, now: datetime, interval: timedelta = DASHBOARD_SUMMARY_REFRESH_INTERVAL) -> bool:
+    """Pure predicate pulled out of _maybe_refresh_dashboard_summaries_once/
+    _maybe_refresh_team_news_once (both use this same check) specifically
+    so it's unit-testable without an async DB session -- see
+    test_scheduler.py's own docstring for why the rest of this file's
+    async/DB/network pieces are verified manually instead. Naive
+    (tzinfo-less) datetimes are treated as UTC -- SQLite drops tzinfo on
+    round-trip even though every DateTime column here is declared
+    timezone=True, same "assume UTC" handling this file already applies
+    to Draft.current_pick_started_at in _process_expired_draft_picks_once."""
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return now - updated_at < interval
+
+
+async def _maybe_refresh_dashboard_summaries_once() -> None:
+    """Durable, DB-backed replacement (2026-09-22) for the old in-memory
+    _last_seen_dashboard_week transition trigger. That approach only
+    ever regenerated the dashboard's Top Performers/NFL Scores panels
+    once, at the exact moment THIS process instance observed Sleeper's
+    live week tick over -- and since the tracking lived only in memory,
+    a redeploy (which this project does often) reset it. If the real
+    weekly transition happened while no process instance was alive to
+    observe it -- the common case on a frequently-redeployed app -- it
+    was simply never caught, and these panels could sit on a stale week
+    (and its now-outdated scores) indefinitely. This was the actual
+    root cause of the reported "wrong weeks and scores" bug.
+
+    Runs every scheduler tick (cheap: one no-auth Sleeper state fetch,
+    one indexed DB read), and checks the DATABASE -- not memory --
+    for whether the CURRENT live week's WeeklyTopPlayersSummary was
+    last regenerated within DASHBOARD_SUMMARY_REFRESH_INTERVAL. Always
+    targets the live CURRENT week (never "the week that just ended"),
+    so even after a long gap (an outage, several redeploys in a row)
+    the very next tick self-corrects to the right week on its own,
+    instead of depending on catching a one-time edge trigger. content
+    naturally gets richer as more of the current week's games finish --
+    see TOP_PLAYERS_SUMMARY_PROMPT/NFL_SCORES_RECAP_PROMPT, both already
+    written to describe "as of now" rather than assume the week is over.
+    Deliberately not regular-season-gated, same reasoning
+    _generate_nfl_wide_dashboard_summaries_once's own docstring gives."""
+    try:
+        state = await fetch_nfl_state()
+        season_type = state.get("season_type") or "regular"
+        season = int(state["season"])
+        week = int(state["week"])
+    except Exception as e:
+        print(f"[scheduler] Dashboard summaries: NFL state fetch failed: {e}")
+        return
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(WeeklyTopPlayersSummary).where(
+                WeeklyTopPlayersSummary.week == week, WeeklyTopPlayersSummary.year == season,
+            )
+        )
+        summary = result.scalar_one_or_none()
+
+    if summary is not None and _is_fresh(summary.updated_at, datetime.now(timezone.utc)):
+        return  # already refreshed within the last 24h -- nothing to do
+
+    await _generate_nfl_wide_dashboard_summaries_once(season_type, season, week)
+
+
+async def _maybe_refresh_team_news_once() -> None:
+    """Once-daily (rolling 24h, DB-backed via TeamPlayerNews.updated_at)
+    refresh of every real team's player-news digest -- see
+    team_news_service.py for why this is throttled to one LLM call per
+    TEAM per day rather than per player. Runs every scheduler tick; the
+    24h staleness check on each team's row is what actually keeps this
+    to roughly once a day, not the tick interval itself -- same
+    DB-backed-not-in-memory shape as
+    _maybe_refresh_dashboard_summaries_once, for the same reason (this
+    self-heals across redeploys instead of depending on an in-memory
+    flag surviving one). Skips mock/practice-draft leagues (is_mock)
+    outright (a scratch team's news would never be seen); an empty
+    roster is skipped too, both to avoid the DB round-trip and because
+    generate_and_save_team_news itself also no-ops on that case."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Team).join(League, Team.league_id == League.id).where(League.is_mock == False)  # noqa: E712
+        )
+        teams = result.scalars().all()
+
+        refreshed, failed = 0, 0
+        for team in teams:
+            if not team.roster:
+                continue
+            try:
+                existing = await team_news_service.get_team_news(team.id, db)
+                if existing is not None and _is_fresh(existing.updated_at, datetime.now(timezone.utc)):
+                    continue
+                await team_news_service.generate_and_save_team_news(team, db)
+                refreshed += 1
+            except Exception as e:
+                failed += 1
+                print(f"[scheduler] Team news refresh failed for team {team.id}: {e}")
+
+    if refreshed or failed:
+        print(f"[scheduler] Refreshed player news for {refreshed} team(s)" + (f", {failed} failed" if failed else ""))
 
 
 async def _sync_players_once() -> None:
@@ -494,7 +601,7 @@ async def run_scheduler() -> None:
         f"[scheduler] Starting -- stats every {STATS_SYNC_INTERVAL}s "
         f"(regular season only), players every {PLAYER_SYNC_INTERVAL}s"
     )
-    global _last_seen_week, _last_seen_dashboard_week
+    global _last_seen_week
     loop = asyncio.get_event_loop()
     last_player_sync = 0.0
 
@@ -559,25 +666,22 @@ async def run_scheduler() -> None:
                     print(f"[scheduler] Team recap generation pass failed: {e}")
             _last_seen_week = (season, week)
 
-        # Dashboard AI Summaries (NFL-wide panels): independent of the
-        # regular-season-gated block above -- see
-        # _generate_nfl_wide_dashboard_summaries_once's own docstring for
-        # why. Own state, own live-state fetch (cheap, no-auth endpoint),
-        # since _last_seen_week only ever updates when synced is not None
-        # (regular season), which would silently never fire this during
-        # preseason/postseason otherwise.
+        # Dashboard AI Summaries (NFL-wide panels): durable, DB-backed
+        # daily refresh -- see _maybe_refresh_dashboard_summaries_once's
+        # own docstring for why this replaced the old in-memory,
+        # transition-triggered version (2026-09-22).
         try:
-            state = await fetch_nfl_state()
-            dash_key = (state.get("season_type"), int(state["season"]), int(state["week"]))
-            if _last_seen_dashboard_week is not None and _last_seen_dashboard_week != dash_key:
-                prev_type, prev_season2, prev_week2 = _last_seen_dashboard_week
-                try:
-                    await _generate_nfl_wide_dashboard_summaries_once(prev_type, prev_season2, prev_week2)
-                except Exception as e:
-                    print(f"[scheduler] Dashboard summaries pass failed: {e}")
-            _last_seen_dashboard_week = dash_key
+            await _maybe_refresh_dashboard_summaries_once()
         except Exception as e:
-            print(f"[scheduler] Dashboard summaries week-check failed: {e}")
+            print(f"[scheduler] Dashboard summaries refresh check failed: {e}")
+
+        # Per-Team Player News: same durable, once-daily-via-DB-check
+        # shape as the dashboard summaries refresh right above --
+        # see _maybe_refresh_team_news_once's own docstring.
+        try:
+            await _maybe_refresh_team_news_once()
+        except Exception as e:
+            print(f"[scheduler] Team news refresh pass failed: {e}")
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:

@@ -10,6 +10,7 @@ from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league, require_commissioner
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
+from app.services.team_news_service import get_team_news, generate_and_save_team_news
 from app.core.avatars import validate_avatar_url
 from pydantic import BaseModel
 
@@ -569,3 +570,52 @@ async def get_team_cap(team_id: str, db: AsyncSession = Depends(get_db)):
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
     return await team_cap_summary(team, league, db)
+
+
+@router.get("/{team_id}/news")
+async def get_team_player_news(team_id: str, db: AsyncSession = Depends(get_db)):
+    """This team's AI-generated player-news digest, refreshed roughly
+    once daily by the scheduler (see team_news_service.py). Ungated
+    public read, same house style as get_team/get_team_cap above --
+    news content isn't sensitive, and this is meant to be glanced at by
+    anyone viewing the team page, not just its owner. 404 means either
+    the team doesn't exist, or (more commonly) nothing's been generated
+    for it yet -- an empty roster, or the very first scheduler tick
+    hasn't run since this team's roster was set."""
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    news = await get_team_news(team_id, db)
+    if not news:
+        raise HTTPException(status_code=404, detail="No player news generated yet for this team")
+    return {
+        "team_id": news.team_id, "content": news.content, "updated_at": news.updated_at,
+    }
+
+
+@router.post("/{team_id}/news/generate")
+@limiter.limit("10/hour")
+async def generate_team_player_news_now(
+    request: Request,
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manual fallback -- same shape as the dashboard's own
+    top-performers/nfl-scores generate endpoints (open to any
+    authenticated user, not owner/commissioner-gated, since this
+    doesn't do anything besides read+summarize already-public data).
+    Real use is the scheduler's own once-daily automatic refresh; this
+    exists for the very first generation, or if a commissioner/manager
+    wants a fresher read before the next scheduled tick."""
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    news = await generate_and_save_team_news(team, db)
+    if not news:
+        raise HTTPException(status_code=422, detail="This team has an empty roster -- nothing to report news about")
+    return {
+        "team_id": news.team_id, "content": news.content, "updated_at": news.updated_at,
+    }

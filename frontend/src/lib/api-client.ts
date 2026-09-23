@@ -428,13 +428,35 @@ export const aiApi = {
       method: "POST",
       body: { prompt },
     }),
-  // Past results for one tool (lineup/trade/bet), newest first --
-  // leagueId narrows Lineup/Trade to the currently-selected league;
-  // Bet has none, so callers just omit it.
-  history: (analysisType: "lineup" | "trade" | "bet", leagueId?: string) =>
+  teamComparison: (teamAId: string, teamBId: string) =>
+    apiRequest("/api/v1/ai/team-comparison", {
+      method: "POST",
+      body: { team_a_id: teamAId, team_b_id: teamBId },
+    }),
+  playerComparison: (playerAId: string, playerBId: string, leagueId: string) =>
+    apiRequest("/api/v1/ai/player-comparison", {
+      method: "POST",
+      body: { player_a_id: playerAId, player_b_id: playerBId, league_id: leagueId },
+    }),
+  // Past results for one tool, newest first -- leagueId narrows
+  // Lineup/Trade/team_compare/player_compare to the currently-selected
+  // league; Bet has none, so callers just omit it.
+  history: (
+    analysisType: "lineup" | "trade" | "bet" | "team_compare" | "player_compare",
+    leagueId?: string
+  ) =>
     apiRequest(
       `/api/v1/ai/history?analysis_type=${analysisType}${leagueId ? `&league_id=${leagueId}` : ""}`
     ),
+};
+
+// Per-team AI player news digest (2026-09-22) -- refreshed roughly
+// once daily by the scheduler; generate() is the manual fallback (the
+// very first generation, or a fresher read before the next tick).
+export const teamNewsApi = {
+  get: (teamId: string) => apiRequest(`/api/v1/teams/${teamId}/news`),
+  generate: (teamId: string) =>
+    apiRequest(`/api/v1/teams/${teamId}/news/generate`, { method: "POST" }),
 };
 
 // Dashboard AI Summaries -- NFL-wide panels (top real performers, NFL

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { teamsApi, leaguesApi, playersApi, standingsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
+import { teamsApi, leaguesApi, playersApi, standingsApi, teamNewsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
 import Avatar from "@/components/Avatar";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -21,6 +21,7 @@ import {
   Shield,
   Skull,
   DollarSign,
+  Newspaper,
 } from "lucide-react";
 
 // ─── Interfaces ───────────────────────────────────────────────
@@ -98,6 +99,61 @@ interface CapSummary {
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
+
+// ─── Player News (2026-09-22) ─────────────────────────────────────────
+// Per-team AI news digest for THIS team's actual roster, refreshed
+// roughly once daily by the scheduler (see backend team_news_service.py).
+// Ungated public read, same house style as the roster/schedule panels
+// on this page. A 404 just means nothing's been generated yet (a brand
+// new team, or the first scheduler tick hasn't run since roster was
+// set) -- rendered as "not generated yet" rather than an error banner.
+
+function PlayerNewsPanel({ teamId, hasRoster }: { teamId: string; hasRoster: boolean }) {
+  const [news, setNews] = useState<{ content: string; updated_at: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    teamNewsApi
+      .get(teamId)
+      .then((data) => setNews(data as { content: string; updated_at: string }))
+      .catch(() => setNews(null))
+      .finally(() => setLoading(false));
+  }, [teamId]);
+
+  if (!hasRoster) return null;
+
+  return (
+    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <Newspaper className="w-4 h-4 text-gold-400" />
+          Player News
+        </h3>
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-400/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">
+          <Bot className="w-2.5 h-2.5" /> AI-Generated
+        </span>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center py-6">
+          <div className="w-5 h-5 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : !news ? (
+        <p className="text-surface-500 text-sm">
+          No news generated yet for this roster -- check back after the next daily refresh.
+        </p>
+      ) : (
+        <>
+          <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap">
+            {news.content}
+          </div>
+          <p className="text-surface-500 text-[10px] mt-2">
+            Updated {new Date(news.updated_at).toLocaleString()}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function TeamPage() {
   const params = useParams();
@@ -420,6 +476,9 @@ export default function TeamPage() {
             </div>
           )}
         </div>
+
+        {/* Player News -- see PlayerNewsPanel above */}
+        <PlayerNewsPanel teamId={teamId} hasRoster={(team.roster || []).length > 0} />
 
         {/* Coaching Staff -- was previously invisible anywhere a team
             owner could see it themselves; only the commissioner's admin
