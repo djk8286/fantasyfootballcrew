@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { adminApi, getCurrentUserId } from "@/lib/api-client";
 import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle, Trash2, X, Swords, DollarSign } from "lucide-react";
@@ -150,6 +150,28 @@ function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
+// Shared by both modals below -- Escape and a click on the dark
+// backdrop (but not a click inside the panel itself, via
+// mousedown-target-checking rather than relying on stopPropagation
+// everywhere inside) both dismiss. The two most common ways someone
+// actually tries to close a panel like this, neither of which the
+// original X-button-only version had wired up.
+function useDismiss(onDismiss: () => void) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDismiss();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onDismiss]);
+
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const handleBackdropMouseDown = (e: React.MouseEvent) => {
+    if (e.target === backdropRef.current) onDismiss();
+  };
+  return { backdropRef, handleBackdropMouseDown };
+}
+
 // Deliberately friction-full -- destructive and irreversible, so
 // there's a real difference between clicking a button twice and
 // actually typing the exact name/username being deleted. Matches the
@@ -168,9 +190,16 @@ function ConfirmDeleteDialog({
 }) {
   const [typed, setTyped] = useState("");
   const canConfirm = typed === itemLabel;
+  const { backdropRef, handleBackdropMouseDown } = useDismiss(onCancel);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+    <div
+      ref={backdropRef}
+      onMouseDown={handleBackdropMouseDown}
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="bg-surface-800 border border-red-500/30 rounded-2xl p-6 max-w-md w-full">
         <div className="flex items-center gap-2 mb-3">
           <AlertTriangle className="w-5 h-5 text-red-400" />
@@ -223,6 +252,9 @@ function LeagueDetailModal({
   const [error, setError] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Disabled while the delete-confirmation dialog is on top of this one
+  // -- Escape/backdrop-click should dismiss THAT first, not both at once.
+  const { backdropRef, handleBackdropMouseDown } = useDismiss(confirmingDelete ? () => {} : onClose);
 
   useEffect(() => {
     adminApi
@@ -243,7 +275,13 @@ function LeagueDetailModal({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true">
+    <div
+      ref={backdropRef}
+      onMouseDown={handleBackdropMouseDown}
+      className="fixed inset-0 z-40 bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 max-w-3xl w-full my-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-white font-bold text-lg flex items-center gap-2">
