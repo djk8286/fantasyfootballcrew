@@ -486,6 +486,7 @@ export const adminApi = {
     apiRequest(`/api/v1/admin/users/${userId}`, { method: "DELETE" }),
   getAiUsage: () => apiRequest("/api/v1/admin/ai-usage"),
   getLeagueHealth: () => apiRequest("/api/v1/admin/league-health"),
+  getSystemHealth: () => apiRequest("/api/v1/admin/system-health"),
   getEmailLog: (status?: string) =>
     apiRequest(`/api/v1/admin/email-log${status ? `?status=${status}` : ""}`),
 };

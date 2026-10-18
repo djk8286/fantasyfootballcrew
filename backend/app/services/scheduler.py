@@ -50,6 +50,7 @@ from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
 from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service
 from app.services.ai_service import AIService
+from app.services.job_run_service import run_job, prune_job_runs
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.team import Team
@@ -479,15 +480,22 @@ async def _sync_projections_once() -> None:
     this endpoint's own path segment expects) rather than requiring
     regular season the way stats sync does -- draft prep/waiver browsing
     during the preseason is exactly when "projected points for the
-    upcoming season" matters most."""
+    upcoming season" matters most.
+
+    Raises on failure (so run_job can record it) -- see _sync_projections_safely
+    for the never-raises wrapper every call site uses."""
+    state = await fetch_nfl_state()
+    season = int(state["season"])
+    week = int(state["week"])
+    season_type = state.get("season_type") or "regular"
+    async with async_session() as db:
+        count = await nfl_projections_service.sync_week_projections(db, season, week, season_type)
+    print(f"[scheduler] Synced week {week}, {season} ({season_type}) projections for {count} players")
+
+
+async def _sync_projections_safely() -> None:
     try:
-        state = await fetch_nfl_state()
-        season = int(state["season"])
-        week = int(state["week"])
-        season_type = state.get("season_type") or "regular"
-        async with async_session() as db:
-            count = await nfl_projections_service.sync_week_projections(db, season, week, season_type)
-        print(f"[scheduler] Synced week {week}, {season} ({season_type}) projections for {count} players")
+        await run_job("sync_projections", _sync_projections_once)
     except Exception as e:
         print(f"[scheduler] Projections sync failed: {e}")
 
@@ -505,14 +513,12 @@ async def _sync_current_week_scoreboard_once(season: int, week: int) -> None:
     to report a real LIVE/FINAL/not-started status. Same idempotent
     upsert sync_week_scoreboard already is (matches by ESPN's own
     event id), so calling it again every 2 minutes just refreshes each
-    game's current state -- not a duplicate-row risk."""
-    try:
-        async with async_session() as db:
-            count = await nfl_schedule_service.sync_week_scoreboard(season, week, 2, db)  # 2 = regular season, ESPN's enum
-        if count:
-            print(f"[scheduler] Synced {count} live NFL game(s) for week {week}, {season}")
-    except Exception as e:
-        print(f"[scheduler] Current-week scoreboard sync failed: {e}")
+    game's current state -- not a duplicate-row risk. Raises on failure
+    (run_scheduler's call site catches and logs it)."""
+    async with async_session() as db:
+        count = await nfl_schedule_service.sync_week_scoreboard(season, week, 2, db)  # 2 = regular season, ESPN's enum
+    if count:
+        print(f"[scheduler] Synced {count} live NFL game(s) for week {week}, {season}")
 
 
 DRAFT_TIMER_CHECK_INTERVAL = 5  # seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
@@ -588,7 +594,7 @@ async def run_draft_timer_watchdog() -> None:
     print(f"[draft_timer] Starting -- checking every {DRAFT_TIMER_CHECK_INTERVAL}s for expired draft picks")
     while True:
         try:
-            await _process_expired_draft_picks_once()
+            await run_job("draft_timer", _process_expired_draft_picks_once, record_success_every_s=60)
         except Exception as e:
             print(f"[draft_timer] Check iteration failed: {e}")
         await asyncio.sleep(DRAFT_TIMER_CHECK_INTERVAL)
@@ -608,15 +614,15 @@ async def run_scheduler() -> None:
     # Sync player metadata once immediately so a fresh deploy isn't empty;
     # don't let a failure here block the stats loop from ever starting.
     try:
-        await _sync_players_once()
+        await run_job("sync_players", _sync_players_once)
         last_player_sync = loop.time()
     except Exception as e:
         print(f"[scheduler] Initial player sync failed: {e}")
-    await _sync_projections_once()
+    await _sync_projections_safely()
 
     while True:
         try:
-            synced = await _sync_stats_once()
+            synced = await run_job("sync_stats", _sync_stats_once)
         except Exception as e:
             print(f"[scheduler] Stats sync iteration failed: {e}")
             await asyncio.sleep(ERROR_BACKOFF)
@@ -625,21 +631,21 @@ async def run_scheduler() -> None:
         if synced is not None:
             season, week = synced
             try:
-                await _calculate_all_league_scores_once(season, week)
+                await run_job("calculate_scores", _calculate_all_league_scores_once, season, week)
             except Exception as e:
                 # Never let an auto-score failure interrupt the sync loop
                 # itself -- stats are already synced for this tick either way.
                 print(f"[scheduler] Auto-score pass failed: {e}")
             try:
-                await _sync_current_week_scoreboard_once(season, week)
+                await run_job("sync_scoreboard", _sync_current_week_scoreboard_once, season, week)
             except Exception as e:
                 print(f"[scheduler] Current-week scoreboard sync pass failed: {e}")
             try:
-                await _process_all_league_playoffs_once(season, week)
+                await run_job("playoffs", _process_all_league_playoffs_once, season, week)
             except Exception as e:
                 print(f"[scheduler] Playoff pass failed: {e}")
             try:
-                await _process_all_league_best_ball_window_reopens_once()
+                await run_job("best_ball_reopen", _process_all_league_best_ball_window_reopens_once)
             except Exception as e:
                 print(f"[scheduler] Best-Ball window-reopen pass failed: {e}")
 
@@ -653,15 +659,15 @@ async def run_scheduler() -> None:
             if _last_seen_week is not None and _last_seen_week != (season, week):
                 prev_season, prev_week = _last_seen_week
                 try:
-                    await _process_all_league_guillotines_once(prev_season, prev_week)
+                    await run_job("guillotine", _process_all_league_guillotines_once, prev_season, prev_week)
                 except Exception as e:
                     print(f"[scheduler] Guillotine pass failed: {e}")
                 try:
-                    await _notify_matchup_results_for_all_leagues_once(prev_season, prev_week)
+                    await run_job("matchup_notify", _notify_matchup_results_for_all_leagues_once, prev_season, prev_week)
                 except Exception as e:
                     print(f"[scheduler] Matchup-result notify pass failed: {e}")
                 try:
-                    await _generate_team_recaps_for_all_leagues_once(prev_season, prev_week)
+                    await run_job("team_recaps", _generate_team_recaps_for_all_leagues_once, prev_season, prev_week)
                 except Exception as e:
                     print(f"[scheduler] Team recap generation pass failed: {e}")
             _last_seen_week = (season, week)
@@ -671,7 +677,7 @@ async def run_scheduler() -> None:
         # own docstring for why this replaced the old in-memory,
         # transition-triggered version (2026-09-22).
         try:
-            await _maybe_refresh_dashboard_summaries_once()
+            await run_job("dashboard_summaries", _maybe_refresh_dashboard_summaries_once)
         except Exception as e:
             print(f"[scheduler] Dashboard summaries refresh check failed: {e}")
 
@@ -679,16 +685,22 @@ async def run_scheduler() -> None:
         # shape as the dashboard summaries refresh right above --
         # see _maybe_refresh_team_news_once's own docstring.
         try:
-            await _maybe_refresh_team_news_once()
+            await run_job("team_news", _maybe_refresh_team_news_once)
         except Exception as e:
             print(f"[scheduler] Team news refresh pass failed: {e}")
 
         if loop.time() - last_player_sync >= PLAYER_SYNC_INTERVAL:
             try:
-                await _sync_players_once()
+                await run_job("sync_players", _sync_players_once)
                 last_player_sync = loop.time()
             except Exception as e:
                 print(f"[scheduler] Player sync iteration failed: {e}")
-            await _sync_projections_once()
+            await _sync_projections_safely()
+            try:
+                pruned = await run_job("prune_job_runs", prune_job_runs)
+                if pruned:
+                    print(f"[scheduler] Pruned {pruned} old job_runs row(s)")
+            except Exception as e:
+                print(f"[scheduler] job_runs prune failed: {e}")
 
         await asyncio.sleep(STATS_SYNC_INTERVAL)

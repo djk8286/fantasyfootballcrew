@@ -30,6 +30,7 @@ from app.models.email_send_log import EmailSendLog
 from app.api.deps import require_admin
 from app.services.league_deletion_service import delete_league as _delete_league
 from app.services.account_deletion_service import delete_user_account
+from app.services.job_run_service import get_system_health
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -432,3 +433,14 @@ async def get_email_log(
         }
         for e in logs
     ]
+
+
+@router.get("/system-health")
+async def system_health(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Background job status (last success/failure/error per scheduler
+    job), data freshness for the Sleeper/ESPN syncs, and draft timer
+    watchdog health. See job_run_service.get_system_health."""
+    return await get_system_health(db)

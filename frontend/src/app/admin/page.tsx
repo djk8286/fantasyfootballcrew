@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { adminApi, getCurrentUserId } from "@/lib/api-client";
+import SystemHealthPanel, { countUnhealthy, type SystemHealth } from "./SystemHealthPanel";
 import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle, Trash2, X, Swords, DollarSign } from "lucide-react";
 
 interface Stats {
@@ -114,7 +115,7 @@ interface AdminLeagueDetail {
   drafts: AdminLeagueDraft[];
 }
 
-type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log";
+type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log" | "system";
 
 const FLAG_LABELS: Record<string, string> = {
   no_teams: "No teams",
@@ -439,7 +440,26 @@ export default function AdminPage() {
   const [selectedLeagueId, setSelectedLeagueId] = useState<string | null>(null);
   const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
   const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
+  const [systemHealthError, setSystemHealthError] = useState<string | null>(null);
+  const [systemHealthRefreshing, setSystemHealthRefreshing] = useState(false);
   const currentUserId = getCurrentUserId();
+
+  // Loaded separately from the main Promise.all so a slow/failing health
+  // query can never block the rest of the dashboard from rendering.
+  const loadSystemHealth = useCallback(() => {
+    setSystemHealthRefreshing(true);
+    adminApi.getSystemHealth()
+      .then((data) => { setSystemHealth(data as SystemHealth); setSystemHealthError(null); })
+      .catch((err: unknown) => setSystemHealthError(err instanceof Error ? err.message : "Failed to load"))
+      .finally(() => setSystemHealthRefreshing(false));
+  }, []);
+
+  useEffect(() => {
+    adminApi.getSystemHealth()
+      .then((data) => setSystemHealth(data as SystemHealth))
+      .catch((err: unknown) => setSystemHealthError(err instanceof Error ? err.message : "Failed to load"));
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -565,6 +585,7 @@ export default function AdminPage() {
             ["ai-usage", "AI Usage"],
             ["health", `League Health${leagueHealth.length ? ` (${leagueHealth.length})` : ""}`],
             ["email-log", "Email Log"],
+            ["system", `System Health${countUnhealthy(systemHealth) ? ` (${countUnhealthy(systemHealth)} ⚠)` : ""}`],
           ] as [Tab, string][]).map(([key, label]) => (
             <button
               key={key}
@@ -577,6 +598,15 @@ export default function AdminPage() {
             </button>
           ))}
         </div>
+
+        {tab === "system" && (
+          <SystemHealthPanel
+            health={systemHealth}
+            error={systemHealthError}
+            onRefresh={loadSystemHealth}
+            refreshing={systemHealthRefreshing}
+          />
+        )}
 
         {tab === "leagues" && (
           <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
