@@ -29,8 +29,10 @@ from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.models.nfl_game import NFLGame
 from app.models.draft_queue_entry import DraftQueueEntry
 from app.models.team_player_news import TeamPlayerNews
+from app.models.job_run import JobRun
 
 __all__ = [
+    "JobRun",
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
     "Team", "Player", "DraftPick", "Draft", "DraftRunStatus", "ScoringConfig",
     "Coach", "CoachPosition", "Transaction", "TransactionType", "TransactionStatus",
