@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -210,7 +211,7 @@ async def api_draft_state(draft_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{draft_id}/mock")
-@limiter.limit("10/hour")
+@limiter.limit("60/hour")
 async def api_run_mock(
     request: Request,
     draft_id: str,
@@ -302,6 +303,41 @@ async def api_set_timer(
     draft.timer_seconds = timer_data.timer_seconds
     await db.commit()
     return {"timer_seconds": draft.timer_seconds}
+
+
+@router.post("/{draft_id}/pause")
+@limiter.limit("60/hour")
+async def api_pause_draft(
+    request: Request,
+    draft_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pause an in-progress draft (no picks of any kind until resumed). Commissioner only."""
+    draft, league = await _get_draft_and_league_or_404(draft_id, db)
+    require_commissioner(league, current_user)
+    if draft.status.value != "in_progress":
+        raise HTTPException(status_code=400, detail="Draft is not in progress")
+    draft.is_paused = True
+    await db.commit()
+    return {"is_paused": True}
+
+
+@router.post("/{draft_id}/resume")
+@limiter.limit("60/hour")
+async def api_resume_draft(
+    request: Request,
+    draft_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resume a paused draft; the current pick's clock restarts. Commissioner only."""
+    draft, league = await _get_draft_and_league_or_404(draft_id, db)
+    require_commissioner(league, current_user)
+    draft.is_paused = False
+    draft.current_pick_started_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"is_paused": False}
 
 
 # ─── Pick queue (2026-09-09) ───────────────────────────────────────────

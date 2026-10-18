@@ -170,18 +170,58 @@ async def fetch_player_season_stats(year: int, player_id: str) -> Dict[str, Any]
         return response.json()
 
 
+def aggregate_week_stats(week_stats: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Season totals from {week: {stat: value}}: numeric stats summed,
+    rank-style fields (not additive) taken from the latest week."""
+    totals: Dict[str, Any] = {}
+    for wk in sorted((week_stats or {}).keys(), key=lambda k: int(k)):
+        for key, value in (week_stats[wk] or {}).items():
+            if "rank" in key or not isinstance(value, (int, float)) or isinstance(value, bool):
+                totals[key] = value
+            else:
+                totals[key] = (totals.get(key) or 0) + value
+    return totals
+
+
+async def rebuild_season_stats_from_weeks(db: AsyncSession) -> int:
+    """Repair pass: recompute Player.stats from week_stats for every player
+    that has per-week data. Idempotent; run once at scheduler start so
+    totals inflated by the old additive sync are corrected on deploy
+    without a manual backfill."""
+    result = await db.execute(select(Player).where(Player.week_stats.isnot(None)))
+    fixed = 0
+    for player in result.scalars():
+        if not player.week_stats:
+            continue
+        rebuilt = aggregate_week_stats(player.week_stats)
+        if rebuilt != (player.stats or {}):
+            player.stats = rebuilt
+            fixed += 1
+    await db.commit()
+    return fixed
+
+
 async def sync_weekly_stats(db: AsyncSession, year: int, week: int) -> int:
     """Sync weekly stats from Sleeper to local player records."""
     stats_data = await fetch_weekly_stats(year, week)
     count = 0
 
+    # One bulk load instead of one SELECT per Sleeper id: this job runs
+    # every 2 minutes, and thousands of serial queries per tick kept DB
+    # connections busy enough to slow every user-facing request.
+    players_by_sleeper: dict[str, Player] = {}
+    ids = list(stats_data.keys())
+    for i in range(0, len(ids), 500):
+        result = await db.execute(select(Player).where(Player.sleeper_id.in_(ids[i:i + 500])))
+        for p in result.scalars().all():
+            players_by_sleeper[p.sleeper_id] = p
+
     for player_id, stats in stats_data.items():
-        result = await db.execute(
-            select(Player).where(Player.sleeper_id == player_id)
-        )
-        player = result.scalar_one_or_none()
+        player = players_by_sleeper.get(player_id)
         if not player:
             continue
+        if (player.week_stats or {}).get(str(week)) == stats and player.stats_year == year:
+            continue  # unchanged since last tick -- skip the write entirely
 
         # A new season starting resets accumulated stats instead of piling
         # onto whatever the previous season left behind -- without this,
@@ -194,19 +234,16 @@ async def sync_weekly_stats(db: AsyncSession, year: int, week: int) -> int:
 
         # Update week stats
         week_key = str(week)
-        if not player.week_stats:
-            player.week_stats = {}
-        player.week_stats[week_key] = stats
+        # Reassign (not mutate in place) so the JSON column change is
+        # always detected and persisted.
+        player.week_stats = {**(player.week_stats or {}), week_key: stats}
 
-        # Also update aggregated stats
-        if not player.stats:
-            player.stats = {}
-        for key, value in stats.items():
-            if key in player.stats:
-                if isinstance(value, (int, float)):
-                    player.stats[key] = (player.stats[key] or 0) + value
-            else:
-                player.stats[key] = value
+        # Season aggregate = sum over the stored per-week snapshots, recomputed
+        # from scratch every time. This used to ADD the fetched week onto
+        # the running total -- but this sync runs every few minutes for the
+        # same current week, so every tick re-added that week again and
+        # totals grew without bound (QA round 2: "776642 rush yd").
+        player.stats = aggregate_week_stats(player.week_stats)
 
         count += 1
 

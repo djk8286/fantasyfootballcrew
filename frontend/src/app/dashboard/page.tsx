@@ -1,5 +1,7 @@
 "use client";
 
+import { leagueLabel } from "@/lib/league-label";
+
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { leaguesApi, playersApi, dashboardApi, standingsApi, nflApi, isLoggedIn } from "@/lib/api-client";
@@ -76,7 +78,7 @@ function timeAgo(dateStr: string | undefined): string | null {
 
 /* ---------- Individual league card with quick actions ---------- */
 
-function LeagueCard({ league }: { league: League }) {
+function LeagueCard({ league, label }: { league: League; label?: string }) {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
 
@@ -164,7 +166,7 @@ function LeagueCard({ league }: { league: League }) {
               <TypeIcon className="w-6 h-6 text-gold-400" />
             </div>
             <h3 className="text-lg font-bold text-white group-hover:text-gold-400 transition-colors truncate">
-              {league.name}
+              {label || league.name}
             </h3>
           </div>
           <span
@@ -767,7 +769,7 @@ export default function DashboardPage() {
         ) : leagues.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {leagues.map((league) => (
-              <LeagueCard key={league.id} league={league} />
+              <LeagueCard key={league.id} league={league} label={leagueLabel(league, leagues)} />
             ))}
           </div>
         ) : (

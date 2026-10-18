@@ -34,11 +34,12 @@ The manual commissioner button still exists unchanged, as a force-recalc
 option (e.g. after a late roster correction).
 """
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 from app.core.database import async_session
-from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, SLEEPER_API
+from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, rebuild_season_stats_from_weeks, SLEEPER_API
 from app.services.standings_service import calculate_week, notify_matchup_results
 from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
@@ -463,6 +464,12 @@ async def _maybe_refresh_team_news_once() -> None:
         print(f"[scheduler] Refreshed player news for {refreshed} team(s)" + (f", {failed} failed" if failed else ""))
 
 
+async def _repair_season_stats_once() -> None:
+    async with async_session() as db:
+        fixed = await rebuild_season_stats_from_weeks(db)
+    print(f"[scheduler] Rebuilt season stats from weekly data for {fixed} player(s)")
+
+
 async def _refresh_espn_news_once() -> None:
     async with async_session() as db:
         stats = await espn_news_service.refresh_player_news(db)
@@ -527,32 +534,27 @@ async def _sync_current_week_scoreboard_once(season: int, week: int) -> None:
         print(f"[scheduler] Synced {count} live NFL game(s) for week {week}, {season}")
 
 
-DRAFT_TIMER_CHECK_INTERVAL = 5  # seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
+DRAFT_TIMER_CHECK_INTERVAL = 1  # (was 5) also drives CPU picks now -- seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
 
 
 async def _process_expired_draft_picks_once() -> None:
-    """Server-authoritative timer enforcement (2026-09-09): forces an
-    auto-pick the moment a draft's current pick's clock runs out, whether
-    or not any browser tab is even open to notice. Before this, timer
-    expiry was purely client-driven (draft/[id]/page.tsx scheduling a
-    setTimeout against the deadline) -- if nobody connected to that
-    draft had a tab open when the clock hit zero, the pick simply never
-    happened until someone did. This is the same job any connected
-    client's own expiry timer already does (POST /drafts/{id}/auto-pick),
-    just running independently of whether one exists.
-
-    Runs make_pick through the exact same CAS-protected path everything
-    else does (get_next_pick_for_team -> make_pick), so a human picking
-    at the exact same moment this fires just makes the loser of that
-    race raise "someone else just picked" -- caught and logged below,
-    not a correctness issue. One draft's failure (a data problem, a
-    player pool exhausted, etc.) is isolated so it can't block every
-    other in-progress draft's own check this tick."""
+    """Server-authoritative draft advancement -- runs whether or not any
+    browser tab is open:
+      - CPU (or ownerless) team on the clock: picks once
+        settings.CPU_PICK_DELAY_S has elapsed (QA round 2 -- these used to
+        wait for a browser tab to fire /auto-pick, which was rate-limited
+        and polled every 5s, so CPU picks took ~20s each and stalled
+        entirely with no tab open);
+      - human team whose pick timer expired: forces an auto-pick (queue
+        first, then AI ranking) exactly as before.
+    Paused drafts are skipped. Each pick goes through make_pick's
+    CAS-protected path, so racing a human pick or another worker just
+    loses cleanly. One draft's failure can't block the others."""
     async with async_session() as db:
         result = await db.execute(
             select(Draft).where(
                 Draft.status == DraftRunStatus.IN_PROGRESS,
-                Draft.timer_seconds > 0,
+                Draft.is_paused == False,  # noqa: E712
                 Draft.current_pick_started_at.isnot(None),
             )
         )
@@ -564,13 +566,23 @@ async def _process_expired_draft_picks_once() -> None:
             started_at = draft.current_pick_started_at
             if started_at.tzinfo is None:
                 started_at = started_at.replace(tzinfo=timezone.utc)
-            deadline = started_at + timedelta(seconds=draft.timer_seconds)
-            if now < deadline:
+            elapsed = (now - started_at).total_seconds()
+            if elapsed < settings.CPU_PICK_DELAY_S:
                 continue
             try:
-                state = await get_draft_state(db, draft.id)
-                team_id = state["current_team_id"]
-                if not team_id or state["draft"]["status"] != "in_progress":
+                # Cheap current-team lookup straight from the draft row (same
+                # formula make_pick uses) -- not get_draft_state, whose
+                # full-pool ranking is too heavy to run every second.
+                order = json.loads(draft.team_order or "[]")
+                num_teams = len(order) // max(1, draft.total_rounds)
+                idx = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
+                if num_teams == 0 or idx >= len(order):
+                    continue
+                team_id = order[idx]
+                team = await db.get(Team, team_id)
+                is_cpu_turn = team is not None and (team.is_cpu or not team.owner_id)
+                timer_expired = draft.timer_seconds > 0 and elapsed >= draft.timer_seconds
+                if not (is_cpu_turn or timer_expired):
                     continue
                 player = await get_next_pick_for_team(db, draft.id, team_id)
                 if not player:
@@ -578,16 +590,13 @@ async def _process_expired_draft_picks_once() -> None:
                 await make_pick(db, draft.id, team_id, player.id)
                 forced += 1
             except ValueError:
-                # "It's not your turn" (someone else picked in the same
-                # instant), "Draft is not in progress" (finished between
-                # the query above and now), etc. -- not an error worth
-                # logging, just a lost race or stale read.
+                # Lost race / draft finished or paused meanwhile -- fine.
                 pass
             except Exception as e:
                 print(f"[draft_timer] auto-pick failed for draft {draft.id}: {e}")
 
     if forced:
-        print(f"[draft_timer] Forced {forced} expired-timer auto-pick(s)")
+        print(f"[draft_timer] Made {forced} server-side auto-pick(s)")
 
 
 async def run_draft_timer_watchdog() -> None:
@@ -630,6 +639,13 @@ async def run_scheduler() -> None:
     except Exception as e:
         print(f"[scheduler] Initial player sync failed: {e}")
     await _sync_projections_safely()
+
+    # One-time repair of season totals inflated by the old additive weekly
+    # sync (QA round 2) -- idempotent, so harmless on every later deploy.
+    try:
+        await run_job("repair_season_stats", _repair_season_stats_once)
+    except Exception as e:
+        print(f"[scheduler] Season stats repair failed: {e}")
 
     while True:
         try:

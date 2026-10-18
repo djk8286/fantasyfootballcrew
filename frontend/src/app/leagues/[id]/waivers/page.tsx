@@ -1,5 +1,7 @@
 "use client";
 
+import Toast, { useToast } from "@/components/Toast";
+
 import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
@@ -31,7 +33,7 @@ interface Claim {
   id: string;
   team_id: string;
   status: string;
-  details?: { add_player_id?: string; drop_player_id?: string | null };
+  details?: { add_player_id?: string; drop_player_id?: string | null; add_player_name?: string | null; drop_player_name?: string | null };
   processed_at: string;
 }
 
@@ -84,6 +86,7 @@ const statusColor: Record<string, string> = {
 const FA_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 
 export default function WaiversPage() {
+  const { toast, showToast, clearToast } = useToast();
   const params = useParams();
   const leagueId = params.id as string;
 
@@ -233,10 +236,21 @@ export default function WaiversPage() {
   useEffect(() => {
     const ids = new Set<string>();
     (myTeam?.roster || []).forEach((id) => ids.add(id));
+    // Claims carry server-resolved names now -- seed them directly instead
+    // of fetching each player.
+    const fromClaims: Record<string, string> = {};
     claims.forEach((c) => {
-      if (c.details?.add_player_id) ids.add(c.details.add_player_id);
-      if (c.details?.drop_player_id) ids.add(c.details.drop_player_id);
+      const d = c.details;
+      if (d?.add_player_id && d.add_player_name) fromClaims[d.add_player_id] = d.add_player_name;
+      if (d?.drop_player_id && d.drop_player_name) fromClaims[d.drop_player_id] = d.drop_player_name;
+      if (d?.add_player_id && !d.add_player_name) ids.add(d.add_player_id);
+      if (d?.drop_player_id && !d.drop_player_name) ids.add(d.drop_player_id);
     });
+    const newFromClaims = Object.entries(fromClaims).filter(([id]) => !(id in playerNames));
+    if (newFromClaims.length > 0) {
+      setPlayerNames((prev) => ({ ...prev, ...Object.fromEntries(newFromClaims) }));
+      return;
+    }
     const unresolved = [...ids].filter((id) => !(id in playerNames));
     if (unresolved.length === 0) return;
 
@@ -246,14 +260,14 @@ export default function WaiversPage() {
           .get(id)
           .then((p) => {
             const player = p as { first_name?: string; last_name?: string };
-            return [id, `${player.first_name ?? ""} ${player.last_name ?? ""}`.trim() || id] as const;
+            return [id, `${player.first_name ?? ""} ${player.last_name ?? ""}`.trim() || "Unknown player"] as const;
           })
-          .catch(() => [id, id] as const),
+          .catch(() => [id, "Unknown player"] as const),
       ),
     ).then((pairs) => setPlayerNames((prev) => ({ ...prev, ...Object.fromEntries(pairs) })));
   }, [myTeam, claims, playerNames]);
 
-  const playerLabel = (id: string) => playerNames[id] || id;
+  const playerLabel = (id: string) => playerNames[id] || "Loading…";
 
   useEffect(() => {
     if (search.trim().length < 2) {
@@ -280,6 +294,8 @@ export default function WaiversPage() {
         add_player_id: addPlayerId,
         drop_player_id: dropPlayerId || undefined,
       });
+      const addedName = playerNames[addPlayerId] || search.trim();
+      showToast(`Waiver claim submitted${addedName ? ` for ${addedName}` : ""}.`);
       setAddPlayerId("");
       setDropPlayerId("");
       setSearch("");
@@ -328,6 +344,7 @@ export default function WaiversPage() {
 
   return (
     <div className="min-h-screen bg-surface-900">
+      <Toast message={toast} onDone={clearToast} />
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
           <Link href={`/leagues/${leagueId}`} className="text-surface-400 hover:text-white transition-colors">

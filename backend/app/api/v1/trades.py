@@ -10,6 +10,7 @@ from app.models.transaction import Transaction, TransactionType, TransactionStat
 from app.models.user import User
 from app.schemas.trade import TradeProposalCreate
 from app.api.deps import get_current_user
+from app.services.cpu_trade_service import evaluate_cpu_response
 
 router = APIRouter(prefix="/leagues/{league_id}/trades", tags=["trades"])
 
@@ -57,16 +58,28 @@ async def propose_trade(
     if missing_requested:
         raise HTTPException(status_code=400, detail=f"Players not on target team's roster: {sorted(missing_requested)}")
 
+    details = {
+        "target_team_id": data.target_team_id,
+        "offered_player_ids": data.offered_player_ids,
+        "requested_player_ids": data.requested_player_ids,
+    }
+    trade_status = TransactionStatus.PENDING
+    # CPU teams answer immediately (they used to leave offers pending
+    # forever). Declined -> closed now; accepted -> normal commissioner review.
+    if target_team.is_cpu:
+        verdict = await evaluate_cpu_response(db, data.offered_player_ids, data.requested_player_ids)
+        details["cpu_response"] = "accepted" if verdict["accepted"] else "rejected"
+        details["cpu_reason"] = verdict["reason"]
+        details["cpu_value"] = {"received": verdict["value_received"], "given": verdict["value_given"]}
+        if not verdict["accepted"]:
+            trade_status = TransactionStatus.DENIED
+
     trade = Transaction(
         league_id=league_id,
         team_id=data.team_id,
         type=TransactionType.TRADE,
-        status=TransactionStatus.PENDING,
-        details={
-            "target_team_id": data.target_team_id,
-            "offered_player_ids": data.offered_player_ids,
-            "requested_player_ids": data.requested_player_ids,
-        },
+        status=trade_status,
+        details=details,
     )
     db.add(trade)
     await db.commit()
@@ -96,3 +109,35 @@ async def list_team_trades(
         ]
 
     return trades
+
+
+@router.post("/{trade_id}/cancel")
+@limiter.limit("30/hour")
+async def cancel_trade(
+    request: Request,
+    league_id: str,
+    trade_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The proposer withdraws a still-pending trade."""
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.id == trade_id,
+            Transaction.league_id == league_id,
+            Transaction.type == TransactionType.TRADE,
+        )
+    )
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    proposer = await _get_team_in_league(trade.team_id, league_id, db)
+    if current_user.id not in {proposer.owner_id, proposer.co_owner_id}:
+        raise HTTPException(status_code=403, detail="Only the proposing team can cancel this trade")
+    if trade.status != TransactionStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Trade already {trade.status.value}")
+    trade.status = TransactionStatus.DENIED
+    trade.details = {**(trade.details or {}), "cancelled_by_proposer": True}
+    await db.commit()
+    await db.refresh(trade)
+    return trade

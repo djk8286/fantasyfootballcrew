@@ -1,5 +1,7 @@
 "use client";
 
+import { leagueLabel } from "@/lib/league-label";
+
 import { useState, useEffect, useCallback } from "react";
 import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
@@ -7,6 +9,7 @@ import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, i
 interface League {
   id: string;
   name: string;
+  created_at?: string | null;
 }
 
 interface Team {
@@ -170,6 +173,7 @@ function LineupTab() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
   const userId = getCurrentUserId();
+  const [teamsLoading, setTeamsLoading] = useState(false);
 
   const loadHistory = useCallback((lid: string) => {
     aiApi
@@ -191,15 +195,24 @@ function LineupTab() {
       setTeamId("");
       return;
     }
+    // Ignore responses for a league that's no longer selected: an older,
+    // slower response used to land last and reset teamId to "", leaving the
+    // select *showing* a team (a controlled <select> with an unmatched
+    // value renders its first option) while Analyze stayed disabled.
+    let stale = false;
+    setTeamsLoading(true);
     teamsApi
       .getByLeague(leagueId)
       .then((data) => {
+        if (stale) return;
         const all = Array.isArray(data) ? (data as Team[]) : [];
         const mine = all.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
         setTeams(mine);
         setTeamId(mine[0]?.id || "");
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (!stale) setTeamsLoading(false); });
+    return () => { stale = true; };
   }, [leagueId, userId]);
 
   // Past lineup analyses -- scoped to whichever league is selected (or
@@ -236,7 +249,7 @@ function LineupTab() {
           >
             <option value="">Select a league...</option>
             {leagues.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+              <option key={l.id} value={l.id}>{leagueLabel(l, leagues)}</option>
             ))}
           </select>
         </div>
@@ -261,6 +274,18 @@ function LineupTab() {
       </div>
 
       {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
+
+      {!teamId && !loading && (
+        <p className="text-surface-500 text-xs mt-3" data-testid="analyze-disabled-reason">
+          {!leagueId
+            ? "Select a league to analyze your lineup."
+            : teamsLoading
+              ? "Loading your teams..."
+              : teams.length === 0
+                ? "You need to own a team in this league to analyze its lineup."
+                : "Select your team."}
+        </p>
+      )}
 
       <button
         type="button"
@@ -356,7 +381,7 @@ function TradeTab() {
           >
             <option value="">Select a league...</option>
             {leagues.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+              <option key={l.id} value={l.id}>{leagueLabel(l, leagues)}</option>
             ))}
           </select>
         </div>
@@ -478,7 +503,7 @@ function CompareTeamsTab() {
           >
             <option value="">Select a league...</option>
             {leagues.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+              <option key={l.id} value={l.id}>{leagueLabel(l, leagues)}</option>
             ))}
           </select>
         </div>
@@ -704,7 +729,7 @@ function ComparePlayersTab() {
           >
             <option value="">Select a league...</option>
             {leagues.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+              <option key={l.id} value={l.id}>{leagueLabel(l, leagues)}</option>
             ))}
           </select>
         </div>

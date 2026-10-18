@@ -280,7 +280,8 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label htmlFor="username" className="text-xs text-surface-400 font-medium">Username</label>
+              <label htmlFor="username" className="text-xs text-surface-400 font-medium">Username (display name)</label>
+              <p className="text-[11px] text-surface-500 mt-0.5">Shown to other managers. This is not your login email -- that&apos;s listed below.</p>
               <input
                 id="username"
                 type="text"
