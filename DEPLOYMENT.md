@@ -96,14 +96,13 @@ alembic history             # full migration lineage
 **Local dev DB (SQLite) vs. production (Postgres):** `DATABASE_URL` is
 read the same way the app itself reads it (`alembic/env.py` imports
 `settings` directly), so just export `DATABASE_URL` before an Alembic
-command to target a specific database — same pattern as the old
-`migrate_add_*.py` scripts.
+command to target a specific database.
 
 **History:** this project ran without Alembic for a while — schema
 changes shipped as hand-rolled `migrate_add_*.py` scripts (idempotent,
 check-then-`ALTER TABLE`, run manually against production before the
-code that depended on them). Those scripts are left in `backend/` as a
-historical record of how the schema got to where it is; the first real
+code that depended on them). Those scripts were deleted once both databases were stamped at the
+Alembic baseline (they're in git history if you ever need them); the first real
 Alembic migration (`alembic/versions/..._baseline_schema_as_of_alembic_adoption.py`)
 is a from-scratch snapshot of that already-evolved schema, and both the
 local dev DB and production were `alembic stamp head`-ed at it (marks a
