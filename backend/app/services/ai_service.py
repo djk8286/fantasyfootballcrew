@@ -703,45 +703,27 @@ since the last check -- do not invent news, injuries, or storylines
 for any player not listed above.
 """
 
-# Real search path (see generate_team_player_news) -- reuses
-# _call_openai_search, the exact same Responses API + hosted
-# web_search tool analyze_bet already uses. Deliberately narrower scope
-# than BET_ANALYSIS_SEARCH_SYSTEM_PROMPT (no betting/market framing
-# needed here) but the same integrity rules: real sources only, skip a
-# player rather than invent something for them.
-TEAM_PLAYER_NEWS_SEARCH_SYSTEM_PROMPT = """
-You are a fantasy football news desk with live web search, covering
-one specific fantasy team's roster. Plain text only, no markdown
-syntax.
+# Article-grounded path (2026-10-18): the model only ever sees real,
+# already-fetched ESPN articles (see espn_news_service.py) plus the
+# app's own detected changes, and is told to summarize just those. It
+# never produces links -- the UI renders each article's real URL itself.
+TEAM_PLAYER_NEWS_ARTICLES_PROMPT = """
+You are a fantasy football news desk, writing a short news digest for
+one fantasy team's roster. Plain text only, no markdown, no URLs.
 
-{grounding}
-
-For EACH player listed, search for real recent news (roughly the last
-week) -- injury updates, depth chart/role changes, trades, suspensions,
-a notably big or bad game. Write ONE short sentence per player who has
-real recent news. If a player has no real recent news, SKIP them
-entirely -- never pad with generic filler like "remains a solid
-starter" for a player search turned up nothing new on. If truly
-nothing turned up for any player on the roster, say so plainly in one
-line rather than inventing storylines.
-
-Never fabricate a headline, injury, trade, or source. Weave in the
-structured "detected changes" you're given (real, already-confirmed
-data from this app's own sync) rather than just repeating them
-verbatim -- your live search should add real color/context to them,
-not contradict them.
-"""
-
-TEAM_PLAYER_NEWS_SEARCH_INPUT = """
 **Team:** {team_name}
 
-**Roster to research (name, position, current NFL team, last known
-injury status):**
-{players}
+**Real published articles about players on this roster (newest first):**
+{articles}
 
-**Structured changes already detected by this app since the last check
-(real, synced data):**
+**Real changes detected on this roster since the last check:**
 {detected_changes}
+
+Write one short sentence per player who appears above, saying what the
+news means for that player in fantasy terms. Use ONLY the articles and
+changes given -- do not add facts, injuries, or storylines that are not
+in them, and do not mention players who are not listed. Never include
+links or cite sources by URL.
 """
 
 
@@ -856,33 +838,26 @@ class AIService:
         team_name: str,
         players: list,
         detected_changes: Optional[list] = None,
+        articles: Optional[list] = None,
     ) -> str:
-        """Per-team player news digest (2026-09-22) -- a mix of real
-        web-search headlines (OpenAI path) and this app's own free,
-        structured injury/team-change detection (see
-        team_news_service._detect_changes), same shape as analyze_bet's
-        search/no-search split: routes to the real live-web-search path
-        when OpenAI is the configured provider, otherwise falls back to
-        the structured-changes-only prompt rather than claiming a
-        search capability it can't back up.
-
-        players: this team's full roster (name/position/team/
-        injury_status) for the search path to research -- unused by the
-        no-search fallback, which only has detected_changes to work
-        with."""
-        if self.provider == "openai" and self.api_key:
-            input_text = TEAM_PLAYER_NEWS_SEARCH_INPUT.format(
+        """Per-team player news digest. Since 2026-10-18 this never does
+        its own web search (that path could invent or stale-link
+        headlines): it summarizes real ESPN articles team_news_service
+        already fetched (`articles`: [{player, headline, description,
+        published_at}]) plus the app's own structured changes. With no
+        articles it falls back to the changes-only prompt. `players` is
+        kept for call-site compatibility and is not sent to the model."""
+        if articles:
+            prompt = TEAM_PLAYER_NEWS_ARTICLES_PROMPT.format(
                 team_name=team_name,
-                players=json.dumps(players, indent=2),
+                articles=json.dumps(articles, indent=2, default=str),
                 detected_changes=json.dumps(detected_changes or [], indent=2),
             )
-            system = TEAM_PLAYER_NEWS_SEARCH_SYSTEM_PROMPT.format(grounding=_grounding_preamble())
-            return await self._call_openai_search(system, input_text)
-
-        prompt = TEAM_PLAYER_NEWS_PROMPT.format(
-            team_name=team_name,
-            detected_changes=json.dumps(detected_changes or [], indent=2),
-        )
+        else:
+            prompt = TEAM_PLAYER_NEWS_PROMPT.format(
+                team_name=team_name,
+                detected_changes=json.dumps(detected_changes or [], indent=2),
+            )
         return await self._call_llm(prompt)
 
     async def generate_commissioner_digest(
