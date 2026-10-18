@@ -4,6 +4,7 @@ Avoids the passlib/bcrypt compatibility issue on Windows.
 Uses PyJWT for token generation.
 """
 import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
@@ -39,7 +40,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         salt, pwd_hash = hashed_password.split(":")
         check = hashlib.sha256((salt + plain_password).encode()).hexdigest()
-        return check == pwd_hash
+        return hmac.compare_digest(check, pwd_hash)
     except (ValueError, AttributeError):
         return False
 
@@ -59,7 +60,7 @@ def hash_token(raw_token: str) -> str:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a JWT access token."""
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=30))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=settings.ACCESS_TOKEN_EXPIRE_DAYS))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
 
