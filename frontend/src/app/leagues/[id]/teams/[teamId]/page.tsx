@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { teamsApi, leaguesApi, playersApi, standingsApi, teamNewsApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
+import { teamsApi, leaguesApi, playersApi, standingsApi, teamNewsApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import Avatar from "@/components/Avatar";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -205,9 +205,14 @@ export default function TeamPage() {
     Promise.all([
       teamsApi.get(teamId) as Promise<Team>,
       leaguesApi.get(leagueId) as Promise<LeagueData>,
+      // Team.wins/losses columns are never written server-side; the real
+      // record comes from the standings endpoint (computed from weekly scores).
+      standingsApi.getStandings(leagueId).catch(() => null),
     ])
-      .then(([t, l]) => {
-        setTeam(t);
+      .then(([t, l, st]) => {
+        const rows = ((st as { standings?: Array<{ team_id: string; wins: number; losses: number; ties: number }> } | null)?.standings) || [];
+        const rec = rows.find((r) => r.team_id === t.id);
+        setTeam(rec ? { ...t, wins: rec.wins, losses: rec.losses, ties: rec.ties } : t);
         setLeague(l);
       })
       .catch(() => setError("Failed to load team"))
@@ -337,7 +342,7 @@ export default function TeamPage() {
             </div>
             {team.last_words ? (
               <p className="text-surface-300 text-sm mt-2 italic">&ldquo;{team.last_words}&rdquo;</p>
-            ) : team.owner_id === currentUserId || team.co_owner_id === currentUserId ? (
+            ) : isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id) ? (
               <form onSubmit={handleSubmitLastWords} className="mt-3 flex gap-2">
                 <input
                   value={lastWordsInput}
@@ -383,11 +388,11 @@ export default function TeamPage() {
               ) : (
                 <>
                   <UserCheck className="w-3.5 h-3.5" />
-                  {team.owner_id === currentUserId ? "You own this team" : "Owner-managed"}
+                  {isCurrentUser(team.owner_id) ? "You own this team" : "Owner-managed"}
                   {team.co_owner_id && (
                     <span className="text-surface-500">
                       {" "}
-                      &middot; {team.co_owner_id === currentUserId ? "you're co-owner" : "has a co-owner"}
+                      &middot; {isCurrentUser(team.co_owner_id) ? "you're co-owner" : "has a co-owner"}
                     </span>
                   )}
                   {/* Co-Owner (2-Man Teams) only makes sense for TWO_MAN
@@ -429,7 +434,7 @@ export default function TeamPage() {
               </div>
             )}
           </div>
-          {(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && team.eliminated_week == null && (
+          {(isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id)) && team.eliminated_week == null && (
             <Link
               href={`/leagues/${leagueId}/teams/${teamId}/lineup`}
               className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all shrink-0"
@@ -494,7 +499,7 @@ export default function TeamPage() {
           </h3>
           <CoachStaffPanel
             teamId={teamId}
-            canManage={(team.owner_id === currentUserId || team.co_owner_id === currentUserId) && team.eliminated_week == null}
+            canManage={(isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id)) && team.eliminated_week == null}
           />
         </div>
 

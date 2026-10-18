@@ -124,10 +124,14 @@ async def _make_league_with_scores(db_session_factory):
 
 
 @pytest.mark.asyncio
-async def test_get_team_recap_404_when_none_generated(client, db_session_factory):
+async def test_get_team_recap_null_when_none_generated(client, db_session_factory):
     setup = await _make_league_with_scores(db_session_factory)
     r = await client.get(f"/leagues/{setup['league_id']}/team-recap", params={"week": 1, "year": 2026})
-    assert r.status_code == 404
+    assert r.status_code == 200
+    assert r.json() is None
+    r = await client.get(f"/leagues/{setup['league_id']}/team-recap")
+    assert r.status_code == 200
+    assert r.json() is None
 
 
 @pytest.mark.asyncio

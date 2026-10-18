@@ -767,5 +767,9 @@ async def get_team_weekly_recap(
     else:
         recap = await team_recap_service.get_latest_recap(league_id, db)
     if not recap:
-        raise HTTPException(status_code=404, detail="No team recap generated for this week yet")
+        # "Nothing generated yet" is the normal state for most leagues
+        # most of the week -- answer 200 null rather than 404 so browsers
+        # don't log a console error on every league page view (QA round 1).
+        # A missing *league* is not checked here, same as before.
+        return None
     return {"week": recap.week, "year": recap.year, "content": recap.content, "created_at": recap.created_at}

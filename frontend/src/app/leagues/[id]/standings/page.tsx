@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi, teamsApi, nflApi } from "@/lib/api-client";
+import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser } from "@/lib/api-client";
 import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
@@ -141,10 +141,6 @@ interface LeagueData {
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-function getCurrentUserId(): string {
-  if (typeof window === "undefined") return "placeholder";
-  return localStorage.getItem("ffc_user_id") || "placeholder";
-}
 
 function getMyTeamId(leagueId: string): string | null {
   if (typeof window === "undefined") return null;
@@ -183,7 +179,6 @@ export default function StandingsPage() {
   const [expandedMatchup, setExpandedMatchup] = useState<number | null>(null);
 
   const myTeamId = getMyTeamId(leagueId);
-  const currentUserId = getCurrentUserId();
   // team_id -> that team's per-player score breakdown this week (real
   // current scores, not just the team total) -- see PlayerBreakdownEntry.
   const breakdownByTeam = new Map(
@@ -211,9 +206,9 @@ export default function StandingsPage() {
     return parts.join(", ");
   }
   const isCommissioner =
-    league && currentUserId === league.commissioner_id;
+    league && isCurrentUser(league.commissioner_id);
   const isCoCommissioner =
-    league && league.co_commissioner_ids?.includes(currentUserId);
+    league && (league.co_commissioner_ids || []).some((cid) => isCurrentUser(cid));
   const isLeagueManager = isCommissioner || isCoCommissioner;
 
   // ─── Data fetching ─────────────────────────────────────
@@ -365,12 +360,12 @@ export default function StandingsPage() {
   function getOwnerLabel(team: Standing): string {
     if (team.is_cpu || team.owner_id === "cpu") return "CPU";
     if (team.owner_id === "placeholder") return "Unclaimed";
-    if (team.owner_id === currentUserId) return "You";
+    if (isCurrentUser(team.owner_id)) return "You";
     return "Joined";
   }
 
   function isMyTeam(team: Standing): boolean {
-    return team.id === myTeamId || team.owner_id === currentUserId || team.co_owner_id === currentUserId;
+    return team.id === myTeamId || isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id);
   }
 
   // Renders one standings table for a given team list. Used once for a

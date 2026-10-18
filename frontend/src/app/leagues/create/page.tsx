@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import RequireLogin from "@/components/RequireLogin";
 import { leaguesApi, teamsApi, playersApi } from "@/lib/api-client";
 
 const leagueTypes = [
@@ -25,6 +26,14 @@ const visibilities = [
 ] as const;
 
 export default function CreateLeaguePage() {
+  return (
+    <RequireLogin>
+      <CreateLeagueForm />
+    </RequireLogin>
+  );
+}
+
+function CreateLeagueForm() {
   const router = useRouter();
   const [form, setForm] = useState({
     name: "",

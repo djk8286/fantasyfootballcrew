@@ -14,7 +14,19 @@ function getToken(): string | null {
 
 export function getCurrentUserId(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("ffc_user_id");
+  // No token means logged out, even if a stale ffc_user_id is still around.
+  if (!localStorage.getItem("ffc_token")) return null;
+  return localStorage.getItem("ffc_user_id") || null;
+}
+
+/** True only when a user is logged in AND `id` is that user's id.
+ * Never compare `x === getCurrentUserId()` directly: for a logged-out
+ * visitor both sides can be null (e.g. team.co_owner_id, or owner_id on
+ * CPU teams), and null === null made anonymous visitors look like team
+ * owners (QA round 1, bug #1). */
+export function isCurrentUser(id: string | null | undefined): boolean {
+  const me = getCurrentUserId();
+  return !!me && !!id && id === me;
 }
 
 export function isLoggedIn(): boolean {
@@ -47,6 +59,80 @@ export function setClaimedTeam(leagueId: string, teamId: string): void {
     // quickstart flow over a corrupted localStorage value.
     localStorage.setItem("ffc_user_teams", JSON.stringify({ [leagueId]: teamId }));
   }
+}
+
+/** Thrown by apiRequest on a non-2xx response. `message` keeps the legacy
+ * "API error: <status> <text> — <body>" format (app/admin/adminUtils.ts and
+ * settings parse it); UI that shows errors to visitors should use
+ * friendlyErrorMessage() instead of printing `message` raw. */
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  email: "Email",
+  username: "Username",
+  password: "Password",
+  new_password: "New password",
+  current_password: "Current password",
+};
+
+/** Turn a FastAPI `detail` (string, or a 422 validation-error list) into a
+ * sentence a person can read. */
+export function formatApiDetail(detail: unknown): string | null {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => {
+        if (!d || typeof d !== "object") return null;
+        const e = d as { loc?: unknown[]; msg?: string; type?: string; ctx?: { min_length?: number; max_length?: number } };
+        const field = Array.isArray(e.loc) ? String(e.loc[e.loc.length - 1] ?? "") : "";
+        const label = FIELD_LABELS[field] || (field ? field.charAt(0).toUpperCase() + field.slice(1).replace(/_/g, " ") : "");
+        if (e.type === "string_too_short" && e.ctx?.min_length != null) {
+          return `${label || "Value"} must be at least ${e.ctx.min_length} characters.`;
+        }
+        if (e.type === "string_too_long" && e.ctx?.max_length != null) {
+          return `${label || "Value"} must be at most ${e.ctx.max_length} characters.`;
+        }
+        if (e.msg) {
+          const msg = e.msg.replace(/^Value error, /, "");
+          return label ? `${label}: ${msg}` : msg;
+        }
+        return null;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  return null;
+}
+
+/** Human-readable message for any error thrown by apiRequest (or anything
+ * else). `overrides` maps HTTP status -> message for context-specific
+ * wording, e.g. {401: "Invalid email or password."} on the login form. */
+export function friendlyErrorMessage(
+  err: unknown,
+  fallback = "Something went wrong. Please try again.",
+  overrides: Record<number, string> = {}
+): string {
+  if (err instanceof ApiError) {
+    if (overrides[err.status]) return overrides[err.status];
+    const formatted = formatApiDetail(err.detail);
+    if (formatted) return formatted;
+    if (err.status === 429) return "Too many attempts. Please wait a minute and try again.";
+    if (err.status >= 500) return "The server had a problem. Please try again in a moment.";
+    return fallback;
+  }
+  if (err instanceof Error && err.message.startsWith("Failed to fetch")) {
+    return "Couldn't reach the server. Check your connection and try again.";
+  }
+  return fallback;
 }
 
 async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
@@ -93,7 +179,17 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
       }
     }
     const text = await response.text().catch(() => "");
-    throw new Error(`API error: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`);
+    let detail: unknown = undefined;
+    try {
+      detail = text ? (JSON.parse(text) as { detail?: unknown }).detail : undefined;
+    } catch {
+      detail = undefined;
+    }
+    throw new ApiError(
+      `API error: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`,
+      response.status,
+      detail
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json();

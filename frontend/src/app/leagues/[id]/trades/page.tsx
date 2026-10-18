@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, ArrowLeftRight, Send } from "lucide-react";
-import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId } from "@/lib/api-client";
+import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 
 interface Team {
@@ -55,7 +55,7 @@ export default function TradesPage() {
   const [requestedIds, setRequestedIds] = useState<string[]>([]);
 
   const userId = getCurrentUserId();
-  const myTeam = teams.find((t) => t.owner_id === userId || t.co_owner_id === userId);
+  const myTeam = teams.find((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
   const targetTeam = teams.find((t) => t.id === targetTeamId);
 
   const loadTrades = useCallback(async () => {
@@ -171,9 +171,21 @@ export default function TradesPage() {
           </h2>
 
           {!myTeam ? (
-            <p className="text-surface-400 text-sm">
-              You need to own a team in this league to propose a trade.
-            </p>
+            isLoggedIn() ? (
+              <p className="text-surface-400 text-sm">
+                You need to own a team in this league to propose a trade.
+              </p>
+            ) : (
+              <p className="text-surface-400 text-sm">
+                <Link
+                  href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/trades`)}`}
+                  className="text-gold-400 hover:text-gold-300 font-semibold"
+                >
+                  Log in
+                </Link>{" "}
+                to propose trades for your team.
+              </p>
+            )
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
