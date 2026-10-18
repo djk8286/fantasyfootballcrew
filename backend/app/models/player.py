@@ -18,6 +18,9 @@ class Player(Base):
     team: Mapped[str | None] = mapped_column(String, nullable=True)  # NFL team abbreviation
     bye_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
     injury_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ESPN athlete id, straight from Sleeper's own `espn_id` field -- the
+    # join key for real ESPN news articles (see espn_news_service.py).
+    espn_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     fantasy_positions: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True)
     # MutableDict wrapper: without it, item assignment (player.stats[k] = v)
     # is invisible to SQLAlchemy's change tracking -- only whole-attribute

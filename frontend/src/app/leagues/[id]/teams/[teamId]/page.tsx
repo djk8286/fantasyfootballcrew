@@ -101,27 +101,53 @@ interface CapSummary {
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-// ─── Player News (2026-09-22) ─────────────────────────────────────────
-// Per-team AI news digest for THIS team's actual roster, refreshed
-// roughly once daily by the scheduler (see backend team_news_service.py).
-// Ungated public read, same house style as the roster/schedule panels
-// on this page. A 404 just means nothing's been generated yet (a brand
-// new team, or the first scheduler tick hasn't run since roster was
-// set) -- rendered as "not generated yet" rather than an error banner.
+// ─── Player News (2026-09-22, real articles 2026-10-18) ─────────────────
+// Real ESPN articles about this roster's players (headline links straight
+// to the published story) plus the daily digest from backend
+// team_news_service.py. Ungated public read. A 404 just means there's no
+// digest and no article yet -- rendered as an empty state, not an error.
+
+interface TeamNewsArticle {
+  id: string;
+  player_id: string;
+  player_name: string;
+  headline: string;
+  url: string;
+  source: string;
+  published_at: string;
+}
+
+interface TeamNews {
+  content: string | null;
+  updated_at: string | null;
+  articles?: TeamNewsArticle[];
+}
+
+function timeAgo(iso: string): string {
+  // Backend may send a naive timestamp (SQLite); treat it as UTC.
+  const t = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 60) return `${mins || 1}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
 
 function PlayerNewsPanel({ teamId, hasRoster }: { teamId: string; hasRoster: boolean }) {
-  const [news, setNews] = useState<{ content: string; updated_at: string } | null>(null);
+  const [news, setNews] = useState<TeamNews | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     teamNewsApi
       .get(teamId)
-      .then((data) => setNews(data as { content: string; updated_at: string }))
+      .then((data) => setNews(data as TeamNews))
       .catch(() => setNews(null))
       .finally(() => setLoading(false));
   }, [teamId]);
 
   if (!hasRoster) return null;
+
+  const articles = news?.articles || [];
 
   return (
     <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
@@ -130,27 +156,53 @@ function PlayerNewsPanel({ teamId, hasRoster }: { teamId: string; hasRoster: boo
           <Newspaper className="w-4 h-4 text-gold-400" />
           Player News
         </h3>
-        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-400/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">
-          <Bot className="w-2.5 h-2.5" /> AI-Generated
-        </span>
       </div>
       {loading ? (
         <div className="flex items-center justify-center py-6">
           <div className="w-5 h-5 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
         </div>
-      ) : !news ? (
+      ) : !news || (!news.content && articles.length === 0) ? (
         <p className="text-surface-500 text-sm">
-          No news generated yet for this roster -- check back after the next daily refresh.
+          No recent news for this roster yet -- check back after the next refresh.
         </p>
       ) : (
-        <>
-          <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap">
-            {news.content}
-          </div>
-          <p className="text-surface-500 text-[10px] mt-2">
-            Updated {new Date(news.updated_at).toLocaleString()}
-          </p>
-        </>
+        <div className="space-y-4">
+          {articles.length > 0 && (
+            <ul className="divide-y divide-surface-700/60">
+              {articles.map((a) => (
+                <li key={a.id} className="py-2.5 first:pt-0 last:pb-0">
+                  <a
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-white hover:text-gold-400 transition-colors font-medium leading-snug"
+                  >
+                    {a.headline}
+                  </a>
+                  <div className="mt-0.5 text-[11px] text-surface-500">
+                    <span className="text-surface-300">{a.player_name}</span> &middot; {a.source} &middot;{" "}
+                    <time dateTime={a.published_at}>{timeAgo(a.published_at)}</time>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {news.content && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-purple-300">
+                <Bot className="w-3 h-3" /> Roster digest
+              </div>
+              <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap">
+                {news.content}
+              </div>
+              {news.updated_at && (
+                <p className="text-surface-500 text-[10px] mt-2">
+                  Updated {new Date(news.updated_at).toLocaleString()}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

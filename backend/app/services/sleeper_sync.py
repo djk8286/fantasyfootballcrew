@@ -51,7 +51,7 @@ def effective_season_stats(player: Player) -> Tuple[Dict[str, Any], Optional[int
 
 async def fetch_all_players() -> Dict[str, Any]:
     """Fetch all NFL players from Sleeper API."""
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(f"{SLEEPER_API}/players/nfl")
         response.raise_for_status()
         return response.json()
@@ -108,6 +108,8 @@ async def sync_players_to_db(db: AsyncSession) -> int:
             if data.get("fantasy_positions"):
                 existing.fantasy_positions = data["fantasy_positions"]
             existing.search_rank = search_rank
+            if data.get("espn_id"):
+                existing.espn_id = str(data["espn_id"])
         else:
             # Create new player
             player = Player(
@@ -122,6 +124,7 @@ async def sync_players_to_db(db: AsyncSession) -> int:
                 age=data.get("age"),
                 number=data.get("number"),
                 search_rank=search_rank,
+                espn_id=str(data["espn_id"]) if data.get("espn_id") else None,
             )
             db.add(player)
 

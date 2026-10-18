@@ -48,7 +48,7 @@ from app.services.draft_manager import get_draft_state, get_next_pick_for_team, 
 from app.models.league import League, DraftStatus, LeagueType
 from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
-from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service
+from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service, espn_news_service
 from app.services.ai_service import AIService
 from app.services.job_run_service import run_job, prune_job_runs
 from app.models.weekly_scores_recap import WeeklyScoresRecap
@@ -463,6 +463,12 @@ async def _maybe_refresh_team_news_once() -> None:
         print(f"[scheduler] Refreshed player news for {refreshed} team(s)" + (f", {failed} failed" if failed else ""))
 
 
+async def _refresh_espn_news_once() -> None:
+    async with async_session() as db:
+        stats = await espn_news_service.refresh_player_news(db)
+    print(f"[scheduler] ESPN news: {stats['articles']} articles, {stats['added']} new player links, {stats['failed_feeds']} feed(s) failed")
+
+
 async def _sync_players_once() -> None:
     async with async_session() as db:
         count = await sync_players_to_db(db)
@@ -610,6 +616,11 @@ async def run_scheduler() -> None:
     global _last_seen_week
     loop = asyncio.get_event_loop()
     last_player_sync = 0.0
+    # Real ESPN player news (espn_news_service.py): first pass on the first
+    # tick (right after the startup player sync has filled Player.espn_id),
+    # then every REFRESH_INTERVAL_S. In-memory is fine here -- a redeploy
+    # just means one extra polite pass.
+    last_espn_news: float | None = None
 
     # Sync player metadata once immediately so a fresh deploy isn't empty;
     # don't let a failure here block the stats loop from ever starting.
@@ -680,6 +691,17 @@ async def run_scheduler() -> None:
             await run_job("dashboard_summaries", _maybe_refresh_dashboard_summaries_once)
         except Exception as e:
             print(f"[scheduler] Dashboard summaries refresh check failed: {e}")
+
+        # Real ESPN articles first, so the team digests below summarize
+        # the freshest news.
+        if last_espn_news is None or loop.time() - last_espn_news >= espn_news_service.REFRESH_INTERVAL_S:
+            try:
+                await run_job("espn_news", _refresh_espn_news_once)
+            except Exception as e:
+                print(f"[scheduler] ESPN news refresh failed: {e}")
+            # Failure or success, wait a full interval before retrying --
+            # never hammer an unofficial endpoint that's erroring.
+            last_espn_news = loop.time()
 
         # Per-Team Player News: same durable, once-daily-via-DB-check
         # shape as the dashboard summaries refresh right above --

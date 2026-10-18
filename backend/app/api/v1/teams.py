@@ -11,6 +11,7 @@ from app.api.deps import get_current_user, require_team_or_league_access, user_c
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
 from app.services.team_news_service import get_team_news, generate_and_save_team_news
+from app.services import espn_news_service
 from app.core.avatars import validate_avatar_url
 from pydantic import BaseModel
 
@@ -574,23 +575,25 @@ async def get_team_cap(team_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{team_id}/news")
 async def get_team_player_news(team_id: str, db: AsyncSession = Depends(get_db)):
-    """This team's AI-generated player-news digest, refreshed roughly
-    once daily by the scheduler (see team_news_service.py). Ungated
-    public read, same house style as get_team/get_team_cap above --
-    news content isn't sensitive, and this is meant to be glanced at by
-    anyone viewing the team page, not just its owner. 404 means either
-    the team doesn't exist, or (more commonly) nothing's been generated
-    for it yet -- an empty roster, or the very first scheduler tick
-    hasn't run since this team's roster was set."""
+    """This team's player news: the daily digest (see team_news_service.py)
+    plus the real ESPN articles about its rostered players from the last
+    week, read live from player_news so links are as fresh as the last
+    ESPN poll even when the digest is a day old. Ungated public read.
+    404 only when the team doesn't exist or there's neither a digest nor
+    any article yet."""
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
     news = await get_team_news(team_id, db)
-    if not news:
+    recent = await espn_news_service.recent_news_for_players(list(team.roster or []), db, days=7, limit=60)
+    if not news and not recent:
         raise HTTPException(status_code=404, detail="No player news generated yet for this team")
     return {
-        "team_id": news.team_id, "content": news.content, "updated_at": news.updated_at,
+        "team_id": team_id,
+        "content": news.content if news else None,
+        "updated_at": news.updated_at if news else None,
+        "articles": espn_news_service.serialize_grouped(recent, limit=10),
     }
 
 
