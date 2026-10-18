@@ -414,6 +414,7 @@ export const playersApi = {
   get: (id: string, leagueId?: string) =>
     apiRequest(`/api/v1/players/${id}${leagueId ? `?league_id=${leagueId}` : ""}`),
   topProspects: (limit = 100) => apiRequest(`/api/v1/players/top-prospects?limit=${limit}`),
+  detail: (id: string) => apiRequest(`/api/v1/players/${id}/detail`),
 };
 
 // Scoring

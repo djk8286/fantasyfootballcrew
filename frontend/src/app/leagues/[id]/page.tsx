@@ -1,5 +1,6 @@
 "use client";
 
+import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -1604,7 +1605,7 @@ export default function LeagueDetailPage() {
                           return (
                           <div key={p.id} className={`flex items-center gap-1.5 text-xs ${live?.is_bench ? "opacity-50" : ""}`}>
                             <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
-                            <span className="text-surface-300 truncate flex-1">{p.full_name}</span>
+                            <PlayerLink id={p.id} className="text-surface-300 truncate flex-1">{p.full_name}</PlayerLink>
                             {currentWeekLoaded && (
                               <span className="flex items-center gap-1.5 shrink-0">
                                 <GameStatusBadge status={live?.game_status} />
