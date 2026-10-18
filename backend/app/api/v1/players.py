@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from app.core.database import get_db
 from app.models.player import Player
 from app.models.league import League
@@ -162,12 +162,18 @@ async def list_players(
     if team:
         query = query.where(Player.team == team.upper())
     if search:
-        query = query.where(
-            or_(
-                Player.first_name.ilike(f"%{search}%"),
-                Player.last_name.ilike(f"%{search}%"),
-            )
-        )
+        # Multi-word queries ("Josh Allen") used to be matched as one
+        # substring against first_name OR last_name separately, so a full
+        # name never matched either column. Now every word must match the
+        # first or last name. Also rank-order the results (search_rank,
+        # nulls last) so "allen" surfaces Josh Allen ahead of long-retired
+        # namesakes instead of arbitrary DB order cutting him off at limit.
+        tokens = [t for t in search.split() if t]
+        query = query.where(and_(*[
+            or_(Player.first_name.ilike(f"%{t}%"), Player.last_name.ilike(f"%{t}%"))
+            for t in tokens
+        ]))
+        query = query.order_by(Player.search_rank.is_(None), Player.search_rank)
 
     scoring_config = await _get_scoring_config(league_id, db)
 

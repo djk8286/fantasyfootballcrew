@@ -51,25 +51,26 @@ def _valid_ip(host: str) -> bool:
 def client_ip_key(request: Request) -> str:
     """Rate-limit key: the real client IP, resistant to XFF spoofing.
 
-    A client can send its own X-Forwarded-For; proxies only ever *append*
-    to it. So the leftmost entries are attacker-controlled and the only
-    trustworthy entry is the rightmost one not added by our own proxy
-    chain (TRUSTED_PROXY_CIDRS -- Railway's internal 100.64.0.0/10 etc.).
-    Falls back to X-Real-IP (set by Railway's edge, per Railway docs) and
-    finally to the raw socket peer.
+    1. X-Real-IP -- Railway's edge sets this authoritatively to the
+       connecting client's IP (Railway public-networking docs), so a
+       client can't choose it as long as the edge is the only way in.
+    2. Otherwise the rightmost X-Forwarded-For hop not in
+       TRUSTED_PROXY_CIDRS (leftmost entries are client-controlled;
+       proxies only append).
+    3. Otherwise the raw socket peer.
 
     Reads raw headers deliberately, not request.client, because
     ProxyHeadersMiddleware rewrites request.client from the *leftmost*
     (spoofable) XFF entry.
     """
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip and _valid_ip(real_ip):
+        return real_ip
     xff = request.headers.get("x-forwarded-for", "")
     hops = [h.strip() for h in xff.split(",") if h.strip()]
     for host in reversed(hops):
         if _valid_ip(host) and not _is_trusted(host):
             return host
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    if real_ip and _valid_ip(real_ip):
-        return real_ip
     scope_client = request.scope.get("client")
     return scope_client[0] if scope_client else "127.0.0.1"
 
