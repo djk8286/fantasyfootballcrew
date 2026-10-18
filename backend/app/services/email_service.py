@@ -4,9 +4,9 @@ RESEND_FROM_EMAIL in config -- domain is verified as of the Auth
 Security Hardening follow-up, so sends aren't limited to Resend's
 sandbox-only "your own signup address" restriction anymore). With no
 RESEND_API_KEY set, this still degrades gracefully: it logs the email's
-content (including the link) to stdout instead of sending it -- visible
-in `railway logs` in production, so a link can still be delivered
-manually if the key is ever unset.
+recipient and email type to stdout instead of sending it (the link
+itself too outside production; in production links are redacted so
+live single-use tokens never land in logs).
 
 Every email is sent as both HTML (branded, see _render_email below) and
 a plain-text fallback in the same request -- Resend/every real mail
@@ -116,8 +116,12 @@ async def _send(
     the exact same shape (was "not worth extracting for just two email
     types" back when there were only two; a third one plus this template
     tipped it)."""
+    # In production never write the live single-use link to stdout (logs
+    # are readable by anyone with Railway access and get shipped to log
+    # drains) -- log only address + type. Dev keeps the link for testing.
+    shown_link = "[link redacted in production]" if settings.ENVIRONMENT.lower() == "production" else log_link
     if not settings.RESEND_API_KEY:
-        print(f"[email stub -- no RESEND_API_KEY configured] {log_label} for {to_email}: {log_link}", flush=True)
+        print(f"[email stub -- no RESEND_API_KEY configured] {log_label} ({email_type}) for {to_email}: {shown_link}", flush=True)
         await _log_send(db, to_email, email_type, subject, "stubbed")
         return
 
@@ -142,7 +146,7 @@ async def _send(
             # underlying token/invite is created either way) -- log it and
             # move on. Falling back to the stub log means the link is
             # still recoverable from `railway logs`.
-            print(f"[email send FAILED, falling back to log] {to_email}: {log_link} -- {e}", flush=True)
+            print(f"[email send FAILED] {log_label} ({email_type}) for {to_email}: {shown_link} -- {e}", flush=True)
             await _log_send(db, to_email, email_type, subject, "failed", error_detail=str(e)[:2000])
 
 

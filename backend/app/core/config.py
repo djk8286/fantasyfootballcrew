@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from typing import List, Optional
 import secrets
 
@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     # human watching can follow the board (QA round 2: was ~20s/pick).
     CPU_PICK_DELAY_S: float = 1.0
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+    # Access-token lifetime. Was a hard-coded 30 days; shortened per the
+    # 2026-10 security audit. Follow-up: refresh token + HttpOnly cookie.
+    ACCESS_TOKEN_EXPIRE_DAYS: float = 7
+    # Proxy hops we trust to append to X-Forwarded-For (see
+    # app/core/limiter.py). Railway's internal edge uses RFC 6598 space.
+    TRUSTED_PROXY_CIDRS: List[str] = ["100.64.0.0/10", "10.0.0.0/8", "127.0.0.0/8", "::1/128"]
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
@@ -79,6 +85,27 @@ class Settings(BaseSettings):
                 except (json.JSONDecodeError, TypeError):
                     return raw_val.split(",")
             return raw_val
+
+
+    @model_validator(mode="after")
+    def _require_strong_jwt_secret_in_production(self):
+        """In production a random per-process JWT_SECRET silently logs every
+        user out on each deploy/restart, and a short one is brute-forceable.
+        Refuse to boot instead, with a message that says exactly what to fix."""
+        if self.ENVIRONMENT.lower() == "production":
+            explicit = "JWT_SECRET" in self.model_fields_set
+            if not explicit or len(self.JWT_SECRET) < 32:
+                msg = (
+                    "FATAL CONFIG: JWT_SECRET must be set to a value of at least 32 "
+                    "characters when ENVIRONMENT=production "
+                    f"(currently {'unset' if not explicit else f'{len(self.JWT_SECRET)} chars'}). "
+                    "Set it in Railway > backend service > Variables, e.g. the output of "
+                    "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"`. "
+                    "Note: changing it signs out all users."
+                )
+                print(msg, flush=True)
+                raise ValueError(msg)
+        return self
 
 
 settings = Settings()

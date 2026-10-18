@@ -93,8 +93,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # sentry-trace/baggage: Sentry browser tracing may attach these.
+    allow_headers=["Authorization", "Content-Type", "sentry-trace", "baggage"],
 )
 
 # HSTS/nosniff/frame-options/etc on every response -- see
