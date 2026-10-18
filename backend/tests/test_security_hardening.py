@@ -27,8 +27,15 @@ def test_trusted_internal_hops_are_skipped():
     assert client_ip_key(_req({"x-forwarded-for": "9.9.9.9, 203.0.113.9, 100.64.0.3"})) == "203.0.113.9"
 
 
-def test_garbage_xff_falls_back_to_real_ip_then_peer():
-    assert client_ip_key(_req({"x-forwarded-for": "evil", "x-real-ip": "198.51.100.4"})) == "198.51.100.4"
+def test_x_real_ip_wins_over_any_xff():
+    assert client_ip_key(_req({"x-real-ip": "198.51.100.4", "x-forwarded-for": "1.2.3.4, 5.6.7.8"})) == "198.51.100.4"
+    a = _req({"x-real-ip": "198.51.100.4", "x-forwarded-for": "9.9.9.9"})
+    b = _req({"x-real-ip": "198.51.100.4", "x-forwarded-for": "8.8.8.8, 7.7.7.7"})
+    assert client_ip_key(a) == client_ip_key(b)
+
+
+def test_garbage_falls_back_to_xff_then_peer():
+    assert client_ip_key(_req({"x-real-ip": "evil", "x-forwarded-for": "203.0.113.9"})) == "203.0.113.9"
     assert client_ip_key(_req({}, client=("198.51.100.5", 1))) == "198.51.100.5"
 
 
