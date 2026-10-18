@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { authApi, friendlyErrorMessage } from "@/lib/api-client";
+import { authApi, friendlyErrorMessage, setSession } from "@/lib/api-client";
 
 // Mirrors the server rule: UserCreate.password Field(min_length=8) in
 // backend/app/schemas/user.py.
@@ -53,11 +53,10 @@ function RegisterForm() {
       );
       // Auto-login after registration
       const loginResult = await authApi.login(form.email, form.password);
-      const loginData = loginResult as { access_token?: string; user?: { id: string; email?: string } };
-      if (loginData.access_token) {
-        localStorage.setItem("ffc_token", loginData.access_token);
-        localStorage.setItem("ffc_user_id", loginData.user?.id || "");
-      }
+      const loginData = loginResult as { user?: { id: string; email?: string } };
+      // The server set the HttpOnly session cookies; keep only the
+      // non-secret user-id hint client-side.
+      if (loginData.user?.id) setSession(loginData.user.id);
       router.push(next);
     } catch (err: unknown) {
       setError(friendlyErrorMessage(err, "Couldn't create your account. Please try again."));

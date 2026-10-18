@@ -76,15 +76,8 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  // Proxy API requests to the backend during dev & production
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://localhost:8001/api/:path*",
-      },
-    ];
-  },
+  // /api/* -> backend proxying lives in src/proxy.ts (first-party cookie auth).
+
   // Production only -- `next dev`'s Fast Refresh relies on inline
   // eval'd scripts and a websocket connection a strict CSP would block,
   // and there's no real security boundary to defend on localhost anyway.

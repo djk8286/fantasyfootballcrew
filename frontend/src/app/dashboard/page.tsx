@@ -11,7 +11,6 @@ import PositionBadge from "@/components/PositionBadge";
 import RankBadge from "@/components/ui/RankBadge";
 import AdSlot from "@/components/AdSlot";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface League {
   id: string;
@@ -99,7 +98,7 @@ function LeagueCard({ league, label }: { league: League; label?: string }) {
     if (!hasDraft) return;
     let cancelled = false;
     setDraftLoading(true);
-    fetch(`${API_BASE}/api/v1/drafts/find?league_id=${league.id}`)
+    fetch(`/api/v1/drafts/find?league_id=${league.id}`)
       .then((res) => res.json())
       .then((data) => {
         if (!cancelled && data?.id) setDraftId(data.id);

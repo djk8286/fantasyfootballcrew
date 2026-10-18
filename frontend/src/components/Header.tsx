@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Menu, X, Settings } from "lucide-react";
-import { isLoggedIn, logout } from "@/lib/api-client";
+import { isLoggedIn, logout, syncSession } from "@/lib/api-client";
 import NotificationBell from "./NotificationBell";
 
 // Breakpoint note (QA round 1): the full inline nav needs ~950px, so it
@@ -46,10 +46,16 @@ export default function Header() {
     setMenuOpen(false);
   }, [pathname]);
 
-  const handleLogout = () => {
-    logout();
+  // Once per page load: upgrade a legacy localStorage token to a cookie
+  // session and reconcile the logged-in hint with the server (/auth/me).
+  useEffect(() => {
+    syncSession().then(() => setLoggedIn(isLoggedIn()));
+  }, []);
+
+  const handleLogout = async () => {
     setLoggedIn(false);
     setMenuOpen(false);
+    await logout();
     router.push("/login");
   };
 
