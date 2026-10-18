@@ -47,7 +47,6 @@ export function setSession(userId: string): void {
 function clearSessionHint(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(USER_HINT_KEY);
-  localStorage.removeItem(LEGACY_TOKEN_KEY);
 }
 
 /** Clear local state immediately and revoke the server session (refresh
@@ -55,6 +54,7 @@ function clearSessionHint(): void {
  * that want to wait before navigating. */
 export function logout(): Promise<void> {
   clearSessionHint();
+  if (typeof window !== "undefined") localStorage.removeItem(LEGACY_TOKEN_KEY);
   if (typeof window === "undefined") return Promise.resolve();
   return fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
     method: "POST",
@@ -109,11 +109,16 @@ export function syncSession(): Promise<void> {
         if (r.ok) {
           const data = (await r.json()) as { user?: { id?: string } };
           if (data.user?.id) localStorage.setItem(USER_HINT_KEY, data.user.id);
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
+        } else if (r.status === 401 || r.status === 403) {
+          // Token is dead (expired/revoked/suspended): drop it.
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
         }
+        // Anything else (404 while the backend deploy lags the frontend,
+        // 5xx, 429): keep the token and retry on the next page load.
       } catch {
-        // Network hiccup: fall through; the token is dropped either way.
+        // Network hiccup: keep the token, retry next load.
       }
-      localStorage.removeItem(LEGACY_TOKEN_KEY);
     }
     const me = async () => fetch(`${API_BASE_URL}/api/v1/auth/me`, { credentials: "include" });
     try {
@@ -122,7 +127,7 @@ export function syncSession(): Promise<void> {
       if (r.ok) {
         const user = (await r.json()) as { id?: string };
         if (user.id) localStorage.setItem(USER_HINT_KEY, user.id);
-      } else if (r.status === 401 || r.status === 403) {
+      } else if ((r.status === 401 || r.status === 403) && !localStorage.getItem(LEGACY_TOKEN_KEY)) {
         clearSessionHint();
       }
     } catch {
@@ -233,11 +238,16 @@ const NO_REFRESH_ENDPOINTS = ["/api/v1/auth/login", "/api/v1/auth/register", "/a
 async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
   const { method = "GET", body, headers = {} } = options;
 
+  // Transitional: a not-yet-migrated legacy token (syncSession couldn't
+  // upgrade it yet, e.g. the backend deploy is lagging this frontend) is
+  // still sent as Bearer so the user isn't bounced. Removed next release.
+  const legacy = typeof window !== "undefined" ? localStorage.getItem(LEGACY_TOKEN_KEY) : null;
   const config: RequestInit = {
     method,
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(legacy ? { Authorization: `Bearer ${legacy}` } : {}),
       ...headers,
     },
   };
@@ -268,6 +278,7 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
       // change elsewhere): drop the hint and send them to log in again.
       clearSessionHint();
       if (typeof window !== "undefined") {
+        localStorage.removeItem(LEGACY_TOKEN_KEY);
         window.location.href = "/login?expired=1";
       }
     }
