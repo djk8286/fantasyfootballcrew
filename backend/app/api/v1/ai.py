@@ -242,13 +242,13 @@ async def analyze_lineup(
     # in the team's own matchup this week. See _current_matchup_context.
     opponent_roster, matchups = await _current_matchup_context(team, league, db)
 
+    await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_lineup(
         roster=roster, opponent_roster=opponent_roster, matchups=matchups, scoring=scoring,
         coaching_staff=coaching_staff, salary_context=salary_context,
         partner_context=partner_context,
     )
-    await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
     await record_analysis(
         db, user_id=current_user.id, analysis_type="lineup", league_id=team.league_id,
         summary=f"{team.name} — {league.name}" if league else team.name, result=analysis,
@@ -310,6 +310,7 @@ async def analyze_trade(
     team_a_partner = await _partner_summary(proposer, league, db)
     team_b_partner = await _partner_summary(target, league, db)
 
+    await record_ai_usage(db, "trade", league_id=trade.league_id, user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_trade(
         team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings},
@@ -317,7 +318,6 @@ async def analyze_trade(
         team_a_salary=team_a_salary, team_b_salary=team_b_salary,
         team_a_partner=team_a_partner, team_b_partner=team_b_partner,
     )
-    await record_ai_usage(db, "trade", league_id=trade.league_id, user_id=current_user.id)
     await record_analysis(
         db, user_id=current_user.id, analysis_type="trade", league_id=trade.league_id,
         summary=f"{proposer.name} ↔ {target.name}", result=analysis,
@@ -346,13 +346,13 @@ async def analyze_bet(
     provider -- see ai_service.py's BET_ANALYSIS_PROMPT vs.
     BET_ANALYSIS_SEARCH_SYSTEM_PROMPT."""
     verified_players = await _verified_players_from_text(body.prompt, db)
+    # No league_id -- this tool isn't scoped to any league (freeform
+    # personal betting question). See AIUsageEvent's model docstring.
+    await record_ai_usage(db, "bet", user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_bet(
         matchup={"description": body.prompt}, lines={}, verified_players=verified_players,
     )
-    # No league_id -- this tool isn't scoped to any league (freeform
-    # personal betting question). See AIUsageEvent's model docstring.
-    await record_ai_usage(db, "bet", user_id=current_user.id)
     summary = body.prompt if len(body.prompt) <= 140 else body.prompt[:137] + "..."
     await record_analysis(
         db, user_id=current_user.id, analysis_type="bet", summary=summary, result=analysis,
@@ -396,11 +396,11 @@ async def analyze_team_comparison(
     team_a_trend = await build_team_trend(team_a, db, scoring)
     team_b_trend = await build_team_trend(team_b, db, scoring)
 
+    await record_ai_usage(db, "team_comparison", league_id=league.id, user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_team_comparison(
         league_name=league.name, team_a_trend=team_a_trend, team_b_trend=team_b_trend, scoring=scoring,
     )
-    await record_ai_usage(db, "team_comparison", league_id=league.id, user_id=current_user.id)
     await record_analysis(
         db, user_id=current_user.id, analysis_type="team_compare", league_id=league.id,
         summary=f"{team_a.name} vs {team_b.name}", result=analysis,
@@ -440,9 +440,9 @@ async def analyze_player_comparison(
     profile_a = build_player_profile(player_a, scoring)
     profile_b = build_player_profile(player_b, scoring)
 
+    await record_ai_usage(db, "player_comparison", league_id=league.id, user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_player_comparison(player_a=profile_a, player_b=profile_b, scoring=scoring)
-    await record_ai_usage(db, "player_comparison", league_id=league.id, user_id=current_user.id)
     await record_analysis(
         db, user_id=current_user.id, analysis_type="player_compare", league_id=league.id,
         summary=f"{profile_a['name']} vs {profile_b['name']}", result=analysis,

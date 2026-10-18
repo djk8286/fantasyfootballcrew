@@ -672,6 +672,9 @@ async def draft_commissioner_message(
     # request's session closes uncommitted.
     await db.commit()
     content = await draft_message(league, body.message_type, body.tone, body.custom_context, db)
+    # Second commit persists the token/cost numbers ai_cost_service just
+    # added onto this request's AIUsageEvent row.
+    await db.commit()
     return {"content": content}
 
 

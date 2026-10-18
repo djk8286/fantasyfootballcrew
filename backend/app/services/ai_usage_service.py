@@ -22,6 +22,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_usage_event import AIUsageEvent
+from app.services.ai_cost_service import bind_usage_event
 
 # How many real LLM calls one league can make in a rolling 24 hours.
 # At gpt-5.6-luna pricing, even every call being the priciest one
@@ -56,7 +57,11 @@ async def check_and_record_ai_usage(league_id: str, endpoint: str, db: AsyncSess
                 f"({DAILY_AI_LIMIT_PER_LEAGUE} calls per 24 hours). Try again later."
             ),
         )
-    db.add(AIUsageEvent(league_id=league_id, endpoint=endpoint))
+    event = AIUsageEvent(league_id=league_id, endpoint=endpoint)
+    db.add(event)
+    # Provider calls made later in this request add their model/tokens/
+    # cost onto this row -- see ai_cost_service.
+    bind_usage_event(event)
 
 
 async def record_ai_usage(db: AsyncSession, endpoint: str, league_id: str | None = None, user_id: str | None = None) -> None:
@@ -70,7 +75,12 @@ async def record_ai_usage(db: AsyncSession, endpoint: str, league_id: str | None
     AI Co-Commissioner surface does -- so this is deliberately NOT
     check_and_record_ai_usage (no 429, no cap check), just the append.
 
+    Call BEFORE the LLM call (like check_and_record_ai_usage) so the
+    call's tokens/cost attach to this row -- see ai_cost_service.
+
     league_id is optional -- bet analysis isn't scoped to any league at
     all. Fire-and-forget within the caller's own transaction, same as
     check_and_record_ai_usage."""
-    db.add(AIUsageEvent(league_id=league_id, endpoint=endpoint, user_id=user_id))
+    event = AIUsageEvent(league_id=league_id, endpoint=endpoint, user_id=user_id)
+    db.add(event)
+    bind_usage_event(event)

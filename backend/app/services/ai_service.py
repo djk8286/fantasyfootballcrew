@@ -8,6 +8,9 @@ Injects real-time context (player stats, matchups, weather) into prompts.
 from datetime import date
 from typing import Dict, Any, Optional
 import httpx
+
+from app.services import ai_cost_service
+from app.services.ai_cost_service import DailySpendCapReached
 import json
 
 # Prepended to every LLM call's system message. Two concrete, real gaps
@@ -49,6 +52,32 @@ def _grounding_preamble() -> str:
 # third-party hiccup break the user-facing request" precedent
 # email_service.py already established for outbound email.
 AI_TEMPORARILY_UNAVAILABLE = "AI Analysis: the AI service is temporarily unavailable right now. Please try again in a few minutes."
+
+# Returned instead of calling the provider once AI_DAILY_SPEND_CAP_USD is
+# reached (see ai_cost_service.check_spend_cap) -- same "friendly string,
+# never an exception" contract as AI_TEMPORARILY_UNAVAILABLE above.
+AI_DAILY_BUDGET_REACHED = "AI Analysis: today's AI budget has been reached. AI features will be back within 24 hours."
+
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+
+
+async def _metered_post(client: httpx.AsyncClient, url: str, *, model: str, headers: dict, json: dict) -> dict:
+    """The single choke point every real provider HTTP call goes through:
+    enforces the optional global daily spend cap BEFORE spending anything,
+    then records model/tokens/estimated cost (or the failure) via
+    ai_cost_service. Raises on failure exactly like the inline
+    post/raise_for_status/json sequence it replaces, so each caller's
+    existing except-and-return-a-friendly-string handling is unchanged."""
+    try:
+        await ai_cost_service.check_spend_cap()
+        response = await client.post(url, headers=headers, json=json)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        await ai_cost_service.record_failure(model, e)
+        raise
+    await ai_cost_service.record_response(model, data)
+    return data
 
 # OpenAI's cost-tier model, confirmed directly against api.openai.com
 # (GET /v1/models) and openai.com's own docs: $0.20/1M input,
@@ -997,8 +1026,10 @@ class AIService:
         entry inside the messages array itself."""
         try:
             async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
-                response = await client.post(
+                data = await _metered_post(
+                    client,
                     "https://api.openai.com/v1/chat/completions",
+                    model=OPENAI_MODEL,
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
@@ -1013,9 +1044,9 @@ class AIService:
                         "messages": [{"role": "system", "content": system}] + history,
                     },
                 )
-                response.raise_for_status()
-                data = response.json()
                 return data["choices"][0]["message"]["content"]
+        except DailySpendCapReached:
+            return AI_DAILY_BUDGET_REACHED
         except Exception as e:
             print(f"[AI call FAILED -- openai chat] {e}", flush=True)
             return AI_TEMPORARILY_UNAVAILABLE
@@ -1026,23 +1057,25 @@ class AIService:
         is NOT a message with role "system" inside the array."""
         try:
             async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
-                response = await client.post(
+                data = await _metered_post(
+                    client,
                     "https://api.anthropic.com/v1/messages",
+                    model=ANTHROPIC_MODEL,
                     headers={
                         "x-api-key": self.api_key,
                         "anthropic-version": "2023-06-01",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "claude-haiku-4-5-20251001",
+                        "model": ANTHROPIC_MODEL,
                         "max_tokens": 1000,
                         "system": system,
                         "messages": history,
                     },
                 )
-                response.raise_for_status()
-                data = response.json()
                 return data["content"][0]["text"]
+        except DailySpendCapReached:
+            return AI_DAILY_BUDGET_REACHED
         except Exception as e:
             print(f"[AI call FAILED -- anthropic chat] {e}", flush=True)
             return AI_TEMPORARILY_UNAVAILABLE
@@ -1118,8 +1151,10 @@ class AIService:
         searches and took 46s for a one-sentence question."""
         try:
             async with httpx.AsyncClient(timeout=BET_SEARCH_HTTP_TIMEOUT) as client:
-                response = await client.post(
+                data = await _metered_post(
+                    client,
                     "https://api.openai.com/v1/responses",
+                    model=OPENAI_MODEL,
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
@@ -1132,8 +1167,6 @@ class AIService:
                         "max_tool_calls": BET_SEARCH_MAX_TOOL_CALLS,
                     },
                 )
-                response.raise_for_status()
-                data = response.json()
                 # The response is a list of typed items (reasoning steps,
                 # web_search_call records, ...) -- the actual answer is
                 # the LAST "message" item's first output_text block.
@@ -1148,6 +1181,8 @@ class AIService:
                                 return block["text"].strip()
                         break
                 return AI_TEMPORARILY_UNAVAILABLE
+        except DailySpendCapReached:
+            return AI_DAILY_BUDGET_REACHED
         except Exception as e:
             print(f"[ai_service] OpenAI search-enabled call FAILED: {e}")
             return AI_TEMPORARILY_UNAVAILABLE
@@ -1165,8 +1200,10 @@ class AIService:
         """Call OpenAI API."""
         try:
             async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
-                response = await client.post(
+                data = await _metered_post(
+                    client,
                     "https://api.openai.com/v1/chat/completions",
+                    model=OPENAI_MODEL,
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
@@ -1188,9 +1225,9 @@ class AIService:
                         ],
                     },
                 )
-                response.raise_for_status()
-                data = response.json()
                 return data["choices"][0]["message"]["content"]
+        except DailySpendCapReached:
+            return AI_DAILY_BUDGET_REACHED
         except Exception as e:
             print(f"[AI call FAILED -- openai] {e}", flush=True)
             return AI_TEMPORARILY_UNAVAILABLE
@@ -1199,15 +1236,17 @@ class AIService:
         """Call Anthropic Claude API."""
         try:
             async with httpx.AsyncClient(timeout=LLM_HTTP_TIMEOUT) as client:
-                response = await client.post(
+                data = await _metered_post(
+                    client,
                     "https://api.anthropic.com/v1/messages",
+                    model=ANTHROPIC_MODEL,
                     headers={
                         "x-api-key": self.api_key,
                         "anthropic-version": "2023-06-01",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "claude-haiku-4-5-20251001",
+                        "model": ANTHROPIC_MODEL,
                         "max_tokens": 1000,
                         # Was missing entirely before -- this call had zero
                         # system framing (unlike _call_anthropic_chat, which
@@ -1227,9 +1266,9 @@ class AIService:
                         ],
                     },
                 )
-                response.raise_for_status()
-                data = response.json()
                 return data["content"][0]["text"]
+        except DailySpendCapReached:
+            return AI_DAILY_BUDGET_REACHED
         except Exception as e:
             print(f"[AI call FAILED -- anthropic] {e}", flush=True)
             return AI_TEMPORARILY_UNAVAILABLE

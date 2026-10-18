@@ -265,3 +265,45 @@ async def guillotine_seed(db_session_factory):
             "team_ids": [t.id for t in teams],
             "db_session_factory": db_session_factory,
         }
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ai_cost_standalone_writes(monkeypatch):
+    """ai_cost_service writes standalone AIUsageEvent rows (and evaluates
+    the spend cap) through the app's real async_session -- i.e. the dev
+    ./ffc.db -- whenever an AI call isn't bound to a request's row. Point
+    that at a lazily-created throwaway in-memory DB for every test so no
+    test ever touches a real database. Tests that want to inspect those
+    rows patch ai_cost_service.async_session to their own factory."""
+    from app.services import ai_cost_service
+
+    state = {}
+
+    def _factory():
+        if "factory" not in state:
+            engine = create_async_engine(
+                "sqlite+aiosqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+            )
+            state["engine"] = engine
+            state["factory"] = async_sessionmaker(engine, expire_on_commit=False)
+            state["ready"] = False
+        return _LazySession(state)
+
+    monkeypatch.setattr(ai_cost_service, "async_session", _factory)
+
+
+class _LazySession:
+    """Async context manager that creates the schema on first use."""
+    def __init__(self, state):
+        self._state = state
+
+    async def __aenter__(self):
+        if not self._state["ready"]:
+            async with self._state["engine"].begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            self._state["ready"] = True
+        self._session = self._state["factory"]()
+        return await self._session.__aenter__()
+
+    async def __aexit__(self, *exc):
+        return await self._session.__aexit__(*exc)

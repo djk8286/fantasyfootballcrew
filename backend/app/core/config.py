@@ -30,6 +30,27 @@ class Settings(BaseSettings):
     SENTRY_DSN: Optional[str] = None
     ENVIRONMENT: str = "development"  # set to "production" on Railway
 
+    # AI cost tracking -- see app/services/ai_cost_service.py. USD per 1M
+    # tokens, keyed by the exact model id sent to the provider. An unknown
+    # model is still recorded (tokens + model), just with cost_usd=None,
+    # so a model swap never silently under-reports -- it shows as
+    # "unpriced" on the admin dashboard until this table is updated.
+    # Override wholesale via env as JSON, e.g.
+    # AI_MODEL_PRICING='{"gpt-5.6-luna": {"input": 0.2, "output": 1.2}}'
+    AI_MODEL_PRICING: dict[str, dict[str, float]] = {
+        "gpt-5.6-luna": {"input": 0.20, "output": 1.20},
+        "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
+    }
+    # OpenAI bills hosted web_search tool calls per call on top of tokens
+    # (bet analysis + per-team news use it). Estimate -- check current
+    # OpenAI pricing for the model in use.
+    AI_WEB_SEARCH_COST_PER_CALL: float = 0.01
+    # Optional global ceiling on estimated AI spend over a rolling 24h.
+    # Unset (default) = no cap. When reached, every AI call returns a
+    # friendly "daily budget reached" message instead of calling the
+    # provider, and the attempt is logged with error="daily_spend_cap".
+    AI_DAILY_SPEND_CAP_USD: Optional[float] = None
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _use_asyncpg_driver(cls, v: str) -> str:

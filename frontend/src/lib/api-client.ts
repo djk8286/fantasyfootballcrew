@@ -504,6 +504,7 @@ export const adminApi = {
   deleteUser: (userId: string) =>
     apiRequest(`/api/v1/admin/users/${userId}`, { method: "DELETE" }),
   getAiUsage: () => apiRequest("/api/v1/admin/ai-usage"),
+  getAiCost: (days = 14) => apiRequest(`/api/v1/admin/ai-cost?days=${days}`),
   getLeagueHealth: () => apiRequest("/api/v1/admin/league-health"),
   getSystemHealth: () => apiRequest("/api/v1/admin/system-health"),
   getEmailLog: (status?: string) =>
