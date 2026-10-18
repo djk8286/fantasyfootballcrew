@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, nflApi, isLoggedIn, joinRequestsApi } from "@/lib/api-client";
+import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, nflApi, isLoggedIn, joinRequestsApi, isCurrentUser } from "@/lib/api-client";
 import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import PositionBadge from "@/components/PositionBadge";
@@ -165,8 +165,9 @@ function TeamRecapSection({ leagueId }: { leagueId: string }) {
   useEffect(() => {
     leaguesApi
       .getTeamRecap(leagueId)
-      .then((d) => setRecap(d as { content: string; week: number; year: number }))
-      .catch(() => setRecap(null)) // 404 just means nothing generated yet -- not an error banner
+      // API answers 200 null when nothing has been generated yet.
+      .then((d) => setRecap((d as { content: string; week: number; year: number } | null) ?? null))
+      .catch(() => setRecap(null))
       .finally(() => setLoading(false));
   }, [leagueId]);
 
@@ -242,11 +243,6 @@ export default function LeagueDetailPage() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Get current "user" from localStorage
-  const getCurrentUserId = useCallback(() => {
-    if (typeof window === "undefined") return "placeholder";
-    // Try to read from a stored user id
-    return localStorage.getItem("ffc_user_id") || "placeholder";
-  }, []);
 
   const getMyTeams = useCallback(() => {
     if (typeof window === "undefined") return [] as string[];
@@ -258,8 +254,8 @@ export default function LeagueDetailPage() {
     }
   }, [id]);
 
-  const isCommissioner = league && getCurrentUserId() === league.commissioner_id;
-  const isCoCommissioner = league && league.co_commissioner_ids?.includes(getCurrentUserId());
+  const isCommissioner = !!league && isCurrentUser(league.commissioner_id);
+  const isCoCommissioner = !!league && (league.co_commissioner_ids || []).some((cid) => isCurrentUser(cid));
   const isLeagueManager = isCommissioner || isCoCommissioner;
   // Co-Owner (2-Man Teams) only makes sense for TWO_MAN leagues -- see
   // teams.py's matching server-side gate on claim/assign-co-owner.
@@ -284,6 +280,27 @@ export default function LeagueDetailPage() {
 
   // Best-Ball Hybrid (Phase 6) -- same bolt-on-flag pattern as capEnabled.
   const [bestBallEnabled, setBestBallEnabled] = useState(false);
+
+  // W/L/T/PF/PA computed server-side from weekly scores (GET
+  // /leagues/{id}/standings). The Team model's own wins/losses/points
+  // columns are never written by the backend, so rendering them directly
+  // showed 0-0 / 0.0 for every team all season.
+  const [records, setRecords] = useState<Record<string, Pick<Team, "wins" | "losses" | "ties" | "points_for" | "points_against">>>({});
+
+  useEffect(() => {
+    if (!id) return;
+    standingsApi
+      .getStandings(id)
+      .then((d) => {
+        const rows = ((d as { standings?: Array<{ team_id: string; wins: number; losses: number; ties: number; points_for: number; points_against: number }> })?.standings) || [];
+        const map: typeof records = {};
+        for (const r of rows) {
+          map[r.team_id] = { wins: r.wins, losses: r.losses, ties: r.ties, points_for: r.points_for, points_against: r.points_against };
+        }
+        setRecords(map);
+      })
+      .catch(() => {});
+  }, [id]);
 
   // ─── Data fetching ─────────────────────────────────────
 
@@ -671,10 +688,9 @@ export default function LeagueDetailPage() {
   // ─── Helper: team owner display ─────────────────────────
 
   function getOwnerDisplay(team: Team): { label: string; isHuman: boolean; isMe: boolean; isCommish: boolean } {
-    const currentUserId = getCurrentUserId();
     const isCpu = team.is_cpu || team.owner_id === "cpu";
-    const isOwnerMe = team.owner_id === currentUserId || (team.owner_id === "placeholder" && getMyTeams().includes(team.id));
-    const isCoOwnerMe = !!team.co_owner_id && team.co_owner_id === currentUserId;
+    const isOwnerMe = isCurrentUser(team.owner_id) || (team.owner_id === "placeholder" && getMyTeams().includes(team.id));
+    const isCoOwnerMe = !!team.co_owner_id && isCurrentUser(team.co_owner_id);
     const isMe = isOwnerMe || isCoOwnerMe;
     const isCommishFlag = isCommissioner && team.owner_id === league?.commissioner_id;
 
@@ -722,7 +738,9 @@ export default function LeagueDetailPage() {
     );
   }
 
-  const sortedTeams = [...teams].sort((a, b) => b.wins - a.wins || a.losses - b.losses);
+  const sortedTeams = teams
+    .map((t) => (records[t.id] ? { ...t, ...records[t.id] } : t))
+    .sort((a, b) => b.wins - a.wins || a.losses - b.losses || (b.points_for || 0) - (a.points_for || 0));
   const statusConfig = draftStatusConfig[league.draft_status] || draftStatusConfig.not_started;
   const StatusIcon = statusConfig.icon;
   const typeLabel = leagueTypeLabels[league.league_type] || league.league_type;
@@ -732,12 +750,12 @@ export default function LeagueDetailPage() {
   // account-backed source of truth) weren't being recognized as "mine"
   // here even though every permission check elsewhere in the backend
   // already treats co-owners as equal team managers.
-  const currentUserIdForTeams = getCurrentUserId();
   const myTeamIds = Array.from(
     new Set([
-      ...getMyTeams(),
+      // Legacy localStorage claims only count while actually logged in.
+      ...(isLoggedIn() ? getMyTeams() : []),
       ...teams
-        .filter((t) => t.owner_id === currentUserIdForTeams || t.co_owner_id === currentUserIdForTeams)
+        .filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id))
         .map((t) => t.id),
     ]),
   );
@@ -1133,7 +1151,7 @@ export default function LeagueDetailPage() {
               <div>
                 <p className="text-surface-400 text-xs font-medium uppercase tracking-wider">Manage</p>
                 <p className="text-white text-lg font-semibold">
-                  {isLeagueManager ? "Manager" : "Member"}
+                  {isLeagueManager ? "Manager" : myTeamIds.length > 0 ? "Member" : isLoggedIn() ? "Not a member" : "Guest"}
                 </p>
               </div>
             </div>

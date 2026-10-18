@@ -3,7 +3,11 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { authApi } from "@/lib/api-client";
+import { authApi, friendlyErrorMessage } from "@/lib/api-client";
+
+// Mirrors the server rule: UserCreate.password Field(min_length=8) in
+// backend/app/schemas/user.py.
+const MIN_PASSWORD_LENGTH = 8;
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 function RegisterForm() {
@@ -12,7 +16,8 @@ function RegisterForm() {
   // See login/page.tsx's identical `next` handling -- set by the
   // invite-accept landing page when a logged-out visitor needs to land
   // back there after creating an account, instead of always /dashboard.
-  const next = searchParams.get("next") || "/dashboard";
+  const rawNext = searchParams.get("next") || "";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/dashboard";
   // Set by the invite-accept landing page so a visitor doesn't have to
   // retype the address their invite was sent to.
   const prefillEmail = searchParams.get("email") || "";
@@ -34,6 +39,10 @@ function RegisterForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (form.password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
     setLoading(true);
 
     try {
@@ -51,9 +60,7 @@ function RegisterForm() {
       }
       router.push(next);
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Something went wrong";
-      setError(message);
+      setError(friendlyErrorMessage(err, "Couldn't create your account. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -150,11 +157,21 @@ function RegisterForm() {
             type="password"
             autoComplete="new-password"
             required
+            minLength={MIN_PASSWORD_LENGTH}
+            aria-describedby="password-hint"
             placeholder="Create a strong password"
             value={form.password}
             onChange={handleChange}
             className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent transition-all"
           />
+          <p
+            id="password-hint"
+            className={`mt-1.5 text-xs ${
+              form.password.length > 0 && form.password.length < MIN_PASSWORD_LENGTH ? "text-red-400" : "text-surface-500"
+            }`}
+          >
+            At least {MIN_PASSWORD_LENGTH} characters.
+          </p>
         </div>
         <button
           type="submit"

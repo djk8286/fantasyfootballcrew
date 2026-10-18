@@ -7,6 +7,11 @@ import { Menu, X, Settings } from "lucide-react";
 import { isLoggedIn, logout } from "@/lib/api-client";
 import NotificationBell from "./NotificationBell";
 
+// Breakpoint note (QA round 1): the full inline nav needs ~950px, so it
+// only shows at lg (1024px+); below that the hamburger menu takes over.
+// At md (768px) the logo collided with the links and the auth buttons
+// wrapped/clipped, causing horizontal scroll.
+//
 // Features is a logged-out marketing page (RedirectIfLoggedIn already
 // bounces a logged-in visitor who navigates there directly to /dashboard)
 // -- loggedOutOnly keeps the nav link itself from dangling around
@@ -51,13 +56,13 @@ export default function Header() {
   return (
     <header className="border-b border-surface-700 bg-surface-900/80 backdrop-blur-md sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between gap-4 h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gold-400 rounded-lg flex items-center justify-center">
+          <Link href="/" className="flex items-center gap-2 shrink-0 min-w-0">
+            <div className="w-8 h-8 shrink-0 bg-gold-400 rounded-lg flex items-center justify-center">
               <span className="text-surface-900 font-bold text-sm">FFC</span>
             </div>
-            <span className="text-xl font-bold">
+            <span className="text-lg sm:text-xl font-bold whitespace-nowrap truncate">
               <span className="text-white">Fantasy</span>
               <span className="text-gold-400">Football</span>
               <span className="text-white">Crew</span>
@@ -65,12 +70,12 @@ export default function Header() {
           </Link>
 
           {/* Navigation */}
-          <nav className="hidden md:flex items-center gap-8">
+          <nav className="hidden lg:flex items-center gap-5 xl:gap-8 min-w-0">
             {NAV_LINKS.filter((link) => !link.loggedOutOnly || !loggedIn).map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium"
+                className="text-surface-300 hover:text-gold-400 transition-colors text-sm font-medium whitespace-nowrap"
               >
                 {link.label}
               </Link>
@@ -79,7 +84,7 @@ export default function Header() {
 
           {/* Auth Buttons -- desktop only; folded into the mobile menu below
               instead of cramming a third cluster next to the logo + hamburger */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden lg:flex items-center gap-1 shrink-0 whitespace-nowrap">
             {loggedIn ? (
               <>
                 <NotificationBell />
@@ -121,7 +126,7 @@ export default function Header() {
               (unlike Dashboard/Features/etc below) since it's time-sensitive
               -- burying it one tap deeper would defeat the point of a badge. */}
           {loggedIn && (
-            <div className="md:hidden">
+            <div className="lg:hidden">
               <NotificationBell />
             </div>
           )}
@@ -131,7 +136,7 @@ export default function Header() {
               Leagues/AI Analysis (or Log In/Out) on a phone. */}
           <button
             type="button"
-            className="md:hidden text-surface-300 hover:text-white transition-colors p-2 -mr-2"
+            className="lg:hidden text-surface-300 hover:text-white transition-colors p-2 -mr-2"
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             aria-expanded={menuOpen}
@@ -143,7 +148,7 @@ export default function Header() {
 
       {/* Mobile menu panel */}
       {menuOpen && (
-        <div className="md:hidden border-t border-surface-700 bg-surface-900/95 backdrop-blur-md">
+        <div className="lg:hidden border-t border-surface-700 bg-surface-900/95 backdrop-blur-md">
           <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-1">
             {NAV_LINKS.filter((link) => !link.loggedOutOnly || !loggedIn).map((link) => (
               <Link

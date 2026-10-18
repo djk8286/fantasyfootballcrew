@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
-import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isLoggedIn } from "@/lib/api-client";
+import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 
 interface League {
   id: string;
@@ -195,7 +195,7 @@ function LineupTab() {
       .getByLeague(leagueId)
       .then((data) => {
         const all = Array.isArray(data) ? (data as Team[]) : [];
-        const mine = all.filter((t) => t.owner_id === userId || t.co_owner_id === userId);
+        const mine = all.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
         setTeams(mine);
         setTeamId(mine[0]?.id || "");
       })

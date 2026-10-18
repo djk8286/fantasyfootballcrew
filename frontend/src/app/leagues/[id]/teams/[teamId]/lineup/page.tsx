@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { lineupsApi, teamsApi } from "@/lib/api-client";
+import { lineupsApi, teamsApi, leaguesApi, nflApi, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
 import {
   ArrowLeft,
@@ -132,15 +132,43 @@ export default function LineupPage() {
   // without waiting on a round-trip -- only synced back to the server on
   // explicit Save.
   const [starterIds, setStarterIds] = useState<Set<string>>(new Set());
+  // Only the team's owner/co-owner or the league's commissioner(s) may
+  // edit (mirrors require_team_or_league_access server-side). Everyone
+  // else -- including logged-out visitors -- gets a read-only view.
+  const [canEdit, setCanEdit] = useState(false);
+  const [weekReady, setWeekReady] = useState(false);
+
+  // Default to the current NFL week (same source Standings uses) instead
+  // of always opening on Week 1.
+  useEffect(() => {
+    nflApi
+      .getCurrentWeek()
+      .then((s) => {
+        if (s?.week) setWeek(Math.min(18, Math.max(1, s.week)));
+      })
+      .catch(() => {})
+      .finally(() => setWeekReady(true));
+  }, []);
 
   const load = useCallback(() => {
+    if (!weekReady) return;
     setLoading(true);
     setError("");
     Promise.all([
       lineupsApi.get(teamId, week, year).catch(() => null),
       teamsApi.get(teamId).catch(() => null),
+      leaguesApi.get(leagueId).catch(() => null),
     ])
-      .then(([lineupData, teamData]) => {
+      .then(([lineupData, teamData, leagueData]) => {
+        const t = teamData as { owner_id?: string | null; co_owner_id?: string | null } | null;
+        const l = leagueData as { commissioner_id?: string | null; co_commissioner_ids?: string[] | null } | null;
+        setCanEdit(
+          isLoggedIn() &&
+            (isCurrentUser(t?.owner_id) ||
+              isCurrentUser(t?.co_owner_id) ||
+              isCurrentUser(l?.commissioner_id) ||
+              (l?.co_commissioner_ids || []).some((cid) => isCurrentUser(cid)))
+        );
         if (!lineupData) {
           setError("Failed to load lineup");
           return;
@@ -151,7 +179,7 @@ export default function LineupPage() {
         if (teamData) setTeamName((teamData as { name?: string }).name || "");
       })
       .finally(() => setLoading(false));
-  }, [teamId, week, year]);
+  }, [teamId, leagueId, week, year, weekReady]);
 
   useEffect(() => {
     load();
@@ -284,7 +312,23 @@ export default function LineupPage() {
           )
         )}
 
-        {!data?.best_ball && (
+        {!canEdit && data && (
+          <div className="mb-4 p-3 bg-surface-800 border border-surface-700 rounded-xl text-surface-300 text-sm">
+            {isLoggedIn() ? (
+              "You're viewing this lineup read-only -- only the team's owner or the commissioner can change it."
+            ) : (
+              <>
+                Viewing read-only.{" "}
+                <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="text-gold-400 hover:text-gold-300 font-semibold">
+                  Log in
+                </Link>{" "}
+                to manage your team.
+              </>
+            )}
+          </div>
+        )}
+
+        {canEdit && !data?.best_ball && (
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <span className="text-sm text-surface-400">
@@ -318,7 +362,7 @@ export default function LineupPage() {
             </button>
           </div>
         )}
-        {data?.best_ball && (
+        {(data?.best_ball || !canEdit) && (
           <div className="flex items-center justify-end mb-4">
             <span className="text-sm text-surface-400">
               Starters: <span className="font-bold text-gold-400">{starterIds.size}</span> / {totalSlots}
@@ -338,7 +382,7 @@ export default function LineupPage() {
             ) : (
               <div className="divide-y divide-surface-700/50">
                 {starters.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: true }} onToggle={toggle} toggleDisabled={false} readOnly={!!data?.best_ball} />
+                  <PlayerRow key={p.id} player={{ ...p, is_starter: true }} onToggle={toggle} toggleDisabled={false} readOnly={!!data?.best_ball || !canEdit} />
                 ))}
               </div>
             )}
@@ -353,7 +397,7 @@ export default function LineupPage() {
             ) : (
               <div className="divide-y divide-surface-700/50">
                 {bench.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: false }} onToggle={toggle} toggleDisabled={atCapacity} readOnly={!!data?.best_ball} />
+                  <PlayerRow key={p.id} player={{ ...p, is_starter: false }} onToggle={toggle} toggleDisabled={atCapacity} readOnly={!!data?.best_ball || !canEdit} />
                 ))}
               </div>
             )}

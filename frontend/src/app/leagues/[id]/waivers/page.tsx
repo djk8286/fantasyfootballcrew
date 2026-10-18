@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign, Flame } from "lucide-react";
-import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "@/lib/api-client";
+import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -129,9 +129,9 @@ export default function WaiversPage() {
   }, []);
 
   const userId = getCurrentUserId();
-  const myTeam = teams.find((t) => t.owner_id === userId || t.co_owner_id === userId);
+  const myTeam = teams.find((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
   const isCommissioner =
-    league && (league.commissioner_id === userId || league.co_commissioner_ids?.includes(userId || ""));
+    league && (isCurrentUser(league.commissioner_id) || league.co_commissioner_ids?.includes(userId || ""));
 
   const loadClaims = useCallback(async () => {
     try {
@@ -349,7 +349,19 @@ export default function WaiversPage() {
           <h2 className="text-sm font-semibold text-white mb-4">Submit a Waiver Claim</h2>
 
           {!myTeam ? (
-            <p className="text-surface-400 text-sm">You need to own a team in this league to submit a claim.</p>
+            isLoggedIn() ? (
+              <p className="text-surface-400 text-sm">You need to own a team in this league to submit a claim.</p>
+            ) : (
+              <p className="text-surface-400 text-sm">
+                <Link
+                  href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/waivers`)}`}
+                  className="text-gold-400 hover:text-gold-300 font-semibold"
+                >
+                  Log in
+                </Link>{" "}
+                to submit waiver claims for your team.
+              </p>
+            )
           ) : (
             <form onSubmit={handleSubmitClaim} className="space-y-4">
               <div>
@@ -508,7 +520,10 @@ export default function WaiversPage() {
                   key={p.id}
                   className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-surface-900/60 transition-colors"
                 >
-                  <span className="text-surface-500 text-[10px] font-mono w-6 shrink-0 text-right">
+                  <span
+                    title={p.pos_rank ? `Positional rank: ${p.position}${p.pos_rank}` : undefined}
+                    className="text-surface-500 text-[10px] font-mono w-6 shrink-0 text-right"
+                  >
                     {p.position}{p.pos_rank}
                   </span>
                   <PlayerAvatar
@@ -523,8 +538,11 @@ export default function WaiversPage() {
                     <span className="text-[9px] text-red-400 uppercase shrink-0">{p.injury_status}</span>
                   )}
                   {p.season_points != null && (
-                    <span className="text-[10px] text-gold-400/80 font-semibold shrink-0 w-10 text-right">
-                      {Math.round(p.season_points * 10) / 10}
+                    <span
+                      title="Fantasy points this season (league scoring)"
+                      className="text-[10px] text-gold-400/80 font-semibold shrink-0 w-14 text-right whitespace-nowrap"
+                    >
+                      {Math.round(p.season_points * 10) / 10} pts
                     </span>
                   )}
                   {!!p.trending_add_count && (
@@ -532,7 +550,8 @@ export default function WaiversPage() {
                       title={`Added in ${p.trending_add_count.toLocaleString()} Sleeper leagues in the last 24h`}
                       className="inline-flex items-center gap-0.5 text-[10px] text-orange-400 font-semibold shrink-0"
                     >
-                      <Flame className="w-3 h-3" /> {p.trending_add_count.toLocaleString()}
+                      <Flame className="w-3 h-3" aria-hidden="true" /> +{p.trending_add_count.toLocaleString()}
+                      <span className="sr-only"> adds in the last 24 hours</span>
                     </span>
                   )}
                   <span className="text-[10px] text-surface-500 shrink-0">{p.team || "FA"}</span>

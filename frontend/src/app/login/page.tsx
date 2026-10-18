@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { authApi } from "@/lib/api-client";
+import { authApi, friendlyErrorMessage } from "@/lib/api-client";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 function LoginForm() {
@@ -17,7 +17,9 @@ function LoginForm() {
   // deep-link flow) when a logged-out visitor needs to land somewhere
   // other than /dashboard after signing in. Falls back to /dashboard,
   // same as before this existed.
-  const next = searchParams.get("next") || "/dashboard";
+  // Only same-site paths -- never bounce to an external URL after login.
+  const rawNext = searchParams.get("next") || "";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/dashboard";
   // Set by the invite-accept landing page so a visitor doesn't have to
   // retype the address their invite was sent to.
   const prefillEmail = searchParams.get("email") || "";
@@ -41,9 +43,11 @@ function LoginForm() {
       }
       router.push(next);
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Invalid email or password";
-      setError(message);
+      setError(
+        friendlyErrorMessage(err, "Couldn't sign you in. Please try again.", {
+          401: "Invalid email or password.",
+        })
+      );
     } finally {
       setLoading(false);
     }
