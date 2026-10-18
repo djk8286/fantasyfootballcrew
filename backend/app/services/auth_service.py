@@ -4,7 +4,7 @@ Avoids the passlib/bcrypt compatibility issue on Windows.
 Uses PyJWT for token generation.
 """
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
 import jwt
@@ -59,7 +59,7 @@ def hash_token(raw_token: str) -> str:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a JWT access token."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(days=30))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=30))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
 
