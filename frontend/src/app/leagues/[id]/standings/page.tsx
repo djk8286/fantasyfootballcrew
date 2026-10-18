@@ -233,8 +233,8 @@ export default function StandingsPage() {
     ]);
     const teams = Array.isArray(teamsData) ? (teamsData as RawTeam[]) : [];
     const teamById = new Map(teams.map((t) => [t.id, t]));
-    const rawStandings: RawStandingEntry[] = Array.isArray((standingsResponse as any)?.standings)
-      ? (standingsResponse as any).standings
+    const rawStandings: RawStandingEntry[] = Array.isArray((standingsResponse as { standings?: unknown } | null)?.standings)
+      ? (standingsResponse as { standings: RawStandingEntry[] }).standings
       : [];
 
     return rawStandings.map((s) => {

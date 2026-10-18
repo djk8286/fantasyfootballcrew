@@ -40,7 +40,8 @@ interface BoardViewProps {
   currentPick: BoardViewPick | null;
   myTeamId: string | null;
   firstRoundTeams: BoardViewTeam[];
-  onPlayerHover: (player: any, el: HTMLElement | null) => void;
+  // Method syntax (bivariant) so callers can pass handlers typed to their own player shape.
+  onPlayerHover(player: unknown, el: HTMLElement | null): void;
 }
 
 export default function BoardView({

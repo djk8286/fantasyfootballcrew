@@ -10,14 +10,14 @@ all, so individual defensive players would still silently score 0 for
 them even after this deploy.
 
 This is a DATA backfill, not a schema migration (scoring_config already
-exists as a column -- see migrate_*.py for actual ALTER TABLE scripts).
+exists as a column -- schema changes live in alembic/versions/).
 Purely additive: only touches leagues missing the "idp" key entirely,
 and only adds that one key -- never overwrites anything a league already
 explicitly configured for any other category. Safe to run repeatedly
 (no-ops on leagues that already have it). Works against whatever
 DATABASE_URL is configured -- SQLite locally, Postgres in production.
 
-Run once after deploying: `python backfill_idp_scoring_config.py`
+Run once after deploying, from backend/: `python -m scripts.backfill_idp_scoring_config`
 """
 import asyncio
 from sqlalchemy import select

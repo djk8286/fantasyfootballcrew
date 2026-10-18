@@ -23,6 +23,26 @@ interface HoverPlayer {
   headline_stats?: Record<string, number> | null;
 }
 
+// Shape the hover card reads. Every page passes its own player type here
+// (draft pool, roster, free agent...), so everything but the name is optional.
+interface OverlayPlayer {
+  full_name?: string;
+  position: string;
+  team?: string | null;
+  age?: number | null;
+  number?: number | null;
+  bye_week?: number | null;
+  injury_status?: string | null;
+  fantasy_positions?: string[] | null;
+  rank_score?: number | null;
+  pos_rank?: number | null;
+  headline_stats?: Record<string, number> | null;
+  season_points?: number | null;
+  season_points_year?: number | null;
+}
+
+type PlayerHoverHandler = (player: HoverPlayer | null, el: HTMLElement | null) => void;
+
 export const STAT_LABELS: Record<string, string> = {
   pass_yd: "Pass Yd",
   pass_td: "Pass TD",
@@ -114,7 +134,7 @@ function PlayerCardOverlay({
   position,
   onDismiss,
 }: {
-  player: any;
+  player: OverlayPlayer | null;
   position: { x: number; y: number } | null;
   onDismiss?: () => void;
 }) {
@@ -276,5 +296,5 @@ function PlayerCardOverlay({
 }
 
 export { PlayerAvatar, PlayerCardOverlay };
-export type { HoverPlayer };
+export type { HoverPlayer, OverlayPlayer, PlayerHoverHandler };
 export default PlayerAvatar;

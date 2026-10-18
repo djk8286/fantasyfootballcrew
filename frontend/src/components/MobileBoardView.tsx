@@ -14,7 +14,8 @@ interface MobileBoardViewProps {
   teams: Record<string, { name: string }>;
   teamRosters: Record<string, TeamRosterCardPick[]>;
   myTeamId: string | null;
-  onPlayerHover: (player: any, el: HTMLElement | null) => void;
+  // Method syntax (bivariant) so callers can pass handlers typed to their own player shape.
+  onPlayerHover(player: unknown, el: HTMLElement | null): void;
 }
 
 export default function MobileBoardView({

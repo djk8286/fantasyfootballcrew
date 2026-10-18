@@ -1511,7 +1511,7 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
           ) : digest ? (
             <><Bot className="w-3.5 h-3.5" /> Regenerate Digest</>
           ) : (
-            <><Bot className="w-3.5 h-3.5" /> Generate This Week's Digest</>
+            <><Bot className="w-3.5 h-3.5" /> Generate This Week&apos;s Digest</>
           )}
         </button>
       </div>

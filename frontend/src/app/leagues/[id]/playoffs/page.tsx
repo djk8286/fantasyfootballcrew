@@ -168,7 +168,7 @@ export default function PlayoffsPage() {
             <Trophy className="w-10 h-10 mx-auto mb-3 text-gold-400/60" />
             <p className="text-surface-300 font-semibold mb-1">The bracket hasn&apos;t generated yet.</p>
             <p className="text-surface-500 text-sm">
-              It'll be built automatically once the regular season ({data.settings.regular_season_weeks} weeks) ends —
+              It&apos;ll be built automatically once the regular season ({data.settings.regular_season_weeks} weeks) ends —
               no action needed.
             </p>
           </div>

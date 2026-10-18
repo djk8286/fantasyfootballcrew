@@ -8,6 +8,7 @@ import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId } from "
 import PositionBadge from "@/components/PositionBadge";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
+import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
 
 interface Team {
   id: string;
@@ -511,9 +512,9 @@ export default function WaiversPage() {
                     {p.position}{p.pos_rank}
                   </span>
                   <PlayerAvatar
-                    player={{ ...p, full_name: `${p.first_name} ${p.last_name}` } as any}
+                    player={{ ...p, full_name: `${p.first_name} ${p.last_name}` } as unknown as HoverPlayer}
                     size="sm"
-                    onHover={handlePlayerHover as any}
+                    onHover={handlePlayerHover as unknown as PlayerHoverHandler}
                   />
                   <span className="text-sm text-white truncate flex-1">
                     {p.first_name} {p.last_name}
