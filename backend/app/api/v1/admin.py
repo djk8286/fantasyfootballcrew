@@ -16,9 +16,10 @@ already IS the visibility check; deletion doesn't skip it, since the
 frontend always shows this same data before offering a delete.
 """
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.core.database import get_db
 from app.models.user import User
@@ -31,6 +32,8 @@ from app.api.deps import require_admin
 from app.services.league_deletion_service import delete_league as _delete_league
 from app.services.account_deletion_service import delete_user_account
 from app.services.job_run_service import get_system_health
+from app.models.admin_audit_log import AdminAuditLog
+from app.api.v1.auth import create_and_send_password_reset_email, _create_and_send_verification_email
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -65,28 +68,243 @@ async def get_stats(
     }
 
 
+def _audit(
+    db: AsyncSession,
+    admin: User,
+    action: str,
+    target_type: str,
+    target_id: str,
+    target_label: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """Stage an AdminAuditLog row in the caller's session -- committed by
+    the same db.commit() as the change it describes, never separately."""
+    db.add(AdminAuditLog(
+        admin_user_id=admin.id,
+        admin_username=admin.username,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        target_label=target_label,
+        details=details,
+    ))
+
+
+def _user_row(u: User) -> dict:
+    return {
+        "id": u.id,
+        "username": u.username,
+        "email": u.email,
+        "provider": u.provider,
+        "email_verified": u.email_verified,
+        "is_admin": u.is_admin,
+        "is_suspended": u.is_suspended,
+        "suspended_at": u.suspended_at,
+        "suspended_reason": u.suspended_reason,
+        "has_password": u.hashed_password is not None,
+        "created_at": u.created_at,
+    }
+
+
 @router.get("/users")
 async def list_users(
+    q: str | None = Query(None, max_length=100),
+    status: str | None = Query(None, pattern="^(suspended|admin|unverified)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    """Every account, newest first. Includes email -- this endpoint is
+    """Accounts, newest first, with optional case-insensitive search over
+    username/email and a status filter. Paginated -- returns
+    {items, total, limit, offset}. Includes email -- this endpoint is
     already admin-gated, unlike the public-facing UserPublic schema
     (GET /users/{id}) that deliberately withholds it."""
-    result = await db.execute(select(User).order_by(User.created_at.desc()))
-    users = result.scalars().all()
-    return [
-        {
-            "id": u.id,
-            "username": u.username,
-            "email": u.email,
-            "provider": u.provider,
-            "email_verified": u.email_verified,
-            "is_admin": u.is_admin,
-            "created_at": u.created_at,
-        }
-        for u in users
-    ]
+    query = select(User)
+    if q and q.strip():
+        like = f"%{q.strip().lower()}%"
+        query = query.where(or_(func.lower(User.username).like(like), func.lower(User.email).like(like)))
+    if status == "suspended":
+        query = query.where(User.is_suspended.is_(True))
+    elif status == "admin":
+        query = query.where(User.is_admin.is_(True))
+    elif status == "unverified":
+        query = query.where(User.email_verified.is_(False))
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    result = await db.execute(query.order_by(User.created_at.desc(), User.id).limit(limit).offset(offset))
+    return {
+        "items": [_user_row(u) for u in result.scalars().all()],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def _get_target_user(db: AsyncSession, user_id: str) -> User:
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+class SuspendRequest(BaseModel):
+    reason: str | None = Field(None, max_length=500)
+
+
+@router.post("/users/{user_id}/suspend")
+async def suspend_user(
+    user_id: str,
+    body: SuspendRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Blocks login and every authenticated request (see deps.py), and
+    bumps token_version so any session already open dies on its next
+    request. Reversible via /unsuspend."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="You can't suspend your own account")
+    user = await _get_target_user(db, user_id)
+    if user.is_suspended:
+        return _user_row(user)
+    user.is_suspended = True
+    user.suspended_at = datetime.now(timezone.utc)
+    user.suspended_reason = (body.reason or "").strip() or None
+    user.token_version += 1
+    _audit(db, admin, "user.suspend", "user", user.id, user.username, {"reason": user.suspended_reason})
+    await db.commit()
+    return _user_row(user)
+
+
+@router.post("/users/{user_id}/unsuspend")
+async def unsuspend_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    user = await _get_target_user(db, user_id)
+    if not user.is_suspended:
+        return _user_row(user)
+    user.is_suspended = False
+    user.suspended_at = None
+    user.suspended_reason = None
+    _audit(db, admin, "user.unsuspend", "user", user.id, user.username)
+    await db.commit()
+    return _user_row(user)
+
+
+@router.post("/users/{user_id}/force-logout")
+async def force_logout_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Invalidates every JWT this user currently holds (token_version
+    bump -- the same mechanism a password reset uses). They can log
+    straight back in; this just kills existing sessions."""
+    user = await _get_target_user(db, user_id)
+    user.token_version += 1
+    _audit(db, admin, "user.force_logout", "user", user.id, user.username)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/users/{user_id}/send-password-reset")
+async def admin_send_password_reset(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Same email/token flow as the self-service POST /auth/forgot-password
+    (no rate limit here -- admin-gated). The admin never sees the link;
+    it only goes to the account's own email (or the server log when no
+    email provider is configured, same as self-service)."""
+    user = await _get_target_user(db, user_id)
+    if not user.hashed_password:
+        raise HTTPException(status_code=400, detail=f"This account signs in with {user.provider} and has no password to reset")
+    _audit(db, admin, "user.send_password_reset", "user", user.id, user.username)
+    await create_and_send_password_reset_email(user, db)
+    return {"status": "ok"}
+
+
+@router.post("/users/{user_id}/resend-verification")
+async def admin_resend_verification(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    user = await _get_target_user(db, user_id)
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="This account's email is already verified")
+    _audit(db, admin, "user.resend_verification", "user", user.id, user.username)
+    await _create_and_send_verification_email(user, db)
+    return {"status": "ok"}
+
+
+class SetAdminRequest(BaseModel):
+    is_admin: bool
+
+
+@router.post("/users/{user_id}/admin")
+async def set_user_admin(
+    user_id: str,
+    body: SetAdminRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Grant or revoke is_admin. You can't change your own admin flag
+    (so nobody locks themselves out by accident), and the last remaining
+    admin can never be demoted."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="You can't change your own admin access")
+    user = await _get_target_user(db, user_id)
+    if user.is_admin == body.is_admin:
+        return _user_row(user)
+    if not body.is_admin:
+        admin_count = (await db.execute(select(func.count(User.id)).where(User.is_admin.is_(True)))).scalar() or 0
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Can't remove the last admin")
+    user.is_admin = body.is_admin
+    _audit(db, admin, "user.grant_admin" if body.is_admin else "user.revoke_admin", "user", user.id, user.username)
+    await db.commit()
+    return _user_row(user)
+
+
+@router.get("/audit-log")
+async def get_audit_log(
+    target_id: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Every admin mutation, newest first. Optionally scoped to one
+    target (user or league id)."""
+    query = select(AdminAuditLog)
+    if target_id:
+        query = query.where(AdminAuditLog.target_id == target_id)
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    rows = (await db.execute(
+        query.order_by(AdminAuditLog.created_at.desc(), AdminAuditLog.id).limit(limit).offset(offset)
+    )).scalars().all()
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "admin_user_id": r.admin_user_id,
+                "admin_username": r.admin_username,
+                "action": r.action,
+                "target_type": r.target_type,
+                "target_id": r.target_id,
+                "target_label": r.target_label,
+                "details": r.details,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/leagues")
@@ -227,6 +445,7 @@ async def admin_delete_league(
     league = result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    _audit(db, _admin, "league.delete", "league", league.id, league.name)
     await _delete_league(db, league)
     await db.commit()
     return {"status": "ok"}
@@ -251,6 +470,7 @@ async def admin_delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    _audit(db, admin, "user.delete", "user", user.id, user.username, {"email": user.email})
     await delete_user_account(db, user)
     await db.commit()
     return {"status": "ok"}

@@ -80,12 +80,12 @@ async def test_admin_can_see_stats_and_users(client, db_session_factory):
 
     r = await client.get("/admin/users")
     assert r.status_code == 200
-    usernames = {u["username"] for u in r.json()}
+    usernames = {u["username"] for u in r.json()["items"]}
     assert admin.username in usernames
     assert other.username in usernames
     # Email IS included here -- this is the admin-only view, distinct
     # from GET /users/{id}'s public (no-email) UserPublic response.
-    admin_row = next(u for u in r.json() if u["id"] == admin.id)
+    admin_row = next(u for u in r.json()["items"] if u["id"] == admin.id)
     assert admin_row["email"] == admin.email
     assert admin_row["is_admin"] is True
 

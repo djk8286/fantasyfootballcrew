@@ -477,7 +477,26 @@ export const dashboardApi = {
 // whose account isn't User.is_admin. See app/api/v1/admin.py.
 export const adminApi = {
   getStats: () => apiRequest("/api/v1/admin/stats"),
-  getUsers: () => apiRequest("/api/v1/admin/users"),
+  getUsers: (params: { q?: string; status?: string; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+    const query = qs.toString();
+    return apiRequest(`/api/v1/admin/users${query ? `?${query}` : ""}`);
+  },
+  suspendUser: (userId: string, reason?: string) =>
+    apiRequest(`/api/v1/admin/users/${userId}/suspend`, { method: "POST", body: { reason: reason || null } }),
+  unsuspendUser: (userId: string) => apiRequest(`/api/v1/admin/users/${userId}/unsuspend`, { method: "POST" }),
+  forceLogoutUser: (userId: string) => apiRequest(`/api/v1/admin/users/${userId}/force-logout`, { method: "POST" }),
+  sendPasswordReset: (userId: string) => apiRequest(`/api/v1/admin/users/${userId}/send-password-reset`, { method: "POST" }),
+  resendVerification: (userId: string) => apiRequest(`/api/v1/admin/users/${userId}/resend-verification`, { method: "POST" }),
+  setUserAdmin: (userId: string, isAdmin: boolean) =>
+    apiRequest(`/api/v1/admin/users/${userId}/admin`, { method: "POST", body: { is_admin: isAdmin } }),
+  getAuditLog: (params: { target_id?: string; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+    const query = qs.toString();
+    return apiRequest(`/api/v1/admin/audit-log${query ? `?${query}` : ""}`);
+  },
   getLeagues: () => apiRequest("/api/v1/admin/leagues"),
   getLeagueDetail: (leagueId: string) => apiRequest(`/api/v1/admin/leagues/${leagueId}`),
   deleteLeague: (leagueId: string) =>
