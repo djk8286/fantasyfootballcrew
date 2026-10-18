@@ -30,9 +30,11 @@ from app.models.nfl_game import NFLGame
 from app.models.draft_queue_entry import DraftQueueEntry
 from app.models.team_player_news import TeamPlayerNews
 from app.models.job_run import JobRun
+from app.models.admin_audit_log import AdminAuditLog
 
 __all__ = [
     "JobRun",
+    "AdminAuditLog",
     "User", "League", "LeagueType", "DraftStatus", "DraftType",
     "Team", "Player", "DraftPick", "Draft", "DraftRunStatus", "ScoringConfig",
     "Coach", "CoachPosition", "Transaction", "TransactionType", "TransactionStatus",

@@ -89,6 +89,11 @@ async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depe
     if not verify_password(login_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    # Only revealed AFTER a correct password, so this can't be used to
+    # probe which emails are suspended.
+    if user.is_suspended:
+        raise HTTPException(status_code=403, detail="Account suspended")
+
     if needs_rehash(user.hashed_password):
         # Transparent migration off the legacy SHA-256 hash format --
         # see auth_service.needs_rehash. No forced reset, no visible
@@ -120,6 +125,14 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
     if not user or not user.hashed_password:
         return generic_response
 
+    await create_and_send_password_reset_email(user, db)
+    return generic_response
+
+
+async def create_and_send_password_reset_email(user: User, db: AsyncSession) -> None:
+    """Shared by forgot_password() and the admin "send password reset"
+    action (admin.py). Caller must ensure the account HAS a password
+    (OAuth-only accounts don't)."""
     raw_token = secrets.token_urlsafe(32)
     db.add(PasswordResetToken(
         user_id=user.id,
@@ -130,8 +143,6 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
 
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
     await send_password_reset_email(user.email, reset_link, db)
-
-    return generic_response
 
 
 @router.post("/reset-password")

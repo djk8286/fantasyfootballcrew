@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { adminApi, getCurrentUserId } from "@/lib/api-client";
+import UsersPanel, { type AdminUser } from "./UsersPanel";
+import AuditLogPanel from "./AuditLogPanel";
+import { apiErrorMessage } from "./adminUtils";
 import SystemHealthPanel, { countUnhealthy, type SystemHealth } from "./SystemHealthPanel";
 import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle, Trash2, X, Swords, DollarSign } from "lucide-react";
 
@@ -12,16 +15,6 @@ interface Stats {
   teams: number;
   drafts_in_progress: number;
   draft_picks_made: number;
-}
-
-interface AdminUser {
-  id: string;
-  username: string;
-  email: string;
-  provider: string;
-  email_verified: boolean;
-  is_admin: boolean;
-  created_at: string;
 }
 
 interface AdminLeague {
@@ -115,7 +108,7 @@ interface AdminLeagueDetail {
   drafts: AdminLeagueDraft[];
 }
 
-type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log" | "system";
+type Tab = "leagues" | "users" | "ai-usage" | "health" | "email-log" | "audit" | "system";
 
 const FLAG_LABELS: Record<string, string> = {
   no_teams: "No teams",
@@ -427,7 +420,10 @@ function LeagueDetailModal({
 
 export default function AdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  // Bumped after any mutation made outside a panel (user delete) so the
+  // Users and Audit Log panels re-fetch.
+  const [refreshKey, setRefreshKey] = useState(0);
   const [leagues, setLeagues] = useState<AdminLeague[]>([]);
   const [aiUsage, setAiUsage] = useState<AiUsage | null>(null);
   const [leagueHealth, setLeagueHealth] = useState<LeagueHealthRow[]>([]);
@@ -468,7 +464,7 @@ export default function AdminPage() {
     ])
       .then(([s, u, l, ai, health, emails]) => {
         setStats(s as Stats);
-        setUsers(u as AdminUser[]);
+        setUsersTotal((u as { total: number }).total);
         setLeagues(l as AdminLeague[]);
         setAiUsage(ai as AiUsage);
         setLeagueHealth(health as LeagueHealthRow[]);
@@ -503,17 +499,18 @@ export default function AdminPage() {
   const handleLeagueDeleted = useCallback(() => {
     setSelectedLeagueId(null);
     refreshLeagues();
+    setRefreshKey((k) => k + 1);
   }, [refreshLeagues]);
 
   const handleDeleteUser = useCallback(() => {
     if (!deletingUser) return;
     adminApi.deleteUser(deletingUser.id)
       .then(() => {
-        setUsers((prev) => prev.filter((u) => u.id !== deletingUser.id));
+        setRefreshKey((k) => k + 1);
         setDeletingUser(null);
         setDeleteUserError(null);
       })
-      .catch((err: unknown) => setDeleteUserError(err instanceof Error ? err.message : "Failed to delete user"));
+      .catch((err: unknown) => setDeleteUserError(apiErrorMessage(err, "Failed to delete user")));
   }, [deletingUser]);
 
   useEffect(() => {
@@ -581,10 +578,11 @@ export default function AdminPage() {
         <div className="flex items-center gap-1 p-1 bg-surface-800 border border-surface-700 rounded-lg w-fit overflow-x-auto">
           {([
             ["leagues", `Leagues (${leagues.length})`],
-            ["users", `Users (${users.length})`],
+            ["users", `Users (${usersTotal})`],
             ["ai-usage", "AI Usage"],
             ["health", `League Health${leagueHealth.length ? ` (${leagueHealth.length})` : ""}`],
             ["email-log", "Email Log"],
+            ["audit", "Audit Log"],
             ["system", `System Health${countUnhealthy(systemHealth) ? ` (${countUnhealthy(systemHealth)} ⚠)` : ""}`],
           ] as [Tab, string][]).map(([key, label]) => (
             <button
@@ -664,62 +662,15 @@ export default function AdminPage() {
         )}
 
         {tab === "users" && (
-          <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden overflow-x-auto">
-            <table className="w-full text-sm min-w-[640px]">
-              <thead>
-                <tr className="border-b border-surface-700 text-left text-surface-400 text-xs uppercase tracking-wider">
-                  <th className="px-4 py-3 font-medium">Username</th>
-                  <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Provider</th>
-                  <th className="px-4 py-3 font-medium">Verified</th>
-                  <th className="px-4 py-3 font-medium">Admin</th>
-                  <th className="px-4 py-3 font-medium">Joined</th>
-                  <th className="px-4 py-3 font-medium" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-700/60">
-                {users.map((u) => {
-                  const daysSinceJoined = Math.floor((Date.now() - new Date(u.created_at).getTime()) / 86400000);
-                  return (
-                    <tr key={u.id} className="hover:bg-surface-900/40 transition-colors">
-                      <td className="px-4 py-3 text-white font-medium">{u.username}</td>
-                      <td className="px-4 py-3 text-surface-300">{u.email}</td>
-                      <td className="px-4 py-3 text-surface-400">{u.provider}</td>
-                      <td className="px-4 py-3">
-                        {u.email_verified ? (
-                          <span className="text-green-400 text-xs">Yes</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-amber-400 text-xs">
-                            <AlertTriangle className="w-3 h-3" /> No, {daysSinceJoined}d ago
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {u.is_admin && (
-                          <span className="inline-flex items-center gap-1 text-gold-400 text-xs font-semibold">
-                            <Shield className="w-3 h-3" /> Admin
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-surface-500 text-xs">{fmtDate(u.created_at)}</td>
-                      <td className="px-4 py-3 text-right">
-                        {u.id !== currentUserId && (
-                          <button
-                            onClick={() => { setDeleteUserError(null); setDeletingUser(u); }}
-                            aria-label={`Delete ${u.username}`}
-                            className="text-surface-500 hover:text-red-400 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <UsersPanel
+            currentUserId={currentUserId}
+            refreshKey={refreshKey}
+            onTotalChange={setUsersTotal}
+            onRequestDelete={(u: AdminUser) => { setDeleteUserError(null); setDeletingUser(u); }}
+          />
         )}
+
+        {tab === "audit" && <AuditLogPanel refreshKey={refreshKey} />}
 
         {tab === "ai-usage" && (
           <div className="space-y-4">

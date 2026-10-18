@@ -37,6 +37,12 @@ async def get_current_user(
     if payload.get("token_version", 0) != user.token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
+    # Belt-and-braces: suspending bumps token_version (so the check above
+    # already rejects pre-suspension tokens), but this also covers any
+    # token minted while suspended through some other path.
+    if user.is_suspended:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
+
     return user
 
 
@@ -52,7 +58,7 @@ async def get_current_user_optional(
         return None
     result = await db.execute(select(User).where(User.id == payload["sub"]))
     user = result.scalar_one_or_none()
-    if user is None or payload.get("token_version", 0) != user.token_version:
+    if user is None or payload.get("token_version", 0) != user.token_version or user.is_suspended:
         return None
     return user
 
