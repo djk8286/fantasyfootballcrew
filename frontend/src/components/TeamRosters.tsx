@@ -3,6 +3,7 @@
 import { Star } from "lucide-react";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import { PlayerAvatar } from "./PlayerAvatar";
+import type { HoverPlayer } from "./PlayerAvatar";
 
 interface TeamRosterPick {
   id: string;
@@ -38,7 +39,8 @@ interface TeamRostersProps {
   onSelectTeamId: (teamId: string) => void;
   onClaimTeam: (teamId: string) => void;
   onUnclaimTeam: () => void;
-  onPlayerHover: (player: any, el: HTMLElement | null) => void;
+  // Method syntax (bivariant) so callers can pass handlers typed to their own player shape.
+  onPlayerHover(player: unknown, el: HTMLElement | null): void;
 }
 
 export default function TeamRosters({
@@ -136,7 +138,7 @@ export default function TeamRosters({
                       <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">
                         {p.pick_number}
                       </span>
-                      {p.player && <PlayerAvatar player={p.player as any} size="sm" onHover={onPlayerHover} />}
+                      {p.player && <PlayerAvatar player={p.player as unknown as HoverPlayer} size="sm" onHover={onPlayerHover} />}
                       <span className="text-sm text-white truncate flex-1">
                         {p.player?.full_name}
                       </span>

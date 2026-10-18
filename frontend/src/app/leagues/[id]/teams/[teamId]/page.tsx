@@ -23,6 +23,7 @@ import {
   DollarSign,
   Newspaper,
 } from "lucide-react";
+import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
 
 // ─── Interfaces ───────────────────────────────────────────────
 
@@ -455,7 +456,7 @@ export default function TeamPage() {
                 <div key={pos} className="contents">
                   {rosterByPos[pos].map((p) => (
                     <div key={p.id} className="flex items-center gap-2 py-1.5 border-b border-surface-800/50">
-                      <PlayerAvatar player={p as any} size="sm" onHover={handlePlayerHover as any} />
+                      <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
                       <span className="text-sm text-white truncate flex-1">{p.full_name}</span>
                       {p.season_points != null && (
                         <span className="text-[10px] text-gold-400/80 font-semibold">

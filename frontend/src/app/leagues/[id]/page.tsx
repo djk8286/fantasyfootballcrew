@@ -45,6 +45,7 @@ import {
   Skull,
   Copy,
 } from "lucide-react";
+import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
 
 // ─── Interfaces ───────────────────────────────────────────────
 
@@ -1584,7 +1585,7 @@ export default function LeagueDetailPage() {
                           const weeklyScore = live?.score ?? 0;
                           return (
                           <div key={p.id} className={`flex items-center gap-1.5 text-xs ${live?.is_bench ? "opacity-50" : ""}`}>
-                            <PlayerAvatar player={p as any} size="sm" onHover={handlePlayerHover as any} />
+                            <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
                             <span className="text-surface-300 truncate flex-1">{p.full_name}</span>
                             {currentWeekLoaded && (
                               <span className="flex items-center gap-1.5 shrink-0">

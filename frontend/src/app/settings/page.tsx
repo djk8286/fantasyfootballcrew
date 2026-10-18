@@ -162,9 +162,9 @@ export default function SettingsPage() {
 
           <p className="text-surface-300 text-sm mb-4">
             This permanently deletes your account. Leagues you commissioned are transferred to
-            another real member (or you'll be asked to handle that first if you're the only one
+            another real member (or you&apos;ll be asked to handle that first if you&apos;re the only one
             left); your teams become CPU-controlled so those leagues keep working for everyone
-            else. This can't be undone.
+            else. This can&apos;t be undone.
           </p>
 
           {requiresPassword && (
@@ -293,7 +293,7 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2 text-surface-400 text-sm flex-wrap">
               <Mail className="w-3.5 h-3.5 shrink-0" />
               <span>{me.email}</span>
-              <span className="text-surface-500 text-xs">(can't be changed here)</span>
+              <span className="text-surface-500 text-xs">(can&apos;t be changed here)</span>
               {me.email_verified ? (
                 <span className="inline-flex items-center gap-1 text-green-400 text-xs font-medium">
                   <BadgeCheck className="w-3.5 h-3.5" /> Verified
@@ -424,7 +424,7 @@ export default function SettingsPage() {
         ) : (
           <div className="bg-surface-800/60 border border-surface-700 rounded-2xl p-5">
             <p className="text-surface-400 text-sm">
-              This account signed up with {me.provider} and doesn't have a password to change here.
+              This account signed up with {me.provider} and doesn&apos;t have a password to change here.
             </p>
           </div>
         )}

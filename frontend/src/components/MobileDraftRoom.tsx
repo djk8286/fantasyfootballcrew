@@ -9,6 +9,7 @@ import TeamRosterCard from "./TeamRosterCard";
 import { PickCountdownText } from "./PickCountdown";
 import { formatPickLabel, picksUntilMyTurn, projectNextPick } from "@/lib/draftPickMath";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import type { PlayerHoverHandler } from "./PlayerAvatar";
 
 // Matches draft/[id]/page.tsx's Player interface exactly (structurally --
 // no index signature, since that would make this type incompatible with
@@ -490,7 +491,7 @@ function MobileDraftRoom({
               isMine={isViewingMyTeam}
               picks={selectedTeamPicks}
               emptyLabel={`No picks yet. ${isViewingMyTeam ? "Your" : `${selectedTeamName}'s`} picks will appear here as the draft goes.`}
-              onPlayerHover={onPlayerHover as any}
+              onPlayerHover={onPlayerHover as unknown as PlayerHoverHandler}
             />
           )}
         </div>
