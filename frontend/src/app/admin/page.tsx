@@ -5,6 +5,7 @@ import Link from "next/link";
 import { adminApi, getCurrentUserId } from "@/lib/api-client";
 import UsersPanel, { type AdminUser } from "./UsersPanel";
 import AuditLogPanel from "./AuditLogPanel";
+import AiCostPanel from "./AiCostPanel";
 import { apiErrorMessage } from "./adminUtils";
 import SystemHealthPanel, { countUnhealthy, type SystemHealth } from "./SystemHealthPanel";
 import { ArrowLeft, Users, Trophy, Shield, ListChecks, Crown, Bot, Mail, AlertTriangle, Trash2, X, Swords, DollarSign } from "lucide-react";
@@ -674,6 +675,8 @@ export default function AdminPage() {
 
         {tab === "ai-usage" && (
           <div className="space-y-4">
+            <AiCostPanel />
+            <h3 className="text-white font-bold text-sm pt-2">Call Volume</h3>
             {aiUsage && (
               <div className="grid grid-cols-2 gap-3">
                 <StatTile icon={<Bot className="w-4.5 h-4.5" />} label="Total AI Calls" value={aiUsage.total} />
@@ -681,7 +684,7 @@ export default function AdminPage() {
               </div>
             )}
             <p className="text-surface-500 text-xs">
-              Call counts only -- not dollars. Every real LLM call logs one row here -- AI Co-Commissioner features (digest, trade review, chat, message drafts, recaps) as well as the personal tools (lineup analysis, trade analysis, bet analysis).
+              All-time call counts. Every real LLM call logs one row here (background jobs show as job:*) -- AI Co-Commissioner features (digest, trade review, chat, message drafts, recaps) as well as the personal tools (lineup analysis, trade analysis, bet analysis).
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, func, ForeignKey, Index
+from sqlalchemy import String, DateTime, Integer, Float, Text, func, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -29,6 +29,16 @@ class AIUsageEvent(Base):
     league_id: Mapped[str | None] = mapped_column(String, ForeignKey("leagues.id"), nullable=True)
     user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     endpoint: Mapped[str] = mapped_column(String, nullable=False)
+    # Cost tracking (2026-10-17) -- filled in by ai_cost_service from the
+    # provider's own usage numbers after the real LLM call(s) this row
+    # covers. All nullable: rows from before this existed, and rows whose
+    # call never reached a provider (no API key configured), have none.
+    # Accumulated if one request makes several provider calls.
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -38,4 +48,5 @@ class AIUsageEvent(Base):
         # reasoning as ChatMessage/Notification's own composite indexes.
         Index("ix_ai_usage_events_league_created", "league_id", "created_at"),
         Index("ix_ai_usage_events_user_created", "user_id", "created_at"),
+        Index("ix_ai_usage_events_created", "created_at"),
     )

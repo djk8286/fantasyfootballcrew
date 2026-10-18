@@ -19,6 +19,7 @@ from app.core.database import async_session
 from app.models.job_run import JobRun
 from app.models.nfl_game import NFLGame
 from app.models.draft import Draft, DraftRunStatus
+from app.services.ai_cost_service import set_current_job, reset_current_job
 
 JOB_RUN_RETENTION_DAYS = 7
 MAX_ERROR_CHARS = 2000
@@ -96,11 +97,16 @@ async def run_job(
     return its result (or re-raise its exception)."""
     started_at = _now()
     t0 = time.monotonic()
+    # Lets AI calls made inside a background job be attributed to it in
+    # ai_usage_events (endpoint "job:<name>") -- see ai_cost_service.
+    job_token = set_current_job(job_name)
     try:
         result = await fn(*args, **kwargs)
     except Exception as e:
         await _record(job_name, started_at, t0, False, f"{type(e).__name__}: {e}")
         raise
+    finally:
+        reset_current_job(job_token)
     if record_success_every_s is not None:
         last = _last_success_recorded.get(job_name)
         if last is not None and t0 - last < record_success_every_s:

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.user import User
 from app.models.league import League, DraftStatus
 from app.models.team import Team
@@ -555,6 +556,119 @@ async def get_ai_usage(
     return {
         "total": total, "last_24h": last_24h,
         "by_endpoint": by_endpoint, "by_league": by_league, "by_user": by_user,
+    }
+
+
+@router.get("/ai-cost")
+async def get_ai_cost(
+    days: int = Query(14, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Estimated AI spend from the model/token/cost fields ai_cost_service
+    records per call (see AIUsageEvent). Estimates only -- priced from
+    settings.AI_MODEL_PRICING, not the provider's invoice. Rows from
+    before cost tracking existed have no cost and are excluded from sums
+    (but still counted as calls)."""
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    since_24h = now - timedelta(hours=24)
+    cost = func.coalesce(func.sum(AIUsageEvent.cost_usd), 0.0)
+
+    totals = (await db.execute(
+        select(
+            func.count(AIUsageEvent.id), cost,
+            func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
+            func.coalesce(func.sum(AIUsageEvent.output_tokens), 0),
+        ).where(AIUsageEvent.created_at >= since)
+    )).one()
+    spent_24h = float((await db.execute(select(cost).where(AIUsageEvent.created_at >= since_24h))).scalar() or 0.0)
+    errors_24h = (await db.execute(
+        select(func.count(AIUsageEvent.id)).where(AIUsageEvent.created_at >= since_24h, AIUsageEvent.error.isnot(None))
+    )).scalar() or 0
+    capped_24h = (await db.execute(
+        select(func.count(AIUsageEvent.id)).where(AIUsageEvent.created_at >= since_24h, AIUsageEvent.error == "daily_spend_cap")
+    )).scalar() or 0
+    unpriced = (await db.execute(
+        select(func.count(AIUsageEvent.id)).where(
+            AIUsageEvent.created_at >= since, AIUsageEvent.model.isnot(None), AIUsageEvent.cost_usd.is_(None),
+            AIUsageEvent.error.is_(None),
+        )
+    )).scalar() or 0
+
+    # date() on a timestamptz is UTC on Railway's Postgres (server TZ) and
+    # on SQLite's stored UTC strings -- days are UTC days.
+    day = func.date(AIUsageEvent.created_at)
+    daily_rows = (await db.execute(
+        select(day, func.count(AIUsageEvent.id), cost,
+               func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
+               func.coalesce(func.sum(AIUsageEvent.output_tokens), 0))
+        .where(AIUsageEvent.created_at >= since)
+        .group_by(day).order_by(day)
+    )).all()
+    daily = [
+        {"date": str(d), "calls": n, "cost_usd": round(float(c), 6), "input_tokens": int(i), "output_tokens": int(o)}
+        for d, n, c, i, o in daily_rows
+    ]
+
+    user_rows = (await db.execute(
+        select(AIUsageEvent.user_id, func.count(AIUsageEvent.id), cost)
+        .where(AIUsageEvent.created_at >= since, AIUsageEvent.user_id.isnot(None))
+        .group_by(AIUsageEvent.user_id)
+        .order_by(cost.desc(), func.count(AIUsageEvent.id).desc())
+        .limit(10)
+    )).all()
+    names: dict[str, str] = {}
+    if user_rows:
+        names = dict((await db.execute(
+            select(User.id, User.username).where(User.id.in_([u for u, _, _ in user_rows]))
+        )).all())
+    top_users = [
+        {"user_id": uid, "username": names.get(uid, "(deleted user)"), "calls": n, "cost_usd": round(float(c), 6)}
+        for uid, n, c in user_rows
+    ]
+
+    feature_rows = (await db.execute(
+        select(AIUsageEvent.endpoint, func.count(AIUsageEvent.id), cost)
+        .where(AIUsageEvent.created_at >= since)
+        .group_by(AIUsageEvent.endpoint)
+        .order_by(cost.desc(), func.count(AIUsageEvent.id).desc())
+    )).all()
+    by_feature = [{"endpoint": e, "calls": n, "cost_usd": round(float(c), 6)} for e, n, c in feature_rows]
+
+    model_rows = (await db.execute(
+        select(AIUsageEvent.model, func.count(AIUsageEvent.id), cost,
+               func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
+               func.coalesce(func.sum(AIUsageEvent.output_tokens), 0))
+        .where(AIUsageEvent.created_at >= since, AIUsageEvent.model.isnot(None))
+        .group_by(AIUsageEvent.model).order_by(cost.desc())
+    )).all()
+    by_model = [
+        {"model": m, "calls": n, "cost_usd": round(float(c), 6), "input_tokens": int(i), "output_tokens": int(o)}
+        for m, n, c, i, o in model_rows
+    ]
+
+    cap = settings.AI_DAILY_SPEND_CAP_USD
+    return {
+        "days": days,
+        "calls": totals[0],
+        "cost_usd": round(float(totals[1]), 6),
+        "input_tokens": int(totals[2]),
+        "output_tokens": int(totals[3]),
+        "cost_24h_usd": round(spent_24h, 6),
+        "errors_24h": errors_24h,
+        "unpriced_calls": unpriced,
+        "spend_cap": {
+            "cap_usd": cap,
+            "spent_24h_usd": round(spent_24h, 6),
+            "reached": cap is not None and spent_24h >= cap,
+            "blocked_calls_24h": capped_24h,
+        },
+        "daily": daily,
+        "top_users": top_users,
+        "by_feature": by_feature,
+        "by_model": by_model,
+        "pricing": settings.AI_MODEL_PRICING,
     }
 
 
