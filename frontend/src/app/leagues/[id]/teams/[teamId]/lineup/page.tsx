@@ -1,5 +1,6 @@
 "use client";
 
+import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -68,7 +69,7 @@ function PlayerRow({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-sm font-medium text-white truncate">{player.full_name}</span>
+          <PlayerLink id={player.id} className="text-sm font-medium text-white truncate">{player.full_name}</PlayerLink>
           <PositionBadge pos={player.position} />
           {player.injury_status && (
             <span className="text-[10px] font-semibold text-red-400">{player.injury_status}</span>

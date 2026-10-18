@@ -1,5 +1,6 @@
 "use client";
 
+import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -514,7 +515,7 @@ export default function TeamPage() {
                   {rosterByPos[pos].map((p) => (
                     <div key={p.id} className="flex items-center gap-2 py-1.5 border-b border-surface-800/50">
                       <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
-                      <span className="text-sm text-white truncate flex-1">{p.full_name}</span>
+                      <PlayerLink id={p.id} className="text-sm text-white truncate flex-1">{p.full_name}</PlayerLink>
                       {p.season_points != null && (
                         <span className="text-[10px] text-gold-400/80 font-semibold">
                           {Math.round(p.season_points * 10) / 10}

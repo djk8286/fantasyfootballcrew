@@ -1,5 +1,6 @@
 "use client";
 
+import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { Search, Loader2, Trophy } from "lucide-react";
 import { playersApi } from "@/lib/api-client";
@@ -263,7 +264,7 @@ export default function PlayersPage() {
                     onMouseLeave={() => handleHover(null, null)}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white truncate">{hp.full_name}</span>
+                      <PlayerLink id={p.id} className="text-sm font-semibold text-white truncate">{hp.full_name}</PlayerLink>
                       <PositionBadge pos={p.position} />
                     </div>
                     <div className="flex items-center gap-3 text-xs text-surface-500 mt-0.5">

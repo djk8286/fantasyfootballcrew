@@ -1,5 +1,6 @@
 "use client";
 
+import PlayerLink from "@/components/PlayerLink";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -531,9 +532,9 @@ export default function WaiversPage() {
                     size="sm"
                     onHover={handlePlayerHover as unknown as PlayerHoverHandler}
                   />
-                  <span className="text-sm text-white truncate flex-1">
+                  <PlayerLink id={p.id} className="text-sm text-white truncate flex-1">
                     {p.first_name} {p.last_name}
-                  </span>
+                  </PlayerLink>
                   {p.injury_status && (
                     <span className="text-[9px] text-red-400 uppercase shrink-0">{p.injury_status}</span>
                   )}

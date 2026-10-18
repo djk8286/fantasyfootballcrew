@@ -5,6 +5,7 @@
 // (TeamRosters.tsx's desktop single-team panel, MobileDraftRoom.tsx's
 // roster tab, and now the mobile board view/BoardRosterCards.tsx) rather
 // than let a fourth copy drift out of sync with the other three.
+import PlayerLink from "@/components/PlayerLink";
 import { Star } from "lucide-react";
 import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -80,7 +81,7 @@ export default function TeamRosterCard({
                 >
                   <span className="text-surface-500 text-[10px] font-mono w-4 shrink-0">{p.pick_number}</span>
                   {p.player && <PlayerAvatar player={p.player as unknown as HoverPlayer} size="sm" onHover={onPlayerHover} />}
-                  <span className="text-sm text-white truncate flex-1">{p.player?.full_name}</span>
+                  <PlayerLink id={p.player?.id} className="text-sm text-white truncate flex-1">{p.player?.full_name}</PlayerLink>
                   <PositionBadge pos={p.player?.position || ""} />
                   <span className="text-[10px] text-surface-500 shrink-0">{p.player?.team}</span>
                 </div>

@@ -4,6 +4,10 @@ from sqlalchemy import select, or_
 from app.core.database import get_db
 from app.models.player import Player
 from app.models.league import League
+from app.models.team import Team
+from app.models.user import User
+from app.api.deps import get_current_user_optional
+from app.services import espn_news_service
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import build_rank_by_id, get_rank_score
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats, effective_season_stats
@@ -211,3 +215,75 @@ async def get_player(player_id: str, league_id: str = None, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Player not found")
     scoring_config = await _get_scoring_config(league_id, db)
     return _serialize_player(player, scoring_config)
+
+
+@router.get("/{player_id}/detail")
+async def get_player_detail(
+    player_id: str,
+    league_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Everything the /players/[id] page shows, in one public read:
+    the normal player payload (bio, Sleeper headshot, status, season
+    stats), season + per-week fantasy points (league_id's scoring if
+    given, else DEFAULT_SCORING), Sleeper's per-game projection if
+    synced, and the last 30 days of real news (player_news). Only for a
+    logged-in viewer, `rostered_by` lists which teams in the viewer's
+    own leagues roster this player -- None (not []) when logged out, so
+    the UI can tell "not logged in" from "nobody has him"."""
+    result = await db.execute(select(Player).where(Player.id == player_id))
+    player = result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    scoring_config = (await _get_scoring_config(league_id, db)) or DEFAULT_SCORING
+    data = _serialize_player(player, scoring_config)
+    data["number"] = player.number
+    data["scoring"] = "league" if league_id else "default"
+
+    weekly = []
+    if player.stats_year and player.week_stats:
+        for wk, wstats in sorted(player.week_stats.items(), key=lambda kv: int(kv[0])):
+            if not wstats:
+                continue
+            weekly.append({
+                "week": int(wk),
+                "points": round(calculate_player_score(wstats, scoring_config, player.position), 2),
+            })
+    data["weekly_points"] = weekly
+    data["weekly_points_year"] = player.stats_year if weekly else None
+    data["projected_week"] = player.projected_week
+    data["projected_year"] = player.projected_year
+
+    recent = await espn_news_service.recent_news_for_players([player.id], db, days=30, limit=10)
+    data["news"] = [espn_news_service.serialize(n, p) for n, p in recent]
+
+    data["rostered_by"] = None
+    if current_user is not None:
+        my_teams = await db.execute(
+            select(Team.league_id).where((Team.owner_id == current_user.id) | (Team.co_owner_id == current_user.id))
+        )
+        league_ids = {lid for (lid,) in my_teams.all()}
+        # Commissioner / co-commissioner leagues count too (co_commissioner_ids
+        # is a JSON list, so that membership check happens in Python).
+        for lid, commish_id, co_ids in (await db.execute(
+            select(League.id, League.commissioner_id, League.co_commissioner_ids)
+        )).all():
+            if commish_id == current_user.id or current_user.id in (co_ids or []):
+                league_ids.add(lid)
+        rostered = []
+        if league_ids:
+            rows = await db.execute(
+                select(Team, League.name).join(League, League.id == Team.league_id).where(
+                    Team.league_id.in_(league_ids), League.is_mock == False  # noqa: E712
+                )
+            )
+            for team, league_name in rows.all():
+                if player.id in (team.roster or []):
+                    rostered.append({
+                        "team_id": team.id, "team_name": team.name,
+                        "league_id": team.league_id, "league_name": league_name,
+                        "is_mine": current_user.id in {team.owner_id, team.co_owner_id},
+                    })
+        data["rostered_by"] = rostered
+    return data
