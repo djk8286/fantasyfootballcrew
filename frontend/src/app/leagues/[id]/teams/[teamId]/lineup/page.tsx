@@ -138,18 +138,31 @@ export default function LineupPage() {
   // else -- including logged-out visitors -- gets a read-only view.
   const [canEdit, setCanEdit] = useState(false);
   const [weekReady, setWeekReady] = useState(false);
+  const [seasonNotStarted, setSeasonNotStarted] = useState(false);
+  const [notice, setNotice] = useState("");
 
   // Default to the current NFL week (same source Standings uses) instead
   // of always opening on Week 1.
+  // Respect the LEAGUE's state, not just the NFL calendar: a league whose
+  // draft hasn't finished hasn't played a game yet, so it opens on Week 1
+  // with a "season not started" note instead of the live NFL week (QA
+  // round 2: a brand-new league showed "Week 6").
   useEffect(() => {
-    nflApi
-      .getCurrentWeek()
-      .then((s) => {
-        if (s?.week) setWeek(Math.min(18, Math.max(1, s.week)));
+    Promise.all([
+      nflApi.getCurrentWeek().catch(() => null),
+      leaguesApi.get(leagueId).catch(() => null),
+    ])
+      .then(([s, l]) => {
+        const draftStatus = (l as { draft_status?: string } | null)?.draft_status;
+        if (draftStatus && draftStatus !== "completed") {
+          setSeasonNotStarted(true);
+          setWeek(1);
+        } else if (s?.week) {
+          setWeek(Math.min(18, Math.max(1, s.week)));
+        }
       })
-      .catch(() => {})
       .finally(() => setWeekReady(true));
-  }, []);
+  }, [leagueId]);
 
   const load = useCallback(() => {
     if (!weekReady) return;
@@ -201,11 +214,27 @@ export default function LineupPage() {
     setSaved(false);
   };
 
+  const INACTIVE = ["out", "ir", "pup", "sus", "suspended", "na"];
   const handleSave = async () => {
+    const inactiveStarters = (data?.roster || []).filter(
+      (p) => starterIds.has(p.id) && p.injury_status && INACTIVE.includes(p.injury_status.toLowerCase())
+    );
+    if (
+      inactiveStarters.length > 0 &&
+      !window.confirm(
+        `${inactiveStarters.map((p) => `${p.full_name} (${p.injury_status})`).join(", ")} ${
+          inactiveStarters.length === 1 ? "is" : "are"
+        } listed as inactive and may score 0. Start anyway?`
+      )
+    ) {
+      return;
+    }
     setSaving(true);
     setError("");
+    setNotice("");
     try {
-      await lineupsApi.set(teamId, week, year, Array.from(starterIds));
+      const res = (await lineupsApi.set(teamId, week, year, Array.from(starterIds))) as { warnings?: string[] };
+      if (res?.warnings?.length) setNotice(res.warnings.join(" "));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       load();
@@ -220,8 +249,16 @@ export default function LineupPage() {
     setOptimizing(true);
     setError("");
     try {
-      const result = await lineupsApi.optimize(teamId, week, year) as { starters: string[] };
+      setNotice("");
+      const result = await lineupsApi.optimize(teamId, week, year) as { starters: string[]; skipped_inactive?: string[] };
       setStarterIds(new Set(result.starters));
+      if (result.starters.length === 0) {
+        setError("No eligible players to start -- draft or add players first.");
+      } else {
+        const skipped = result.skipped_inactive?.length ? ` Skipped inactive: ${result.skipped_inactive.join(", ")}.` : "";
+        setNotice(`Auto-filled and saved ${result.starters.length} starter${result.starters.length === 1 ? "" : "s"}.${skipped}`);
+        setData((d) => (d ? { ...d, has_lineup_set: true, starters: result.starters } : d));
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to auto-fill lineup");
     } finally {
@@ -296,6 +333,17 @@ export default function LineupPage() {
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
             {error}
+          </div>
+        )}
+
+        {notice && (
+          <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm" role="status">
+            {notice}
+          </div>
+        )}
+        {seasonNotStarted && (
+          <div className="mb-4 p-3 bg-surface-800 border border-surface-700 rounded-xl text-surface-300 text-sm">
+            Season not started -- this league&apos;s draft isn&apos;t complete yet. Lineups below are for Week 1.
           </div>
         )}
 

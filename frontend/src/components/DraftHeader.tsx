@@ -43,6 +43,9 @@ interface DraftHeaderProps {
   onSetTimer: (seconds: number) => void;
   onToggleTimerSettings: () => void;
   onRunMock: () => void;
+  onAutoPickAll?: () => void;
+  isPaused?: boolean;
+  onTogglePause?: () => void;
   // Desktop-only draft train (xl:block below) -- mobile already has its
   // own, in MobileDraftRoom, so these are unused/harmless on small screens.
   teamOrder: string[];
@@ -72,6 +75,9 @@ export default function DraftHeader({
   actionLoading,
   onViewModeChange,
   onSetTimer,
+  onAutoPickAll,
+  isPaused = false,
+  onTogglePause,
   onToggleTimerSettings,
   onRunMock,
   teamOrder,
@@ -214,6 +220,7 @@ export default function DraftHeader({
             {!isCompleted && (
               <button
                 onClick={onRunMock}
+                title="CPU teams pick instantly until it's your turn"
                 disabled={actionLoading === "mock"}
                 className="inline-flex items-center gap-1.5 bg-surface-800 hover:bg-surface-700 border border-surface-700 text-surface-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
               >
@@ -222,7 +229,27 @@ export default function DraftHeader({
                 ) : (
                   <Sparkles className="w-3.5 h-3.5" />
                 )}
-                Auto-Fill
+                Sim to My Pick
+              </button>
+            )}
+            {!isCompleted && onAutoPickAll && (
+              <button
+                onClick={onAutoPickAll}
+                disabled={actionLoading === "mock-all"}
+                title="Auto-draft every remaining pick, including yours"
+                className="inline-flex items-center gap-1.5 bg-surface-800 hover:bg-surface-700 border border-surface-700 text-surface-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+              >
+                {actionLoading === "mock-all" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                Auto-Pick All
+              </button>
+            )}
+            {!isCompleted && onTogglePause && (
+              <button
+                onClick={onTogglePause}
+                disabled={actionLoading === "pause"}
+                className="inline-flex items-center gap-1.5 bg-surface-800 hover:bg-surface-700 border border-surface-700 text-surface-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+              >
+                {isPaused ? "Resume Draft" : "Pause Draft"}
               </button>
             )}
           </div>

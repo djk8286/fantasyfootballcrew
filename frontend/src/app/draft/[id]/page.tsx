@@ -152,6 +152,7 @@ interface DraftState {
     total_picks: number;
     timer_seconds: number;
     current_pick_started_at: string | null;
+    is_paused?: boolean;
   };
   picks: DraftPick[];
   current_team_id: string | null;
@@ -353,11 +354,6 @@ export default function DraftPage() {
   // them). See draft_manager.get_draft_state -- the actual fix is
   // caching that computation, not just polling less; this is the fast,
   // safe stopgap for the live draft in progress.
-  useEffect(() => {
-    if (!draft || draft.draft.status !== "in_progress") return;
-    const interval = setInterval(fetchState, 5000);
-    return () => clearInterval(interval);
-  }, [draft?.draft.status, fetchState]);
 
   const handleStartDraft = async () => {
     setActionLoading("start");
@@ -378,10 +374,38 @@ export default function DraftPage() {
       // the mock draft would auto-pick for the manager's second team
       // even though they're the human managing it too.
       const skipIds = Array.from(myTeamIds);
-      await draftsApi.runMock(id, skipIds.length > 0 ? skipIds : undefined);
+      if (draft?.current_team_id && myTeamIds.has(draft.current_team_id)) {
+        setError("You're on the clock — make your pick first.");
+      } else {
+        await draftsApi.runMock(id, skipIds.length > 0 ? skipIds : undefined);
+      }
       await fetchState();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Mock draft failed");
+    }
+    setActionLoading("");
+  };
+
+  const handleAutoPickAll = async () => {
+    if (!window.confirm("Auto-draft every remaining pick, including your own?")) return;
+    setActionLoading("mock-all");
+    try {
+      await draftsApi.runMock(id);
+      await fetchState();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Auto-pick failed");
+    }
+    setActionLoading("");
+  };
+
+  const handleTogglePause = async () => {
+    setActionLoading("pause");
+    try {
+      if (draft?.draft.is_paused) await draftsApi.resume(id);
+      else await draftsApi.pause(id);
+      await fetchState();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Couldn't change pause state");
     }
     setActionLoading("");
   };
@@ -425,40 +449,25 @@ export default function DraftPage() {
     return ids;
   }, [myTeamId, draft?.teams]);
 
+  useEffect(() => {
+    if (!draft || draft.draft.status !== "in_progress") return;
+    // Poll fast while CPUs are on the clock (server picks every ~1s);
+    // relax while a human is deciding.
+    const cpuOnClock = !!draft.current_team_id && !myTeamIds.has(draft.current_team_id);
+    const interval = setInterval(fetchState, cpuOnClock ? 1200 : 4000);
+    return () => clearInterval(interval);
+  }, [draft?.draft.status, draft?.current_team_id, myTeamIds, fetchState]);
+
   const isUserOnClock = (): boolean => {
     if (!draft || !draft.current_team_id) return false;
     return myTeamIds.has(draft.current_team_id);
   };
 
-  // CPU auto-pick: sequential, no racing
-  const doCpuPick = useCallback(async () => {
-    if (!draft || draft.draft.status !== "in_progress") return;
-    if (!draft.current_team_id) return;
-    if (isUserOnClock()) return;
-    if (cpuingRef.current) return;
-
-    cpuingRef.current = true;
-    setCpuingPick(true);
-    try {
-      await draftsApi.autoPick(id);
-      await fetchState();
-    } catch {
-      // draft may be complete
-    } finally {
-      cpuingRef.current = false;
-      setCpuingPick(false);
-    }
-  }, [draft, id]);
-
-  // Trigger CPU auto-pick when it's a CPU team's turn
-  useEffect(() => {
-    if (!draft || draft.draft.status !== "in_progress") return;
-    if (!draft.current_team_id) return;
-    if (isUserOnClock()) return;
-
-    const timer = setTimeout(() => doCpuPick(), 600);
-    return () => clearTimeout(timer);
-  }, [draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, draft?.draft?.current_round, doCpuPick]);
+  // CPU picks are made server-side by the draft watchdog
+  // (scheduler._process_expired_draft_picks_once, ~1s cadence, delay =
+  // CPU_PICK_DELAY_S) so the draft advances even with no tab open. The old
+  // client-fired /auto-pick (600ms after each 5s poll, rate-limited) is what
+  // made CPU picks take ~20s each.
 
   // Auto-pick when the user's own timer expires. Previously driven by
   // watching the page-level ticking `timeLeft` state cross to 0 (removed
@@ -669,7 +678,7 @@ export default function DraftPage() {
                 {actionLoading === "mock" ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Running...</>
                 ) : (
-                  <><Sparkles className="w-5 h-5" /> Auto-Fill CPUs</>
+                  <><Sparkles className="w-5 h-5" /> Sim CPU Picks</>
                 )}
               </button>
             </div>
@@ -805,6 +814,9 @@ export default function DraftPage() {
         onSetTimer={handleSetTimer}
         onToggleTimerSettings={() => setShowTimerSettings(!showTimerSettings)}
         onRunMock={handleRunMock}
+        onAutoPickAll={handleAutoPickAll}
+        isPaused={!!draftInfo.is_paused}
+        onTogglePause={handleTogglePause}
         teamOrder={team_order}
         teams={draft?.teams || {}}
         currentTeamId={draft?.current_team_id || null}

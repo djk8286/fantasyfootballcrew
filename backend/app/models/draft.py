@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, Integer, Enum, DateTime, func, ForeignKey, Index, text
+from sqlalchemy import Boolean, false, String, Integer, Enum, DateTime, func, ForeignKey, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -50,6 +50,9 @@ class Draft(Base):
     team_order: Mapped[str | None] = mapped_column(String, nullable=True)  # JSON string of team IDs in draft order
     timer_seconds: Mapped[int] = mapped_column(Integer, default=60)  # Countdown timer per pick (0 = no timer)
     current_pick_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Commissioner pause (QA round 2): no picks (human, CPU or timer-forced)
+    # while set; resuming restarts the current pick's clock.
+    is_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

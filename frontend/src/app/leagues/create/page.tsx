@@ -41,7 +41,7 @@ function CreateLeagueForm() {
     league_type: "standard",
     max_teams: 12,
     draft_type: "snake",
-    visibility: "open",
+    visibility: "private", // QA round 2: default to private; opt in to public listing
     team_name: "",
   });
   const [loading, setLoading] = useState(false);

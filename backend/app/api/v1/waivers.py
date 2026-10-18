@@ -181,7 +181,27 @@ async def list_claims(
     query = query.order_by(Transaction.processed_at.asc())
 
     result = await db.execute(query)
-    return result.scalars().all()
+    claims = result.scalars().all()
+    # Resolve player names server-side in one query (QA round 2 #5): the
+    # page used to fetch /players/{id} once per id and fell back to showing
+    # the raw UUID whenever one of those calls failed or was slow.
+    ids = {pid for c in claims for pid in ((c.details or {}).get("add_player_id"),
+                                           (c.details or {}).get("drop_player_id")) if pid}
+    names: dict[str, str] = {}
+    if ids:
+        pres = await db.execute(select(Player.id, Player.first_name, Player.last_name).where(Player.id.in_(ids)))
+        names = {pid: f"{fn or ''} {ln or ''}".strip() for pid, fn, ln in pres.all()}
+    out = []
+    for c in claims:
+        row = {col.key: getattr(c, col.key) for col in Transaction.__mapper__.column_attrs}
+        details = dict(c.details or {})
+        if details.get("add_player_id"):
+            details["add_player_name"] = names.get(details["add_player_id"])
+        if details.get("drop_player_id"):
+            details["drop_player_name"] = names.get(details["drop_player_id"])
+        row["details"] = details
+        out.append(row)
+    return out
 
 
 @router.delete("/claims/{claim_id}")

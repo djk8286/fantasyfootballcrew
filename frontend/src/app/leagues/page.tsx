@@ -1,5 +1,7 @@
 "use client";
 
+import { leagueLabel } from "@/lib/league-label";
+
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { leaguesApi, LeagueListFilters, isLoggedIn } from "@/lib/api-client";
@@ -9,6 +11,7 @@ import { LeagueTypeBadge, VisibilityBadge, OpenSpotsBadge } from "@/components/L
 interface League {
   id: string;
   name: string;
+  created_at?: string | null;
   league_type: string;
   max_teams: number;
   team_count: number | null;
@@ -120,7 +123,7 @@ export default function LeaguesBrowsePage() {
               >
                 <div className="min-w-0">
                   <h3 className="text-sm font-bold text-white group-hover:text-gold-400 transition-colors truncate">
-                    {league.name}
+                    {leagueLabel(league, myLeagues)}
                   </h3>
                   <div className="flex items-center gap-2 mt-1">
                     <LeagueTypeBadge leagueType={league.league_type} />

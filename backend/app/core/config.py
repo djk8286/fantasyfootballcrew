@@ -14,6 +14,10 @@ class Settings(BaseSettings):
         "https://fantasyfootballcrew.com",
         "https://www.fantasyfootballcrew.com",
     ]
+    # Seconds a CPU (or ownerless) team waits on the clock before the
+    # server-side draft watchdog picks for it. Small but non-zero so a
+    # human watching can follow the board (QA round 2: was ~20s/pick).
+    CPU_PICK_DELAY_S: float = 1.0
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
     OPENAI_API_KEY: Optional[str] = None

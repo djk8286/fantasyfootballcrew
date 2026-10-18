@@ -1,5 +1,7 @@
 "use client";
 
+import Toast, { useToast } from "@/components/Toast";
+
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -28,6 +30,9 @@ interface TradeItem {
     target_team_id?: string;
     offered_player_ids?: string[];
     requested_player_ids?: string[];
+    cpu_response?: "accepted" | "rejected";
+    cpu_reason?: string;
+    cancelled_by_proposer?: boolean;
   };
   processed_at: string;
 }
@@ -49,6 +54,8 @@ export default function TradesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingId, setCancellingId] = useState("");
+  const { toast, showToast, clearToast } = useToast();
 
   const [targetTeamId, setTargetTeamId] = useState("");
   const [offeredIds, setOfferedIds] = useState<string[]>([]);
@@ -119,12 +126,20 @@ export default function TradesPage() {
     setError("");
     setSubmitting(true);
     try {
-      await tradesApi.propose(leagueId, {
+      const created = (await tradesApi.propose(leagueId, {
         team_id: myTeam.id,
         target_team_id: targetTeamId,
         offered_player_ids: offeredIds,
         requested_player_ids: requestedIds,
-      });
+      })) as TradeItem;
+      const cpu = created?.details?.cpu_response;
+      showToast(
+        cpu === "accepted"
+          ? `${targetTeam?.name || "CPU"} accepted -- awaiting commissioner approval.`
+          : cpu === "rejected"
+            ? `${targetTeam?.name || "CPU"} declined the trade.`
+            : "Trade proposed -- sent for review.",
+      );
       setOfferedIds([]);
       setRequestedIds([]);
       setTargetTeamId("");
@@ -133,6 +148,20 @@ export default function TradesPage() {
       setError(err instanceof Error ? err.message : "Failed to propose trade");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCancel = async (tradeId: string) => {
+    setCancellingId(tradeId);
+    setError("");
+    try {
+      await tradesApi.cancel(leagueId, tradeId);
+      showToast("Trade cancelled.");
+      await loadTrades();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel trade");
+    } finally {
+      setCancellingId("");
     }
   };
 
@@ -146,6 +175,7 @@ export default function TradesPage() {
 
   return (
     <div className="min-h-screen bg-surface-900">
+      <Toast message={toast} onDone={clearToast} />
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
           <Link href={`/leagues/${leagueId}`} className="text-surface-400 hover:text-white transition-colors">
@@ -298,9 +328,25 @@ export default function TradesPage() {
                           statusColor[t.status] || statusColor.pending
                         }`}
                       >
-                        {t.status}
+                        {t.details?.cancelled_by_proposer ? "cancelled" : t.status}
                       </span>
                     </div>
+                    {t.details?.cpu_reason && (
+                      <p className="text-xs text-surface-300">
+                        {t.details.cpu_reason}
+                        {t.status === "pending" && t.details.cpu_response === "accepted" ? " Awaiting commissioner approval." : ""}
+                      </p>
+                    )}
+                    {t.status === "pending" && myTeam && t.team_id === myTeam.id && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancel(t.id)}
+                        disabled={cancellingId === t.id}
+                        className="self-start text-xs font-semibold text-red-400 hover:text-red-300 disabled:opacity-50"
+                      >
+                        {cancellingId === t.id ? "Cancelling..." : "Cancel trade"}
+                      </button>
+                    )}
                     <p className="text-xs text-surface-400">
                       Offered: {(t.details?.offered_player_ids || []).map(playerLabel).join(", ") || "—"}
                     </p>

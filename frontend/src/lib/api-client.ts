@@ -451,6 +451,10 @@ export const draftsApi = {
       method: "POST",
       body: { skip_team_ids: skipTeamIds || [] },
     }),
+  pause: (draftId: string) =>
+    apiRequest(`/api/v1/drafts/${draftId}/pause`, { method: "POST" }),
+  resume: (draftId: string) =>
+    apiRequest(`/api/v1/drafts/${draftId}/resume`, { method: "POST" }),
   autoPick: (draftId: string) =>
     apiRequest(`/api/v1/drafts/${draftId}/auto-pick`, { method: "POST" }),
   setTimer: (draftId: string, timerSeconds: number) =>
@@ -726,6 +730,8 @@ export const tradesApi = {
     const qs = teamId ? `?team_id=${teamId}` : "";
     return apiRequest(`/api/v1/leagues/${leagueId}/trades${qs}`);
   },
+  cancel: (leagueId: string, tradeId: string) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/trades/${tradeId}/cancel`, { method: "POST" }),
 };
 
 // Waivers

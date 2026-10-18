@@ -17,6 +17,13 @@ from app.services.best_ball_service import get_best_ball_settings
 
 router = APIRouter(prefix="/teams", tags=["lineups"])
 
+# Sleeper injury designations that mean "won't play this week".
+INACTIVE_STATUSES = {"out", "ir", "pup", "sus", "suspended", "na"}
+
+
+def _is_inactive(player: Player) -> bool:
+    return bool(player.injury_status) and player.injury_status.strip().lower() in INACTIVE_STATUSES
+
 
 async def _get_team_league_or_404(team_id: str, db: AsyncSession) -> tuple[Team, League]:
     result = await db.execute(select(Team).where(Team.id == team_id))
@@ -160,7 +167,16 @@ async def set_lineup(
     else:
         db.add(Lineup(team_id=team_id, week=week, year=year, starters=starters))
     await db.commit()
-    return {"status": "ok", "starters": starters}
+    # Starting an inactive player is allowed (the manager may know
+    # something the feed doesn't) but flagged -- QA round 2 #4.
+    warnings = []
+    if starters:
+        res = await db.execute(select(Player).where(Player.id.in_(starters)))
+        warnings = [
+            f"{p.first_name} {p.last_name} is listed {p.injury_status} and may not play."
+            for p in res.scalars().all() if _is_inactive(p)
+        ]
+    return {"status": "ok", "starters": starters, "warnings": warnings}
 
 
 @router.post("/{team_id}/lineup/optimize")
@@ -192,6 +208,9 @@ async def optimize_lineup(
     scoring_config = league.scoring_config or {}
 
     roster = await _resolve_roster(team, db)
+    # Auto-fill never starts a player who's ruled out.
+    skipped_inactive = [f"{p.first_name} {p.last_name}" for p in roster if _is_inactive(p)]
+    roster = [p for p in roster if not _is_inactive(p)]
     roster_for_optimizer = {}
     for p in roster:
         stats, _ = effective_season_stats(p)
@@ -224,4 +243,5 @@ async def optimize_lineup(
     else:
         db.add(Lineup(team_id=team_id, week=week, year=year, starters=starters))
     await db.commit()
-    return {"status": "ok", "starters": starters, "optimal_score": result["optimal_score"]}
+    return {"status": "ok", "starters": starters, "optimal_score": result["optimal_score"],
+            "skipped_inactive": skipped_inactive}

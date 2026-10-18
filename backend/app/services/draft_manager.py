@@ -281,6 +281,8 @@ async def make_pick(
         raise ValueError("Draft not found")
     if draft.status != DraftRunStatus.IN_PROGRESS:
         raise ValueError("Draft is not in progress")
+    if draft.is_paused:
+        raise ValueError("Draft is paused by the commissioner")
 
     team_order = json.loads(draft.team_order)
 
@@ -643,6 +645,7 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
             "num_teams": num_teams,
             "total_picks": num_teams * draft.total_rounds,
             "timer_seconds": draft.timer_seconds,
+            "is_paused": bool(draft.is_paused),
             "current_pick_started_at": (
                 draft.current_pick_started_at.isoformat() if draft.current_pick_started_at.tzinfo
                 else draft.current_pick_started_at.isoformat() + "+00:00"
