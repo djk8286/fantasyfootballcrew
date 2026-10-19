@@ -40,7 +40,7 @@ import httpx
 from sqlalchemy import select
 from app.core.database import async_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, rebuild_season_stats_from_weeks, SLEEPER_API
-from app.services.standings_service import calculate_week, notify_matchup_results
+from app.services.standings_service import calculate_week, notify_matchup_results, repair_default_lineup_scores
 from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
@@ -470,6 +470,14 @@ async def _repair_season_stats_once() -> None:
     print(f"[scheduler] Rebuilt season stats from weekly data for {fixed} player(s)")
 
 
+async def _repair_default_lineups_once() -> None:
+    async with async_session() as db:
+        changes = await repair_default_lineup_scores(db)
+    for c in changes:
+        print(f"[scheduler] Default-lineup repair: league {c['league_id']} {c['year']} wk {c['week']} team {c['team_id']}: {c['old_total']} -> {c['new_total']}")
+    print(f"[scheduler] Default-lineup repair re-scored {len(changes)} team-week(s)")
+
+
 async def _refresh_espn_news_once() -> None:
     async with async_session() as db:
         stats = await espn_news_service.refresh_player_news(db)
@@ -646,6 +654,14 @@ async def run_scheduler() -> None:
         await run_job("repair_season_stats", _repair_season_stats_once)
     except Exception as e:
         print(f"[scheduler] Season stats repair failed: {e}")
+
+    # One-time re-score of weeks where a team with no saved lineup scored
+    # its whole roster -- idempotent (skips rows already marked with a
+    # lineup_source), so harmless on every later deploy.
+    try:
+        await run_job("repair_default_lineups", _repair_default_lineups_once)
+    except Exception as e:
+        print(f"[scheduler] Default-lineup repair failed: {e}")
 
     while True:
         try:

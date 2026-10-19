@@ -38,6 +38,10 @@ interface LineupResponse {
   roster_slots: Record<string, number>;
   best_ball: boolean;
   has_lineup_set: boolean;
+  // Who scores this week if no lineup is saved: the best eligible player
+  // for each roster slot (backend default_lineup.py). Empty when a
+  // lineup is saved or the league is best-ball.
+  default_starters?: string[];
   starters: string[];
   roster: RosterPlayer[];
 }
@@ -189,7 +193,7 @@ export default function LineupPage() {
         }
         const d = lineupData as LineupResponse;
         setData(d);
-        setStarterIds(new Set(d.starters));
+        setStarterIds(new Set(d.has_lineup_set ? d.starters : d.default_starters || []));
         if (teamData) setTeamName((teamData as { name?: string }).name || "");
       })
       .finally(() => setLoading(false));
@@ -355,8 +359,9 @@ export default function LineupPage() {
         ) : (
           data && !data.has_lineup_set && (
             <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 text-sm">
-              No lineup set for week {week} yet -- this team is currently scoring its whole roster.
-              Set starters below and save to switch to starter-only scoring for this week.
+              No lineup saved for week {week}. Until you save one, this team scores the default lineup
+              shown below: the best available player for each slot, skipping byes and players ruled out.
+              Change it and save to make it yours.
             </div>
           )
         )}

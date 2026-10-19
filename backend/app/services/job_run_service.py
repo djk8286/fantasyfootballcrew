@@ -48,6 +48,7 @@ JOBS: dict[str, JobSpec] = {
     "team_recaps": JobSpec("Weekly team recaps (AI)", None),
     "dashboard_summaries": JobSpec("Dashboard AI summaries check", 15 * 60),
     "repair_season_stats": JobSpec("Season stats repair (startup)", None),
+    "repair_default_lineups": JobSpec("Default-lineup score repair (startup)", None),
     "espn_news": JobSpec("ESPN player news fetch", 9 * 60 * 60),
     "team_news": JobSpec("Per-team player news check", 15 * 60),
     "sync_players": JobSpec("Sleeper player metadata sync", 3 * 60 * 60),

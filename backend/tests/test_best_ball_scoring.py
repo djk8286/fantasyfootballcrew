@@ -168,10 +168,10 @@ async def test_existing_lineup_row_ignored_for_best_ball(db_session_factory):
 
 
 @pytest.mark.asyncio
-async def test_non_best_ball_league_scores_whole_roster_unaffected(db_session_factory):
-    """Regression pin: a league with best_ball disabled must be
-    byte-for-byte the pre-existing "no Lineup row -> score the WHOLE
-    roster" behavior, with no auto_lineup/auto_starters key at all."""
+async def test_non_best_ball_league_scores_default_lineup_not_whole_roster(db_session_factory):
+    """A league with best_ball disabled and no saved Lineup scores a legal
+    default lineup (default_lineup.py), never the whole roster, and never
+    gets best-ball's auto_lineup/auto_starters keys."""
     league_id, team_id, sleeper_stats, players_by_label = await _make_scored_roster_league(
         db_session_factory, best_ball_enabled=False
     )
@@ -180,7 +180,12 @@ async def test_non_best_ball_league_scores_whole_roster_unaffected(db_session_fa
         await calculate_week(league_id, WEEK, YEAR, db, sleeper_stats=sleeper_stats)
 
     score = await _score_for(db_session_factory, league_id, team_id)
-    assert score.total_score == sum(pts for _, _, pts in ROSTER_SPEC)
+    starters = score.lineup_data["default_starters"]
+    assert score.lineup_data["lineup_source"] == "default"
+    assert len(starters) == sum(DEFAULT_ROSTER_SLOTS.values())
+    pts_by_id = {p.id: sleeper_stats[p.sleeper_id]["pts"] for p in players_by_label.values()}
+    assert score.total_score == sum(pts_by_id[pid] for pid in starters)
+    assert score.total_score < sum(pts for _, _, pts in ROSTER_SPEC)
     assert "auto_lineup" not in score.lineup_data
     assert "auto_starters" not in score.lineup_data
 

@@ -14,15 +14,17 @@ from app.api.deps import get_current_user, require_team_or_league_access
 from app.services.scoring_engine import calculate_player_score, calculate_optimal_lineup, DEFAULT_ROSTER_SLOTS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.best_ball_service import get_best_ball_settings
+from app.services.default_lineup import (
+    candidate_from_player,
+    choose_default_starters,
+    is_inactive_status,
+)
+from app.services.standings_service import week_schedule_state
 
 router = APIRouter(prefix="/teams", tags=["lineups"])
 
-# Sleeper injury designations that mean "won't play this week".
-INACTIVE_STATUSES = {"out", "ir", "pup", "sus", "suspended", "na"}
-
-
 def _is_inactive(player: Player) -> bool:
-    return bool(player.injury_status) and player.injury_status.strip().lower() in INACTIVE_STATUSES
+    return is_inactive_status(player.injury_status)
 
 
 async def _get_team_league_or_404(team_id: str, db: AsyncSession) -> tuple[Team, League]:
@@ -73,10 +75,9 @@ async def get_lineup(
 ):
     """A team's roster for (week, year), each player flagged is_starter or
     not. No Lineup row for this (team, week, year) yet -- has_lineup_set:
-    false, every player comes back as bench (not "started as a mistake") --
-    the frontend/scoring both treat "never touched this" as "score the
-    whole roster" (see standings_service.calculate_week), not as an empty
-    lineup, so this endpoint's shape shouldn't imply otherwise.
+    false, every player comes back as bench, and default_starters lists
+    the default lineup calculate_week will score instead (the frozen one
+    from that week's WeeklyScore once the week has started).
 
     Best-Ball (Phase 6): there is no manual starter selection at all in
     this mode -- starters come from that week's WeeklyScore.lineup_data
@@ -108,6 +109,25 @@ async def get_lineup(
         has_lineup_set = lineup is not None
 
     roster = await _resolve_roster(team, db)
+    default_starters: list[str] = []
+    if not is_best_ball and not has_lineup_set:
+        teams_playing, week_started = await week_schedule_state(year, week, db)
+        ws_result = await db.execute(
+            select(WeeklyScore).where(
+                WeeklyScore.team_id == team_id, WeeklyScore.week == week, WeeklyScore.year == year,
+            )
+        )
+        ws = ws_result.scalar_one_or_none()
+        frozen = (ws.lineup_data or {}).get("default_starters") if ws and (ws.lineup_data or {}).get("lineup_source") == "default" else None
+        if week_started and frozen is not None:
+            roster_ids = {p.id for p in roster}
+            default_starters = [pid for pid in frozen if pid in roster_ids]
+        else:
+            default_starters = choose_default_starters(
+                [candidate_from_player(p, week, year) for p in roster],
+                roster_slots, scoring_config,
+                teams_playing=teams_playing, exclude_inactive=not week_started,
+            )
     return {
         "team_id": team_id,
         "week": week,
@@ -115,6 +135,7 @@ async def get_lineup(
         "roster_slots": roster_slots,
         "best_ball": is_best_ball,
         "has_lineup_set": has_lineup_set,
+        "default_starters": default_starters,
         "starters": sorted(starter_ids),
         "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config) for p in roster],
     }

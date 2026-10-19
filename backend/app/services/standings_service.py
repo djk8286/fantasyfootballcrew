@@ -4,6 +4,7 @@ Standings Service
 Handles weekly scoring calculation, standings computation,
 and head-to-head matchup pairing for fantasy football leagues.
 """
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sql_func
@@ -20,6 +21,13 @@ from app.services.sleeper_sync import fetch_weekly_stats
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
 from app.services.best_ball_service import get_best_ball_settings
+from app.services.default_lineup import (
+    Candidate,
+    candidate_from_player,
+    choose_default_starters,
+    league_roster_slots,
+)
+from app.services.nfl_schedule_service import get_week_games
 
 
 async def _weekly_adjustment_totals(team_ids: List[str], week: int, year: int, db: AsyncSession) -> Dict[str, float]:
@@ -251,6 +259,28 @@ def _effective_matchups(league: Optional[League], teams: List[Team], week: int) 
     return matchups
 
 
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def week_schedule_state(year: int, week: int, db: AsyncSession) -> Tuple[Optional[set], bool]:
+    """(teams_playing, week_started) for a regular-season NFL week.
+
+    teams_playing is None when no games are synced for the week, so
+    nobody is treated as on bye. week_started is True once any game has
+    kicked off, or when the schedule isn't known at all (then a default
+    lineup is frozen the first time it's computed)."""
+    games = await get_week_games(year, week, 2, db)
+    if not games:
+        return None, True
+    teams_playing = {g.home_team for g in games} | {g.away_team for g in games}
+    now = datetime.now(timezone.utc)
+    started = any(
+        g.completed or g.status_state != "pre" or _as_utc(g.kickoff_at) <= now for g in games
+    )
+    return teams_playing, started
+
+
 async def calculate_week(
     league_id: str,
     week: int,
@@ -270,8 +300,12 @@ async def calculate_week(
     exactly.
 
     For each team:
-    1. Reads its starters for this week (Lineup, if the team ever set one --
-       otherwise its whole Team.roster, unchanged from before Lineup existed)
+    1. Reads its starters for this week: its saved Lineup if it has one,
+       otherwise a legal default lineup built from the league's roster
+       slots (see default_lineup.py). Until the week's first kickoff the
+       default is recomputed each run (so it can react to injury news);
+       after that it's frozen in lineup_data["default_starters"], and a
+       CPU team's default is also saved as its Lineup row.
     2. Looks up player positions from the Player model
     3. Gets weekly stats (Sleeper API or Player.week_stats)
     4. Uses scoring_engine.calculate_player_score() for each player
@@ -321,16 +355,29 @@ async def calculate_week(
             all_player_ids.update(team.roster)
 
     # A team with a saved Lineup for this exact (week, year) only scores
-    # its chosen starters; a team that's never touched the lineup feature
-    # scores its whole roster, same as before this existed -- see Lineup's
-    # own docstring for why "no row" must mean "score everything", not
-    # "score nothing". team.roster still filters which starters are even
+    # its chosen starters; a team without one scores a default lineup
+    # (never the whole roster -- that let CPU teams count 15 players
+    # against a human's 9). team.roster still filters which starters are
     # valid (a stale Lineup naming a since-dropped player shouldn't score).
     team_ids = [t.id for t in teams]
     lineups_result = await db.execute(
         select(Lineup).where(Lineup.team_id.in_(team_ids), Lineup.week == week, Lineup.year == year)
     )
     starters_by_team: Dict[str, list] = {lu.team_id: (lu.starters or []) for lu in lineups_result.scalars().all()}
+
+    # Existing rows for this week: the upsert below needs them, and a
+    # frozen default lineup is read back from them.
+    existing_result = await db.execute(
+        select(WeeklyScore).where(
+            WeeklyScore.league_id == league_id,
+            WeeklyScore.team_id.in_(team_ids),
+            WeeklyScore.week == week,
+            WeeklyScore.year == year,
+        )
+    )
+    existing_by_team = {ws.team_id: ws for ws in existing_result.scalars().all()}
+    teams_playing, week_started = (None, True) if is_best_ball else await week_schedule_state(year, week, db)
+    roster_slots_cfg = league_roster_slots(league)
 
     # Batch load player data ONCE for the whole league -- position,
     # sleeper_id mapping (both directions), and the full row itself (so
@@ -385,6 +432,7 @@ async def calculate_week(
     for team in teams:
         full_roster = set(team.roster or [])
         auto_starter_ids: Optional[list] = None
+        default_starter_ids: Optional[list] = None
         if is_best_ball:
             # Best-Ball: start with the whole roster -- the optimizer
             # below picks the real starters once that week's actual
@@ -398,9 +446,28 @@ async def calculate_week(
             # naming a player who's since been dropped/traded away).
             roster_ids = [pid for pid in starters_by_team[team.id] if pid in full_roster]
         else:
-            roster_ids = team.roster or []
+            prior = existing_by_team.get(team.id)
+            prior_data = (prior.lineup_data or {}) if prior else {}
+            frozen = prior_data.get("default_starters") if prior_data.get("lineup_source") == "default" else None
+            if week_started and frozen is not None:
+                default_starter_ids = [pid for pid in frozen if pid in full_roster]
+            else:
+                candidates = [
+                    candidate_from_player(players_by_id[pid], week, year)
+                    for pid in sorted(full_roster) if pid in players_by_id
+                ]
+                default_starter_ids = choose_default_starters(
+                    candidates, roster_slots_cfg, scoring_config,
+                    teams_playing=teams_playing,
+                    exclude_inactive=not week_started,
+                )
+            roster_ids = default_starter_ids
+            if team.is_cpu and week_started:
+                # CPU teams keep a real saved lineup from here on, same as
+                # a manager who set one.
+                db.add(Lineup(team_id=team.id, week=week, year=year, starters=list(default_starter_ids)))
 
-        if not roster_ids:
+        if not full_roster:
             # Empty roster — score is 0
             total_score = 0.0
             lineup_data = {"total": 0.0, "breakdown": {}}
@@ -471,11 +538,8 @@ async def calculate_week(
             # Bench players (2026-09-10) -- real per-week score, same
             # calculate_player_score call as starters, just never added
             # to total_score. "what am I sitting" is only useful if it's
-            # this week's actual number, not last season's. Only a real
-            # distinction when a Lineup was actually set (roster_ids is a
-            # strict subset of full_roster then) -- a team that's never
-            # touched the lineup feature scores (and now shows) its whole
-            # roster as "started", matching the no-Lineup precedent above.
+            # this week's actual number, not last season's. Everyone not
+            # in roster_ids (saved, default or best-ball starters) is bench.
             for pid in full_roster - set(roster_ids):
                 stats = week_stats.get(pid, {})
                 position = player_positions.get(pid, "UNKNOWN")
@@ -496,6 +560,17 @@ async def calculate_week(
                 # recomputed fresh from real per-week stats every call.
                 lineup_data["auto_lineup"] = True
                 lineup_data["auto_starters"] = auto_starter_ids
+
+        # Which path picked the starters. Also the marker the one-time
+        # repair_default_lineup_scores pass uses to skip rows already
+        # scored under these rules.
+        if is_best_ball:
+            lineup_data["lineup_source"] = "best_ball"
+        elif default_starter_ids is not None:
+            lineup_data["lineup_source"] = "default"
+            lineup_data["default_starters"] = list(default_starter_ids)
+        else:
+            lineup_data["lineup_source"] = "saved"
 
         coach_bonus = flat_weekly_bonuses.get(team.id, 0.0)
         if coach_bonus:
@@ -550,18 +625,6 @@ async def calculate_week(
     # this), instead of one query per winning team.
     win_bonuses = await _coach_bonus_sums(list(winners), "win_bonus", db)
 
-    # Batched existing-row lookup for the upsert below -- one query for
-    # every team's (league_id, week, year) WeeklyScore instead of one
-    # query per team.
-    existing_result = await db.execute(
-        select(WeeklyScore).where(
-            WeeklyScore.league_id == league_id,
-            WeeklyScore.team_id.in_(team_ids),
-            WeeklyScore.week == week,
-            WeeklyScore.year == year,
-        )
-    )
-    existing_by_team = {ws.team_id: ws for ws in existing_result.scalars().all()}
 
     results = []
     for team in teams:
@@ -1004,3 +1067,143 @@ async def notify_matchup_results(league_id: str, week: int, year: int, db: Async
         )
 
     await db.commit()
+
+
+async def repair_default_lineup_scores(db: AsyncSession) -> List[Dict[str, Any]]:
+    """One-time, idempotent fix for weeks scored under the old rule where a
+    team with no saved Lineup scored its whole roster.
+
+    Works only from data already stored: each WeeklyScore's own
+    lineup_data.breakdown holds every rostered player's score for that
+    week as it was scored, so no stats are refetched and later roster
+    moves don't leak into old weeks. For each affected team it picks the
+    same default lineup calculate_week now uses (ranked by stats from
+    earlier weeks only, bye weeks skipped when that week's NFL schedule
+    is synced; no injury filter, since a player's status back then isn't
+    known), re-totals starters only, keeps the stored flat coach bonus
+    and commissioner adjustment, then re-decides that week's winners and
+    win/rivalry bonuses.
+
+    Rows already carrying lineup_data["lineup_source"] are skipped, so
+    this is safe on every startup. Guillotine leagues are left as they
+    were (eliminations were already decided from those scores) and only
+    marked. Playoff brackets that were already generated aren't
+    re-seeded. Returns one entry per team whose total changed."""
+    rows_result = await db.execute(select(WeeklyScore))
+    pending_groups: Dict[Tuple[str, int, int], bool] = {}
+    for ws in rows_result.scalars().all():
+        if not (ws.lineup_data or {}).get("lineup_source"):
+            pending_groups[(ws.league_id, ws.week, ws.year)] = True
+
+    changes: List[Dict[str, Any]] = []
+    for league_id, week, year in sorted(pending_groups):
+        league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
+        group_rows = (await db.execute(
+            select(WeeklyScore).where(
+                WeeklyScore.league_id == league_id, WeeklyScore.week == week, WeeklyScore.year == year,
+            )
+        )).scalars().all()
+        if league is None:
+            continue
+
+        def _mark(ws: WeeklyScore, source: str) -> None:
+            ws.lineup_data = {**(ws.lineup_data or {}), "lineup_source": source}
+
+        if get_best_ball_settings(league)["enabled"]:
+            for ws in group_rows:
+                if not (ws.lineup_data or {}).get("lineup_source"):
+                    _mark(ws, "best_ball")
+            await db.commit()
+            continue
+        if league.league_type == LeagueType.GUILLOTINE:
+            for ws in group_rows:
+                if not (ws.lineup_data or {}).get("lineup_source"):
+                    _mark(ws, "legacy_unrepaired")
+            await db.commit()
+            continue
+
+        teams = (await db.execute(select(Team).where(Team.league_id == league_id))).scalars().all()
+        saved_team_ids = {
+            lu.team_id for lu in (await db.execute(
+                select(Lineup).where(Lineup.team_id.in_([t.id for t in teams]), Lineup.week == week, Lineup.year == year)
+            )).scalars().all()
+        }
+        scoring_config = league.scoring_config or {}
+        roster_slots_cfg = league_roster_slots(league)
+        teams_playing, _ = await week_schedule_state(year, week, db)
+
+        bases: Dict[str, float] = {}
+        new_data: Dict[str, Dict[str, Any]] = {}
+        old_totals: Dict[str, float] = {}
+        for ws in group_rows:
+            data = dict(ws.lineup_data or {})
+            old_totals[ws.team_id] = ws.total_score or 0.0
+            stored_bonus = float(data.get("win_bonus") or 0.0) + float(data.get("rivalry_bonus") or 0.0)
+            needs_default = not data.get("lineup_source") and ws.team_id not in saved_team_ids
+            if not needs_default:
+                if not data.get("lineup_source"):
+                    data["lineup_source"] = "saved"
+                bases[ws.team_id] = round((ws.total_score or 0.0) - stored_bonus, 2)
+                new_data[ws.team_id] = data
+                continue
+
+            breakdown = {pid: dict(entry) for pid, entry in (data.get("breakdown") or {}).items()}
+            players = {
+                p.id: p for p in (await db.execute(select(Player).where(Player.id.in_(list(breakdown))))).scalars().all()
+            } if breakdown else {}
+            candidates = []
+            for pid in sorted(breakdown):
+                if pid in players:
+                    candidates.append(candidate_from_player(players[pid], week, year))
+                else:
+                    candidates.append(Candidate(player_id=pid, position=breakdown[pid].get("position", "UNKNOWN")))
+            starters = choose_default_starters(
+                candidates, roster_slots_cfg, scoring_config, teams_playing=teams_playing, exclude_inactive=False,
+            )
+            starter_set = set(starters)
+            starters_total = 0.0
+            for pid, entry in breakdown.items():
+                entry["is_bench"] = pid not in starter_set
+                if pid in starter_set:
+                    starters_total += float(entry.get("score") or 0.0)
+            base = round(starters_total + float(data.get("coach_bonus") or 0.0) + float(data.get("commissioner_adjustment") or 0.0), 2)
+            data.update({"breakdown": breakdown, "lineup_source": "default", "default_starters": starters, "repaired_from_whole_roster": True})
+            bases[ws.team_id] = base
+            new_data[ws.team_id] = data
+
+        winners: set = set()
+        for a, b in _effective_matchups(league, teams, week):
+            if a in bases and b in bases:
+                if bases[a] > bases[b]:
+                    winners.add(a)
+                elif bases[b] > bases[a]:
+                    winners.add(b)
+        old_rows = {ws.team_id: dict(ws.lineup_data or {}) for ws in group_rows}
+        new_winners = [t for t in winners if not old_rows.get(t, {}).get("win_bonus")]
+        current_win_bonus = await _coach_bonus_sums(new_winners, "win_bonus", db) if new_winners else {}
+        rivalry = get_rivalry_week_settings(league)
+        rivalry_active = league.league_type == LeagueType.CONFERENCE and rivalry["enabled"] and rivalry["week"] == week
+
+        for ws in group_rows:
+            data = new_data[ws.team_id]
+            total = bases[ws.team_id]
+            data.pop("win_bonus", None)
+            data.pop("rivalry_bonus", None)
+            if ws.team_id in winners:
+                win_bonus = float(old_rows[ws.team_id].get("win_bonus") or current_win_bonus.get(ws.team_id, 0.0) or 0.0)
+                if win_bonus:
+                    total = round(total + win_bonus, 2)
+                    data["win_bonus"] = win_bonus
+                if rivalry_active and rivalry["bonus_value"]:
+                    total = round(total + rivalry["bonus_value"], 2)
+                    data["rivalry_bonus"] = rivalry["bonus_value"]
+            data["total"] = total
+            ws.lineup_data = data
+            if round(old_totals[ws.team_id], 2) != total:
+                changes.append({
+                    "league_id": league_id, "week": week, "year": year, "team_id": ws.team_id,
+                    "old_total": round(old_totals[ws.team_id], 2), "new_total": total,
+                })
+            ws.total_score = total
+        await db.commit()
+    return changes
