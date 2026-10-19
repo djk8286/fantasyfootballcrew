@@ -14,10 +14,11 @@ class Lineup(Base):
     owner ahead of that week's games; standings_service.calculate_week
     reads it to know which of the team's roster to actually score.
 
-    No row here for a given (team, week, year) means "never touched the
-    lineup feature" -- calculate_week falls back to scoring the whole
-    roster in that case, not zero, so nobody's score silently disappears
-    just because they didn't engage with this."""
+    No row here for a given (team, week, year) means no lineup was saved.
+    calculate_week then scores a legal default lineup built from the
+    league's roster slots (see services/default_lineup.py), never the
+    whole roster and never zero. CPU teams get that default saved as a
+    row here once the week's first game kicks off."""
     __tablename__ = "lineups"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))

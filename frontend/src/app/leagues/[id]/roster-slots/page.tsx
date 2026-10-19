@@ -183,11 +183,10 @@ export default function RosterSlotsPage() {
         )}
 
         <p className="text-surface-400 text-sm mb-6">
-          How many starters at each position. Everyone on a team&apos;s roster
-          beyond these counts is bench -- roster players still count toward
-          nothing until a lineup names them a starter for that week, except
-          for teams that never set a lineup at all, which still score their
-          whole roster (nothing changes for anyone who doesn&apos;t use this).
+          How many starters at each position. Only starters score. A team
+          that doesn&apos;t save a lineup for a week (including every CPU team)
+          scores a default lineup: the best available player for each of
+          these slots.
         </p>
 
         {slots && (
