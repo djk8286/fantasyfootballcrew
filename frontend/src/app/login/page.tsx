@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { authApi, friendlyErrorMessage } from "@/lib/api-client";
+import { authApi, friendlyErrorMessage, setSession } from "@/lib/api-client";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
 
 function LoginForm() {
@@ -36,11 +36,10 @@ function LoginForm() {
 
     try {
       const result = await authApi.login(email, password);
-      const data = result as { access_token?: string; user?: { id: string; email?: string } };
-      if (data.access_token) {
-        localStorage.setItem("ffc_token", data.access_token);
-        localStorage.setItem("ffc_user_id", data.user?.id || "");
-      }
+      const data = result as { user?: { id: string; email?: string } };
+      // The server set the HttpOnly session cookies; keep only the
+      // non-secret user-id hint client-side.
+      if (data.user?.id) setSession(data.user.id);
       router.push(next);
     } catch (err: unknown) {
       setError(

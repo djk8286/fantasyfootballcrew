@@ -1,6 +1,6 @@
 import secrets
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.config import settings
@@ -10,9 +10,10 @@ from app.models.user import User
 from app.models.password_reset_token import PasswordResetToken
 from app.models.email_verification_token import EmailVerificationToken
 from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest, VerifyEmailRequest
-from app.services.auth_service import hash_password, verify_password, needs_rehash, create_access_token, hash_token
+from app.services.auth_service import hash_password, verify_password, needs_rehash, hash_token
 from app.services.email_service import send_password_reset_email, send_verification_email
 from app.api.deps import get_current_user
+from app.services import session_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -80,7 +81,7 @@ async def _create_and_send_verification_email(user: User, db: AsyncSession) -> N
 
 @router.post("/login")
 @limiter.limit("10/minute")
-async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(request: Request, response: Response, login_data: UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == login_data.email))
     user = result.scalar_one_or_none()
     if not user or not user.hashed_password:
@@ -102,8 +103,55 @@ async def login(request: Request, login_data: UserLogin, db: AsyncSession = Depe
         user.hashed_password = hash_password(login_data.password)
         await db.commit()
 
-    token = create_access_token({"sub": user.id, "email": user.email, "token_version": user.token_version})
+    # Sets the HttpOnly ffc_access/ffc_refresh cookies (the real session).
+    # access_token stays in the body for ONE transitional release so a
+    # browser tab still running the previous (localStorage) bundle keeps
+    # working until it reloads; the current frontend ignores it. Remove
+    # in the follow-up that drops Bearer support.
+    token = await session_service.start_session(db, user, response)
     return {"access_token": token, "token_type": "bearer", "user": UserRead.model_validate(user)}
+
+
+@router.post("/refresh")
+@limiter.limit("60/minute")
+async def refresh(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """Rotate the refresh cookie and mint a new access cookie. Any failure
+    clears both cookies and 401s; reuse of a rotated token (outside the
+    multi-tab grace window) also revokes that whole session family."""
+    try:
+        user = await session_service.rotate(db, request.cookies.get(session_service.REFRESH_COOKIE), response)
+    except session_service.RefreshError as e:
+        if e.reason == "race":
+            # Benign: another tab already rotated; the browser now holds
+            # the new cookie, so the client should just retry once.
+            raise HTTPException(status_code=401, detail="Refresh superseded")
+        fail = Response(status_code=401, content='{"detail":"Session expired"}', media_type="application/json")
+        session_service.clear_auth_cookies(fail)
+        return fail
+    return {"user": UserRead.model_validate(user)}
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """Revoke this browser's refresh-token family and clear cookies.
+    Idempotent; works even when the access cookie already expired."""
+    await session_service.revoke_by_raw(db, request.cookies.get(session_service.REFRESH_COOKIE))
+    session_service.clear_auth_cookies(response)
+    return {"ok": True}
+
+
+@router.post("/session")
+@limiter.limit("20/minute")
+async def upgrade_bearer_to_cookie_session(
+    request: Request, response: Response,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Transitional, silent migration: a browser that still holds a valid
+    legacy localStorage JWT POSTs it here once as a Bearer header and gets
+    cookie session in exchange (same token_version checks as any request).
+    The frontend then deletes the localStorage token. Remove next release."""
+    await session_service.start_session(db, current_user, response)
+    return {"user": UserRead.model_validate(current_user)}
 
 
 # Deliberately tight limit -- this is the endpoint that emails/logs a

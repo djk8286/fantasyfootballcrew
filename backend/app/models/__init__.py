@@ -32,9 +32,11 @@ from app.models.team_player_news import TeamPlayerNews
 from app.models.player_news import PlayerNews
 from app.models.job_run import JobRun
 from app.models.admin_audit_log import AdminAuditLog
+from app.models.refresh_token import RefreshToken
 from app.models.golf import GolfTournament, Golfer, GolfFieldEntry, GolfPick, GolfTeamEventResult
 
 __all__ = [
+    "RefreshToken",
     "JobRun",
     "GolfTournament", "Golfer", "GolfFieldEntry", "GolfPick", "GolfTeamEventResult",
     "PlayerNews",

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
@@ -52,6 +52,7 @@ async def update_me(
 @limiter.limit("5/hour")
 async def change_password(
     request: Request,
+    response: Response,
     data: ChangePasswordRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -69,6 +70,12 @@ async def change_password(
     # token no longer survives a password change. See User.token_version.
     current_user.token_version += 1
     await db.commit()
+    # Every other session is now dead; keep THIS browser signed in with a
+    # fresh cookie session at the new token_version. Only for cookie
+    # sessions -- a legacy Bearer caller doesn't get cookies it never had.
+    if not request.headers.get("authorization"):
+        from app.services import session_service
+        await session_service.start_session(db, current_user, response)
     return {"message": "Password updated."}
 
 

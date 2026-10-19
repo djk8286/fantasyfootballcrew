@@ -24,7 +24,7 @@ def _tables(conn):
 
 def test_golf_migration_round_trip(tmp_path):
     db = tmp_path / "golf.db"
-    _alembic(db, "upgrade", "b3d5f7a9c1e2")
+    _alembic(db, "upgrade", "c4e6a8b0d2f3")
     conn = sqlite3.connect(db)
     conn.execute("INSERT INTO users (id, email, username, provider, token_version, email_verified, is_admin, is_suspended) "
                  "VALUES ('u1', 'a@b.c', 'u', 'email', 0, 1, 0, 0)")
@@ -44,10 +44,12 @@ def test_golf_migration_round_trip(tmp_path):
     assert conn.execute("SELECT is_amateur, typeof(is_amateur) FROM golfers").fetchone() == (0, "integer")
     conn.close()
 
-    _alembic(db, "downgrade", "b3d5f7a9c1e2")
+    _alembic(db, "downgrade", "c4e6a8b0d2f3")
     conn = sqlite3.connect(db)
     assert not (set(GOLF_TABLES) & _tables(conn))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(leagues)")}
     assert "sport" not in cols
     assert conn.execute("SELECT name FROM leagues WHERE id='l1'").fetchone()[0] == "Existing"
+    # Downgrading golf must leave its parent (cookie-auth refresh_tokens) intact.
+    assert "refresh_tokens" in _tables(conn)
     conn.close()

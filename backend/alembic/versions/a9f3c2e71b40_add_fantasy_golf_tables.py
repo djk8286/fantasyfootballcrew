@@ -1,7 +1,7 @@
 """add fantasy golf tables and leagues.sport
 
 Revision ID: a9f3c2e71b40
-Revises: b3d5f7a9c1e2
+Revises: c4e6a8b0d2f3
 Create Date: 2026-10-18 23:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = 'a9f3c2e71b40'
-down_revision: Union[str, Sequence[str], None] = 'b3d5f7a9c1e2'
+down_revision: Union[str, Sequence[str], None] = 'c4e6a8b0d2f3'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

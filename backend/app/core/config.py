@@ -19,9 +19,23 @@ class Settings(BaseSettings):
     # human watching can follow the board (QA round 2: was ~20s/pick).
     CPU_PICK_DELAY_S: float = 1.0
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
-    # Access-token lifetime. Was a hard-coded 30 days; shortened per the
-    # 2026-10 security audit. Follow-up: refresh token + HttpOnly cookie.
-    ACCESS_TOKEN_EXPIRE_DAYS: float = 7
+    # Cookie auth (see app/services/session_service.py): short-lived
+    # access JWT + rotating refresh token, both HttpOnly cookies.
+    ACCESS_TOKEN_EXPIRE_MINUTES: float = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: float = 30
+    # Seconds after a rotation during which re-presenting the old refresh
+    # token is treated as a benign multi-tab race (401, no family revoke)
+    # instead of token theft.
+    REFRESH_REUSE_GRACE_S: float = 30
+    # None = Secure cookies only in production (local http dev still works).
+    COOKIE_SECURE: Optional[bool] = None
+    # Shared with the Next.js /api proxy (frontend/src/proxy.ts, Vercel env
+    # API_PROXY_SECRET). Only requests carrying it may supply the visitor
+    # IP via X-FFC-Client-IP for rate limiting. Unset = header ignored.
+    PROXY_SHARED_SECRET: Optional[str] = None
+    # Extra origins allowed to make cookie-authenticated mutations, on top
+    # of CORS_ORIGINS and FRONTEND_URL (CSRF origin check, app/core/csrf.py).
+    CSRF_TRUSTED_ORIGINS: List[str] = []
     # Proxy hops we trust to append to X-Forwarded-For (see
     # app/core/limiter.py). Railway's internal edge uses RFC 6598 space.
     TRUSTED_PROXY_CIDRS: List[str] = ["100.64.0.0/10", "10.0.0.0/8", "127.0.0.0/8", "::1/128"]
