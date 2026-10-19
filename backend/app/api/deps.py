@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -13,15 +13,28 @@ from app.services.auth_service import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+ACCESS_COOKIE = "ffc_access"
+
+
+def _request_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str | None:
+    """Access token from the HttpOnly ``ffc_access`` cookie (primary), or
+    an ``Authorization: Bearer`` header (transitional -- pre-cookie
+    clients and API/test callers; slated for removal after one release)."""
+    if credentials is not None:
+        return credentials.credentials
+    return request.cookies.get(ACCESS_COOKIE) or None
+
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if credentials is None:
+    token = _request_token(request, credentials)
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     if not payload or "sub" not in payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
@@ -47,13 +60,15 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User | None:
     """Like get_current_user, but returns None instead of raising when no/invalid token is given."""
-    if credentials is None:
+    token = _request_token(request, credentials)
+    if token is None:
         return None
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     if not payload or "sub" not in payload:
         return None
     result = await db.execute(select(User).where(User.id == payload["sub"]))

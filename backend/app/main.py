@@ -10,6 +10,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.config import settings
 from app.core.database import engine
 from app.core.limiter import limiter
+from app.core.csrf import CSRFOriginMiddleware
 from app.core.sentry import init_sentry
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.services.scheduler import run_scheduler, run_draft_timer_watchdog
@@ -87,6 +88,10 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+# Origin check for cookie-authenticated mutations -- see app/core/csrf.py.
+# Inside CORS/security headers so its 403s still carry those headers.
+app.add_middleware(CSRFOriginMiddleware)
 
 # CORS
 app.add_middleware(

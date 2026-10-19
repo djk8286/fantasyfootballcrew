@@ -1,5 +1,7 @@
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "";
+// Always same-origin: /api/* is proxied to the backend by src/proxy.ts,
+// so the HttpOnly auth cookies are first-party. (NEXT_PUBLIC_API_URL is no
+// longer used for API calls; it only feeds the CSP in next.config.ts.)
+const API_BASE_URL = "";
 
 interface ApiOptions {
   method?: string;
@@ -7,16 +9,18 @@ interface ApiOptions {
   headers?: Record<string, string>;
 }
 
-function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("ffc_token");
-}
+// Auth lives in HttpOnly cookies the page can't read. The only thing kept
+// client-side is a NON-secret hint -- the logged-in user's id -- so the
+// many synchronous isLoggedIn()/isCurrentUser() UI checks keep working.
+// The server is the source of truth: syncSession() validates the hint
+// against /auth/me on app load, and any request that 401s after one
+// refresh attempt clears it.
+const USER_HINT_KEY = "ffc_user_id";
+const LEGACY_TOKEN_KEY = "ffc_token";
 
 export function getCurrentUserId(): string | null {
   if (typeof window === "undefined") return null;
-  // No token means logged out, even if a stale ffc_user_id is still around.
-  if (!localStorage.getItem("ffc_token")) return null;
-  return localStorage.getItem("ffc_user_id") || null;
+  return localStorage.getItem(USER_HINT_KEY) || null;
 }
 
 /** True only when a user is logged in AND `id` is that user's id.
@@ -30,13 +34,107 @@ export function isCurrentUser(id: string | null | undefined): boolean {
 }
 
 export function isLoggedIn(): boolean {
-  return getToken() !== null;
+  return getCurrentUserId() !== null;
 }
 
-export function logout(): void {
+/** Record a successful login (cookies were already set by the server). */
+export function setSession(userId: string): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("ffc_token");
-  localStorage.removeItem("ffc_user_id");
+  localStorage.setItem(USER_HINT_KEY, userId);
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
+}
+
+function clearSessionHint(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(USER_HINT_KEY);
+}
+
+/** Clear local state immediately and revoke the server session (refresh
+ * token family + cookies). Returns the server call's promise for callers
+ * that want to wait before navigating. */
+export function logout(): Promise<void> {
+  clearSessionHint();
+  if (typeof window !== "undefined") localStorage.removeItem(LEGACY_TOKEN_KEY);
+  if (typeof window === "undefined") return Promise.resolve();
+  return fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+    keepalive: true,
+  })
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+// Single-flight refresh: concurrent 401s share one /auth/refresh call.
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    })
+      // 401 "Refresh superseded" = another tab rotated the refresh token a
+      // moment ago; the shared cookie jar already has the new one, so a
+      // retry will succeed.
+      .then(async (r) => r.ok || (r.status === 401 && (await r.text().catch(() => "")).includes("superseded")))
+      .catch(() => false)
+      .finally(() => {
+        // Let a later expiry trigger a new refresh.
+        setTimeout(() => {
+          refreshInFlight = null;
+        }, 0);
+      });
+  }
+  return refreshInFlight;
+}
+
+let sessionSynced: Promise<void> | null = null;
+
+/** Run once per page load (Header calls it): silently upgrade a legacy
+ * localStorage JWT to a cookie session, then reconcile the logged-in hint
+ * with the server via /auth/me. Never redirects. */
+export function syncSession(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (sessionSynced) return sessionSynced;
+  sessionSynced = (async () => {
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+    if (legacy) {
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/v1/auth/session`, {
+          method: "POST",
+          credentials: "include",
+          headers: { Authorization: `Bearer ${legacy}` },
+        });
+        if (r.ok) {
+          const data = (await r.json()) as { user?: { id?: string } };
+          if (data.user?.id) localStorage.setItem(USER_HINT_KEY, data.user.id);
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
+        } else if (r.status === 401 || r.status === 403) {
+          // Token is dead (expired/revoked/suspended): drop it.
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
+        }
+        // Anything else (404 while the backend deploy lags the frontend,
+        // 5xx, 429): keep the token and retry on the next page load.
+      } catch {
+        // Network hiccup: keep the token, retry next load.
+      }
+    }
+    const me = async () => fetch(`${API_BASE_URL}/api/v1/auth/me`, { credentials: "include" });
+    try {
+      let r = await me();
+      if (r.status === 401 && (await refreshSession())) r = await me();
+      if (r.ok) {
+        const user = (await r.json()) as { id?: string };
+        if (user.id) localStorage.setItem(USER_HINT_KEY, user.id);
+      } else if ((r.status === 401 || r.status === 403) && !localStorage.getItem(LEGACY_TOKEN_KEY)) {
+        clearSessionHint();
+      }
+    } catch {
+      // Offline: keep the hint; the next real request will sort it out.
+    }
+  })();
+  return sessionSynced;
 }
 
 // "Which team is mine" is per-league, keyed by league_id, in the same
@@ -135,16 +233,21 @@ export function friendlyErrorMessage(
   return fallback;
 }
 
+const NO_REFRESH_ENDPOINTS = ["/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/refresh", "/api/v1/auth/logout"];
+
 async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
   const { method = "GET", body, headers = {} } = options;
 
-  const token = getToken();
-
+  // Transitional: a not-yet-migrated legacy token (syncSession couldn't
+  // upgrade it yet, e.g. the backend deploy is lagging this frontend) is
+  // still sent as Bearer so the user isn't bounced. Removed next release.
+  const legacy = typeof window !== "undefined" ? localStorage.getItem(LEGACY_TOKEN_KEY) : null;
   const config: RequestInit = {
     method,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(legacy ? { Authorization: `Bearer ${legacy}` } : {}),
       ...headers,
     },
   };
@@ -155,29 +258,32 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
 
   const url = `${API_BASE_URL}${endpoint}`;
   console.debug("[FFC] Fetch:", url, { method });
-  let response;
-  try {
-    response = await fetch(url, config);
-  } catch (e) {
-    throw new Error(`Failed to fetch ${url} — ${e instanceof Error ? e.message : "network error"}`);
-  }
-  if (!response.ok) {
-    // A 401 on a request that DID carry a token means the token itself is
-    // the problem -- expired (tokens are valid 30 days, see
-    // create_access_token) or otherwise invalid, not just "this particular
-    // action needs auth." Without this, isLoggedIn() keeps saying true
-    // forever (it only checks whether a token exists in localStorage, not
-    // whether it still works) and every request just quietly 401s instead
-    // of the user ever actually being logged out. A 401 with NO token
-    // attached is a normal auth failure for an anonymous/login action
-    // (e.g. a wrong password on /login) -- leave that to the caller, which
-    // already handles it, rather than hijacking it into a redirect loop.
-    if (response.status === 401 && token) {
-      logout();
+  const doFetch = async () => {
+    try {
+      return await fetch(url, config);
+    } catch (e) {
+      throw new Error(`Failed to fetch ${url} — ${e instanceof Error ? e.message : "network error"}`);
+    }
+  };
+  let response = await doFetch();
+  // The ~15-minute access cookie expired (or is missing but a refresh
+  // cookie may still exist): refresh once and retry. Login/register/etc.
+  // 401s are real answers (e.g. wrong password) and are left to callers.
+  if (response.status === 401 && isLoggedIn() && !NO_REFRESH_ENDPOINTS.includes(endpoint)) {
+    if (await refreshSession()) {
+      response = await doFetch();
+    }
+    if (response.status === 401 && isLoggedIn()) {
+      // Session really is gone (expired refresh, force-logout, password
+      // change elsewhere): drop the hint and send them to log in again.
+      clearSessionHint();
       if (typeof window !== "undefined") {
+        localStorage.removeItem(LEGACY_TOKEN_KEY);
         window.location.href = "/login?expired=1";
       }
     }
+  }
+  if (!response.ok) {
     const text = await response.text().catch(() => "");
     let detail: unknown = undefined;
     try {

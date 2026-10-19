@@ -39,13 +39,6 @@ def test_garbage_falls_back_to_xff_then_peer():
     assert client_ip_key(_req({}, client=("198.51.100.5", 1))) == "198.51.100.5"
 
 
-def test_access_token_default_expiry_is_7_days():
-    tok = auth_service.create_access_token({"sub": "u"})
-    exp = jwt.decode(tok, settings.JWT_SECRET, algorithms=["HS256"])["exp"]
-    days = (exp - datetime.now(timezone.utc).timestamp()) / 86400
-    assert 6.9 < days <= 7.0
-
-
 def test_production_rejects_missing_or_short_jwt_secret():
     with pytest.raises(ValueError, match="JWT_SECRET"):
         Settings(ENVIRONMENT="production", _env_file=None)
@@ -70,3 +63,13 @@ async def test_production_email_stub_redacts_link(monkeypatch, capsys):
     await email_service._send("a@b.com", "s", "t", "h", "Password reset", "https://x/reset?token=SECRET", None, "password_reset")
     out = capsys.readouterr().out
     assert "a@b.com" in out and "password_reset" in out and "SECRET" not in out
+
+
+def test_proxy_secret_header_supplies_client_ip_only_with_exact_secret(monkeypatch):
+    monkeypatch.setattr(settings, "PROXY_SHARED_SECRET", "s" * 40)
+    hdr = {"x-real-ip": "76.76.21.1", "x-ffc-client-ip": "203.0.113.50"}
+    assert client_ip_key(_req({**hdr, "x-ffc-proxy-secret": "s" * 40})) == "203.0.113.50"
+    assert client_ip_key(_req({**hdr, "x-ffc-proxy-secret": "wrong"})) == "76.76.21.1"
+    assert client_ip_key(_req(hdr)) == "76.76.21.1"
+    monkeypatch.setattr(settings, "PROXY_SHARED_SECRET", None)
+    assert client_ip_key(_req({**hdr, "x-ffc-proxy-secret": "s" * 40})) == "76.76.21.1"

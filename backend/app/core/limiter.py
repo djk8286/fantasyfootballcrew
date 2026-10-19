@@ -8,6 +8,7 @@ If this ever moves to multiple instances, counters need a shared backend.
 Keyed by client IP -- see client_ip_key() for how that IP is derived
 without trusting client-controlled X-Forwarded-For entries.
 """
+import hmac
 import ipaddress
 import logging
 
@@ -63,6 +64,19 @@ def client_ip_key(request: Request) -> str:
     ProxyHeadersMiddleware rewrites request.client from the *leftmost*
     (spoofable) XFF entry.
     """
+    # 0. Requests relayed by our own Next.js /api proxy on Vercel: Railway
+    #    sees Vercel's egress IP (shared by every visitor), so the proxy
+    #    forwards the visitor IP Vercel observed in X-FFC-Client-IP, and
+    #    authenticates itself with a shared secret. Without the exact
+    #    secret the header is ignored, so it can't be spoofed by callers
+    #    hitting Railway directly.
+    secret = settings.PROXY_SHARED_SECRET
+    if secret:
+        presented = request.headers.get("x-ffc-proxy-secret", "")
+        if presented and hmac.compare_digest(presented.encode(), secret.encode()):
+            proxied_ip = request.headers.get("x-ffc-client-ip", "").strip()
+            if proxied_ip and _valid_ip(proxied_ip):
+                return proxied_ip
     real_ip = request.headers.get("x-real-ip", "").strip()
     if real_ip and _valid_ip(real_ip):
         return real_ip

@@ -27,6 +27,7 @@ from app.models.league_invite import LeagueInvite
 from app.models.league_join_request import LeagueJoinRequest
 from app.models.notification import Notification
 from app.models.password_reset_token import PasswordResetToken
+from app.models.refresh_token import RefreshToken
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.commissioner_digest import CommissionerDigest
 
@@ -110,6 +111,7 @@ async def delete_user_account(db: AsyncSession, user: User) -> None:
     await db.execute(delete(LeagueJoinRequest).where(LeagueJoinRequest.requested_by_user_id == user.id))
     await db.execute(delete(Notification).where(Notification.user_id == user.id))
     await db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
+    await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
     await db.execute(delete(EmailVerificationToken).where(EmailVerificationToken.user_id == user.id))
 
     # 5. The account itself. get_current_user 401s on the very next
