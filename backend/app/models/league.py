@@ -41,6 +41,9 @@ class League(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     commissioner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     league_type: Mapped[LeagueType] = mapped_column(Enum(LeagueType), default=LeagueType.STANDARD)
+    # "nfl" (every existing league) or "golf". Plain string + server default
+    # rather than a DB enum so adding a sport never needs an ALTER TYPE.
+    sport: Mapped[str] = mapped_column(String(16), default="nfl", server_default="nfl", nullable=False)
     # MutableList/MutableDict wrappers: without them, in-place mutation
     # (.append(), .remove(), item assignment) on these columns is invisible
     # to SQLAlchemy's change tracking -- only whole-attribute reassignment

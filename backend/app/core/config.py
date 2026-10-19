@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # Proxy hops we trust to append to X-Forwarded-For (see
     # app/core/limiter.py). Railway's internal edge uses RFC 6598 space.
     TRUSTED_PROXY_CIDRS: List[str] = ["100.64.0.0/10", "10.0.0.0/8", "127.0.0.0/8", "::1/128"]
+    # Fantasy golf (in development). Off until the API/UI phases ship.
+    GOLF_ENABLED: bool = False
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
