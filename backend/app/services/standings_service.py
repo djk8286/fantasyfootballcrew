@@ -28,6 +28,7 @@ from app.services.default_lineup import (
     league_roster_slots,
 )
 from app.services.nfl_schedule_service import game_started, game_teams, get_week_games
+from app.services.season_weeks import WeekState, league_start_week, season_week_states, week_counts
 
 
 async def _weekly_adjustment_totals(team_ids: List[str], week: int, year: int, db: AsyncSession) -> Dict[str, float]:
@@ -727,7 +728,14 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
     if through_week is not None:
         scores_query = scores_query.where(WeeklyScore.week <= through_week)
     scores_result = await db.execute(scores_query)
-    all_scores = scores_result.scalars().all()
+    # Only weeks that are over count. calculate_week writes a 0.00 row for
+    # the current week before kickoff, and those used to count as a tie
+    # for every team.
+    all_rows = scores_result.scalars().all()
+    states_by_year: Dict[int, Dict[int, str]] = {}
+    for year in {ws.year for ws in all_rows}:
+        states_by_year[year] = await season_week_states(year, db)
+    all_scores = [ws for ws in all_rows if week_counts(states_by_year[ws.year], ws.week)]
 
     if not all_scores:
         # Return teams with zero stats
@@ -914,8 +922,13 @@ async def get_season_schedule(
             return None
         return round(sum(played) / len(played), 2)
 
+    states = await season_week_states(year, db)
+    start_week = await league_start_week(league_id, year, db)
+
     def team_entry(team_id: str, week: int) -> Dict[str, Any]:
-        actual = scores_by_team.get(team_id, {}).get(week)
+        # A week that hasn't kicked off has no score yet, even if
+        # calculate_week already wrote a 0.00 row for it.
+        actual = None if states.get(week) == WeekState.UPCOMING else scores_by_team.get(team_id, {}).get(week)
         return {
             "id": team_id,
             "name": team_map.get(team_id, "Unknown"),
@@ -925,10 +938,12 @@ async def get_season_schedule(
         }
 
     schedule = []
-    for week in range(1, num_weeks + 1):
+    # Weeks before the league drafted aren't games, so they're left out.
+    for week in range(start_week, num_weeks + 1):
         matchups = _effective_matchups(league, teams, week)
         schedule.append({
             "week": week,
+            "status": states.get(week, WeekState.UNKNOWN),
             "matchups": [
                 {"team_a": team_entry(a, week), "team_b": team_entry(b, week)}
                 for a, b in matchups
