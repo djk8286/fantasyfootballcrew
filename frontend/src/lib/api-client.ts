@@ -423,6 +423,12 @@ export interface LeagueListFilters {
 
 // Leagues
 export const leaguesApi = {
+  /** League feed, newest first. teamId narrows it to one team. */
+  getActivity: (leagueId: string, teamId?: string, limit = 30) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (teamId) params.set("team_id", teamId);
+    return apiRequest(`/api/v1/leagues/${leagueId}/activity?${params.toString()}`);
+  },
   list: (filters?: LeagueListFilters) => {
     const params = new URLSearchParams();
     if (filters?.mine) params.set("mine", "true");
@@ -507,6 +513,9 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/league/${leagueId}`),
   get: (teamId: string) =>
     apiRequest(`/api/v1/teams/${teamId}`),
+  /** Team, record, owner usernames and this week's roster rows in one call. */
+  getRoster: (teamId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/teams/${teamId}/roster?week=${week}&year=${year}`),
   create: (data: Record<string, unknown>) =>
     apiRequest("/api/v1/teams", { method: "POST", body: data }),
   update: (id: string, data: Record<string, unknown>) =>
