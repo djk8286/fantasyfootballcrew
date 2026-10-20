@@ -6,7 +6,6 @@ import Link from "next/link";
 import { leaguesApi, scoringApi } from "@/lib/api-client";
 import { isLeagueManagerOf } from "@/lib/leagueAccess";
 import {
-  ArrowLeft,
   Save,
   Loader2,
   RotateCcw,
@@ -323,12 +322,6 @@ export default function ScoringPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 min-w-0">
-              <Link
-                href={`/leagues/${id}`}
-                className="text-surface-400 hover:text-white transition-colors shrink-0"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
               <h1 className="text-lg font-bold text-white truncate">
                 Scoring Settings
               </h1>
