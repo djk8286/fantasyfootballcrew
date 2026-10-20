@@ -4,9 +4,10 @@ import { leagueLabel, historySummaryLabel } from "@/lib/league-label";
 import Markdown from "@/components/Markdown";
 import { tradeOptionLabel, defaultComparePair } from "@/lib/trade-label";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
-import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
+import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isCurrentUser, isLoggedIn, ApiError } from "@/lib/api-client";
+import { pollJob, savePendingJob, loadPendingJob, clearPendingJob } from "@/lib/ai-jobs";
 
 interface League {
   id: string;
@@ -244,18 +245,64 @@ function LineupTab() {
     loadHistory(leagueId);
   }, [leagueId, loadHistory]);
 
+  // Lineup analysis runs as a background job (20-40 s); we poll for it.
+  // A pending job is remembered in sessionStorage so navigating away and
+  // back resumes it instead of losing the result (QA regression 10-19).
+  const pollCancelled = useRef(false);
+  useEffect(() => {
+    pollCancelled.current = false;
+    return () => {
+      pollCancelled.current = true;
+    };
+  }, []);
+
+  const waitForJob = useCallback(
+    async (jobId: string, lid: string) => {
+      setLoading(true);
+      setError("");
+      try {
+        const result = await pollJob(() => aiApi.job(jobId), { isCancelled: () => pollCancelled.current });
+        if (result === null) return; // unmounted; the pending job stays saved
+        clearPendingJob();
+        setAnalysis(result);
+        loadHistory(lid);
+      } catch (err) {
+        if (pollCancelled.current) return;
+        clearPendingJob();
+        setError(
+          err instanceof ApiError && err.status === 404
+            ? "That analysis expired. Check Recent below or run it again."
+            : err instanceof Error
+              ? err.message
+              : "Failed to get analysis"
+        );
+        loadHistory(lid);
+      } finally {
+        if (!pollCancelled.current) setLoading(false);
+      }
+    },
+    [loadHistory]
+  );
+
+  useEffect(() => {
+    const pending = loadPendingJob();
+    if (!pending) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring a job started before navigating away
+    setLeagueId(pending.leagueId);
+    void waitForJob(pending.jobId, pending.leagueId);
+  }, [waitForJob]);
+
   const handleSubmit = async () => {
     if (!teamId) return;
     setLoading(true);
     setError("");
     setAnalysis("");
     try {
-      const res = (await aiApi.lineup(teamId)) as { analysis: string };
-      setAnalysis(res.analysis);
-      loadHistory(leagueId);
+      const { job_id } = await aiApi.startLineupJob(teamId);
+      savePendingJob({ jobId: job_id, leagueId, teamId, startedAt: Date.now() });
+      await waitForJob(job_id, leagueId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to get analysis");
-    } finally {
       setLoading(false);
     }
   };

@@ -118,9 +118,20 @@ function refreshSession(): Promise<boolean> {
 
 let sessionSynced: Promise<void> | null = null;
 
+/** The backend sets a script-readable, non-secret `ffc_session=1` cookie
+ * alongside the HttpOnly auth cookies (and clears it on logout/expiry). */
+export function hasSessionHintCookie(cookieString: string = typeof document === "undefined" ? "" : document.cookie): boolean {
+  return cookieString.split(";").some((c) => c.trim().startsWith("ffc_session="));
+}
+
+/** Whether the bootstrap should talk to the server at all. Pure, for tests. */
+export function sessionProbePlan(s: { hasSessionCookie: boolean; hasUserHint: boolean; hasLegacyToken: boolean }): "skip" | "probe" {
+  return s.hasSessionCookie || s.hasUserHint || s.hasLegacyToken ? "probe" : "skip";
+}
+
 /** Run once per page load (Header calls it): silently upgrade a legacy
  * localStorage JWT to a cookie session, then reconcile the logged-in hint
- * with the server via /auth/me. Never redirects. */
+ * with the server via GET /auth/session. Never redirects. */
 export function syncSession(): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve();
   if (sessionSynced) return sessionSynced;
@@ -147,14 +158,27 @@ export function syncSession(): Promise<void> {
         // Network hiccup: keep the token, retry next load.
       }
     }
-    const me = async () => fetch(`${API_BASE_URL}/api/v1/auth/me`, { credentials: "include" });
+    // Guests (no hint cookie, no stored user id, no legacy token) make no
+    // auth calls at all -- previously every guest page view logged 401s
+    // from /auth/me and /auth/refresh (QA regression 2026-10-19).
+    const plan = sessionProbePlan({
+      hasSessionCookie: hasSessionHintCookie(),
+      hasUserHint: !!localStorage.getItem(USER_HINT_KEY),
+      hasLegacyToken: !!localStorage.getItem(LEGACY_TOKEN_KEY),
+    });
+    if (plan === "skip") return;
+    // /auth/session always answers 200 ({user: null} when signed out).
+    const probe = async (): Promise<{ id?: string } | null | undefined> => {
+      const r = await fetch(`${API_BASE_URL}/api/v1/auth/session`, { credentials: "include" });
+      if (!r.ok) return undefined; // 5xx/429/offline-ish: unknown, keep hint
+      return ((await r.json()) as { user: { id?: string } | null }).user;
+    };
     try {
-      let r = await me();
-      if (r.status === 401 && (await refreshSession())) r = await me();
-      if (r.ok) {
-        const user = (await r.json()) as { id?: string };
-        if (user.id) localStorage.setItem(USER_HINT_KEY, user.id);
-      } else if ((r.status === 401 || r.status === 403) && !localStorage.getItem(LEGACY_TOKEN_KEY)) {
+      let user = await probe();
+      if (user === null && (await refreshSession())) user = await probe();
+      if (user && user.id) {
+        localStorage.setItem(USER_HINT_KEY, user.id);
+      } else if (user === null && !localStorage.getItem(LEGACY_TOKEN_KEY)) {
         clearSessionHint();
       }
     } catch {
@@ -686,6 +710,16 @@ export const aiApi = {
       method: "POST",
       body: { team_id: teamId },
     }),
+  /** Async variant: returns a job id immediately; poll with job(). */
+  startLineupJob: (teamId: string) =>
+    apiRequest<{ job_id: string; status: string }>("/api/v1/ai/lineup/jobs", {
+      method: "POST",
+      body: { team_id: teamId },
+    }),
+  job: (jobId: string) =>
+    apiRequest<{ job_id: string; status: "pending" | "done" | "error"; analysis?: string | null; error?: string | null }>(
+      `/api/v1/ai/jobs/${jobId}`
+    ),
   trade: (tradeId: string) =>
     apiRequest("/api/v1/ai/trade", {
       method: "POST",

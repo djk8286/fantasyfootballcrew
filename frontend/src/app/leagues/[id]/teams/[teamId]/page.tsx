@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { teamsApi, leaguesApi, playersApi, standingsApi, teamNewsApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
+import { teamOwnershipText } from "@/lib/owner-label";
 import Avatar from "@/components/Avatar";
 import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
@@ -53,6 +54,7 @@ interface LeagueData {
   league_type?: string;
   conference_a_name?: string | null;
   conference_b_name?: string | null;
+  commissioner_id?: string;
 }
 
 interface RosterPlayer {
@@ -437,7 +439,13 @@ export default function TeamPage() {
               ) : (
                 <>
                   <UserCheck className="w-3.5 h-3.5" />
-                  {isCurrentUser(team.owner_id) ? "You own this team" : "Owner-managed"}
+                  {teamOwnershipText({
+                    ownerId: team.owner_id,
+                    coOwnerId: team.co_owner_id,
+                    commissionerId: league?.commissioner_id,
+                    isOwnerMe: isCurrentUser(team.owner_id),
+                    isCoOwnerMe: false,
+                  })}
                   {team.co_owner_id && (
                     <span className="text-surface-500">
                       {" "}

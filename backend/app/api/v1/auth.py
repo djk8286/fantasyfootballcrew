@@ -12,7 +12,7 @@ from app.models.email_verification_token import EmailVerificationToken
 from app.schemas.user import UserCreate, UserRead, UserLogin, ForgotPasswordRequest, ResetPasswordRequest, VerifyEmailRequest
 from app.services.auth_service import hash_password, verify_password, needs_rehash, hash_token
 from app.services.email_service import send_password_reset_email, send_verification_email
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_user_optional
 from app.services import session_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -266,6 +266,14 @@ async def resend_verification(
         return {"message": "Your email is already verified."}
     await _create_and_send_verification_email(current_user, db)
     return {"message": "Verification email sent."}
+
+
+@router.get("/session")
+async def get_session(current_user: User | None = Depends(get_current_user_optional)):
+    """Session probe for the frontend bootstrap: always 200, ``{"user":
+    null}`` for guests or an expired access cookie (instead of /me's 401,
+    which browsers log as a console error on every guest page view)."""
+    return {"user": UserRead.model_validate(current_user) if current_user else None}
 
 
 @router.get("/me", response_model=UserRead)

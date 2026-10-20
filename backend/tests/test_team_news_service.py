@@ -123,7 +123,7 @@ async def test_generate_and_save_team_news_creates_then_upserts_on_regenerate(db
 # ─── /teams/{id}/news endpoints ───────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_news_get_404s_before_anything_generated(client, db_session_factory):
+async def test_news_get_is_empty_200_before_anything_generated(client, db_session_factory):
     async with db_session_factory() as db:
         commissioner = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
                              username=f"u{uuid.uuid4().hex[:8]}", hashed_password="x")
@@ -138,8 +138,12 @@ async def test_news_get_404s_before_anything_generated(client, db_session_factor
         await db.commit()
         team_id = team.id
 
-    r = await client.get(f"/teams/{team_id}/news")
-    assert r.status_code == 404
+    r = await client.get(f"/teams/{team_id}/news")  # anonymous
+    assert r.status_code == 200
+    assert r.json() == {"team_id": team_id, "content": None, "updated_at": None, "articles": []}
+
+    missing = await client.get(f"/teams/{uuid.uuid4()}/news")
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, nflApi, isLoggedIn, joinRequestsApi, isCurrentUser } from "@/lib/api-client";
+import { ownerLabel, type OwnerLabel } from "@/lib/owner-label";
 import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import PositionBadge from "@/components/PositionBadge";
@@ -688,28 +689,15 @@ export default function LeagueDetailPage() {
 
   // ─── Helper: team owner display ─────────────────────────
 
-  function getOwnerDisplay(team: Team): { label: string; isHuman: boolean; isMe: boolean; isCommish: boolean } {
-    const isCpu = team.is_cpu || team.owner_id === "cpu";
-    const isOwnerMe = isCurrentUser(team.owner_id) || (team.owner_id === "placeholder" && getMyTeams().includes(team.id));
-    const isCoOwnerMe = !!team.co_owner_id && isCurrentUser(team.co_owner_id);
-    const isMe = isOwnerMe || isCoOwnerMe;
-    const isCommishFlag = isCommissioner && team.owner_id === league?.commissioner_id;
-
-    if (isCpu) return { label: "CPU", isHuman: false, isMe: false, isCommish: false };
-    if (team.owner_id === "placeholder") return { label: "Unclaimed", isHuman: false, isMe: false, isCommish: false };
-    if (isMe) {
-      const label = isCoOwnerMe && !isOwnerMe
-        ? team.co_owner_id
-          ? "You (Co-Owner)"
-          : "You"
-        : team.co_owner_id
-          ? "You + Co-Owner"
-          : "You";
-      return { label, isHuman: true, isMe: true, isCommish: false };
-    }
-    if (isCommishFlag) return { label: "Commish", isHuman: true, isMe: false, isCommish: true };
-    if (team.co_owner_id) return { label: "Joined (2 owners)", isHuman: true, isMe: false, isCommish: false };
-    return { label: "Joined", isHuman: true, isMe: false, isCommish: false };
+  function getOwnerDisplay(team: Team): OwnerLabel {
+    return ownerLabel({
+      ownerId: team.owner_id,
+      coOwnerId: team.co_owner_id,
+      isCpu: team.is_cpu,
+      commissionerId: league?.commissioner_id,
+      isOwnerMe: isCurrentUser(team.owner_id) || (team.owner_id === "placeholder" && getMyTeams().includes(team.id)),
+      isCoOwnerMe: !!team.co_owner_id && isCurrentUser(team.co_owner_id),
+    });
   }
 
   // ─── Render ──────────────────────────────────────────────

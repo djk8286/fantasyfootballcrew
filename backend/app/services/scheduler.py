@@ -426,6 +426,16 @@ async def _maybe_refresh_dashboard_summaries_once() -> None:
     await _generate_nfl_wide_dashboard_summaries_once(season_type, season, week)
 
 
+async def _answer_cpu_trades_once() -> int:
+    from app.services.cpu_trade_service import answer_pending_cpu_trades
+    async with async_session() as db:
+        n = await answer_pending_cpu_trades(db)
+        if n:
+            await db.commit()
+            print(f"[scheduler] CPU answered {n} pending trade offer(s)")
+        return n
+
+
 async def _maybe_refresh_team_news_once() -> None:
     """Once-daily (rolling 24h, DB-backed via TeamPlayerNews.updated_at)
     refresh of every real team's player-news digest -- see
@@ -691,6 +701,13 @@ async def run_scheduler() -> None:
                 except Exception as e:
                     print(f"[scheduler] Team recap generation pass failed: {e}")
             _last_seen_week = (season, week)
+
+        # CPU teams answer trade offers that were left without a reply
+        # (QA 2026-10-19 LI9) -- bounded by this loop's interval.
+        try:
+            await run_job("cpu_trade_replies", _answer_cpu_trades_once, record_success_every_s=3600)
+        except Exception as e:
+            print(f"[scheduler] CPU trade reply pass failed: {e}")
 
         # Dashboard AI Summaries (NFL-wide panels): durable, DB-backed
         # daily refresh -- see _maybe_refresh_dashboard_summaries_once's
