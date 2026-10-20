@@ -297,15 +297,16 @@ async def get_player_detail(
         rostered = []
         if league_ids:
             rows = await db.execute(
-                select(Team, League.name).join(League, League.id == Team.league_id).where(
+                select(Team, League.name, League.created_at).join(League, League.id == Team.league_id).where(
                     Team.league_id.in_(league_ids), League.is_mock == False  # noqa: E712
                 )
             )
-            for team, league_name in rows.all():
+            for team, league_name, league_created_at in rows.all():
                 if player.id in (team.roster or []):
                     rostered.append({
                         "team_id": team.id, "team_name": team.name,
                         "league_id": team.league_id, "league_name": league_name,
+                        "league_created_at": league_created_at,
                         "is_mine": current_user.id in {team.owner_id, team.co_owner_id},
                     })
         data["rostered_by"] = rostered
