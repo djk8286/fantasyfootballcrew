@@ -220,6 +220,7 @@ async def test_timer_watchdog_forces_pick_on_expiry(db_session_factory, monkeypa
     # FastAPI-overridable get_db dependency), so it needs its own
     # monkeypatch to see this test's isolated DB.
     monkeypatch.setattr(scheduler_module, "async_session", db_session_factory)
+    monkeypatch.setattr(scheduler_module, "draft_session", db_session_factory)
 
     league, teams, commissioner, _token = await _make_league_with_teams(db_session_factory, num_teams=2)
     await _make_players(db_session_factory, n=5, position="RB")
@@ -249,6 +250,7 @@ async def test_timer_watchdog_forces_pick_on_expiry(db_session_factory, monkeypa
 async def test_timer_watchdog_leaves_unexpired_draft_alone(db_session_factory, monkeypatch):
     import app.services.scheduler as scheduler_module
     monkeypatch.setattr(scheduler_module, "async_session", db_session_factory)
+    monkeypatch.setattr(scheduler_module, "draft_session", db_session_factory)
 
     league, teams, commissioner, _token = await _make_league_with_teams(db_session_factory, num_teams=2)
     await _make_players(db_session_factory, n=5, position="RB")

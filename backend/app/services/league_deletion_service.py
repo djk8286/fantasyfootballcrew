@@ -25,6 +25,7 @@ from app.models.league import League
 from app.models.team import Team
 from app.models.draft import Draft, DraftPick
 from app.models.draft_queue_entry import DraftQueueEntry
+from app.models.draft_autopick import DraftAutopick
 from app.models.playoff import Playoff, PlayoffMatchup
 from app.models.contract import Contract, DeadMoney
 from app.models.coach import Coach
@@ -63,6 +64,7 @@ async def delete_league(db: AsyncSession, league: League) -> None:
         await db.execute(delete(PlayoffMatchup).where(PlayoffMatchup.playoff_id.in_(playoff_ids)))
     if draft_ids:
         await db.execute(delete(DraftQueueEntry).where(DraftQueueEntry.draft_id.in_(draft_ids)))
+        await db.execute(delete(DraftAutopick).where(DraftAutopick.draft_id.in_(draft_ids)))
     await db.execute(delete(DraftPick).where(DraftPick.league_id == league.id))
     await db.execute(delete(DeadMoney).where(DeadMoney.league_id == league.id))
 
