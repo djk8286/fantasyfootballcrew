@@ -61,7 +61,8 @@ async def test_get_lineup_best_ball_uses_weekly_score_auto_starters(client, db_s
                             total_score=10.0, lineup_data={"auto_lineup": True, "auto_starters": [p0, p1]}))
         await db.commit()
 
-    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {setup['token']}"})
     assert r.status_code == 200
     body = r.json()
     assert body["best_ball"] is True
@@ -85,7 +86,8 @@ async def test_get_lineup_best_ball_ignores_existing_lineup_row(client, db_sessi
                             total_score=10.0, lineup_data={"auto_lineup": True, "auto_starters": [p0, p1]}))
         await db.commit()
 
-    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {setup['token']}"})
     assert r.status_code == 200
     assert set(r.json()["starters"]) == {p0, p1}
 
@@ -94,7 +96,8 @@ async def test_get_lineup_best_ball_ignores_existing_lineup_row(client, db_sessi
 async def test_get_lineup_best_ball_no_weekly_score_yet_is_all_bench(client, db_session_factory):
     setup = await _make_league_and_team(db_session_factory, best_ball_enabled=True)
 
-    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {setup['token']}"})
     assert r.status_code == 200
     body = r.json()
     assert body["best_ball"] is True
@@ -114,7 +117,8 @@ async def test_get_lineup_non_best_ball_unaffected(client, db_session_factory):
         db.add(Lineup(team_id=setup["team_id"], week=WEEK, year=YEAR, starters=[p0, p1]))
         await db.commit()
 
-    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{setup['team_id']}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {setup['token']}"})
     assert r.status_code == 200
     body = r.json()
     assert body["best_ball"] is False

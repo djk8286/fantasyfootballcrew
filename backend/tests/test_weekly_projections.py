@@ -169,7 +169,7 @@ PARAMS = {"week": WEEK, "year": YEAR}
 @pytest.mark.asyncio
 async def test_lineup_shows_league_scored_projections_and_both_matchup_totals(client, db_session_factory):
     s = await _league(db_session_factory)
-    r = await client.get(f"/teams/{s['team']}/lineup", params=PARAMS)
+    r = await client.get(f"/teams/{s['team']}/lineup", params=PARAMS, headers=s["auth"])
     assert r.status_code == 200
     body = r.json()
     by = {p["id"]: p["projected_points"] for p in body["roster"]}
@@ -190,7 +190,7 @@ async def test_lineup_shows_league_scored_projections_and_both_matchup_totals(cl
 async def test_switch_off_hides_projections(client, db_session_factory, monkeypatch):
     s = await _league(db_session_factory)
     monkeypatch.setattr(settings, "SLEEPER_PROJECTIONS_ENABLED", False)
-    body = (await client.get(f"/teams/{s['team']}/lineup", params=PARAMS)).json()
+    body = (await client.get(f"/teams/{s['team']}/lineup", params=PARAMS, headers=s["auth"])).json()
     assert body["projected_total"] is None
     assert body["matchup"]["projected"] is None
     assert all(p["projected_points"] is None for p in body["roster"])

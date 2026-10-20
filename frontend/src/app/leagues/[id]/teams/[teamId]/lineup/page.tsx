@@ -10,11 +10,12 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Num } from "@/components/ui/Num";
 import { SkeletonRows } from "@/components/ui/Skeleton";
-import { friendlyErrorMessage, isCurrentUser, isLoggedIn, leaguesApi, lineupsApi, nflApi, standingsApi, teamsApi } from "@/lib/api-client";
+import { ApiError, friendlyErrorMessage, isCurrentUser, isLoggedIn, leaguesApi, lineupsApi, nflApi, standingsApi, teamsApi } from "@/lib/api-client";
 import {
   applyMove,
   benchIds,
   issuesFor,
+  lineupLoadProblem,
   moveWarning,
   playerWarning,
   projectedTotal,
@@ -78,8 +79,12 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 async function fetchLineupPage(teamId: string, leagueId: string, wk: number, year: number) {
+  let lineupStatus: number | null = null;
   const [lineup, team, league, schedule] = await Promise.all([
-    lineupsApi.get(teamId, wk, year).catch(() => null) as Promise<LineupResponse | null>,
+    lineupsApi.get(teamId, wk, year).catch((err: unknown) => {
+      lineupStatus = err instanceof ApiError ? err.status : null;
+      return null;
+    }) as Promise<LineupResponse | null>,
     teamsApi.get(teamId).catch(() => null) as Promise<{ name?: string; owner_id?: string | null; co_owner_id?: string | null } | null>,
     leaguesApi.get(leagueId).catch(() => null) as Promise<{ commissioner_id?: string | null; co_commissioner_ids?: string[] | null } | null>,
     standingsApi.getSchedule(leagueId, year, Math.max(14, wk)).catch(() => null) as Promise<{
@@ -94,7 +99,7 @@ async function fetchLineupPage(teamId: string, leagueId: string, wk: number, yea
       (league?.co_commissioner_ids || []).some((cid) => isCurrentUser(cid)));
   const m = schedule?.schedule?.find((w) => w.week === wk)?.matchups.find((x) => x.team_a.id === teamId || x.team_b.id === teamId);
   const matchup: Matchup | null = m ? (m.team_a.id === teamId ? { me: m.team_a, opp: m.team_b } : { me: m.team_b, opp: m.team_a }) : null;
-  return { lineup, teamName: team?.name || "", canEdit, matchup };
+  return { lineup, lineupStatus, teamName: team?.name || "", canEdit, matchup };
 }
 
 function GameMeta({ player }: { player: RosterPlayer }) {
@@ -224,6 +229,7 @@ export default function LineupPage() {
   const [canEdit, setCanEdit] = useState(false);
   const [matchup, setMatchup] = useState<Matchup | null>(null);
   const [error, setError] = useState("");
+  const [needsLogin, setNeedsLogin] = useState(false);
   const [pick, setPick] = useState<Pick | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; undo: Slot[] | null } | null>(null);
@@ -261,7 +267,9 @@ export default function LineupPage() {
       setCanEdit(r.canEdit);
       setTeamName(r.teamName);
       setMatchup(r.matchup);
-      setError(r.lineup ? "" : "Couldn't load this lineup. Try again in a moment.");
+      const problem = r.lineup ? null : lineupLoadProblem(r.lineupStatus);
+      setNeedsLogin(problem?.kind === "login");
+      setError(problem?.kind === "message" ? problem.text : "");
       if (r.lineup) {
         setData(r.lineup);
         setSlots(r.lineup.slots);
@@ -461,6 +469,14 @@ export default function LineupPage() {
         </Card>
       )}
 
+      {needsLogin && (
+        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="font-semibold text-gold">
+            Log in
+          </Link>{" "}
+          to see this lineup.
+        </p>
+      )}
       {error && (
         <div role="alert" className="mb-4 rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
           {error}
@@ -542,7 +558,7 @@ export default function LineupPage() {
         </div>
       )}
 
-      {!data && !error ? (
+      {!data && !error && !needsLogin ? (
         <Card>
           <SkeletonRows rows={9} />
         </Card>

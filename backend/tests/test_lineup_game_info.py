@@ -10,6 +10,7 @@ from app.models.nfl_game import NFLGame
 from app.models.player import Player
 from app.models.team import Team
 from app.models.user import User
+from app.services.auth_service import create_access_token
 
 YEAR, WEEK = 2026, 7
 SCORING = {"generic": {"pts": 1.0}}
@@ -38,11 +39,17 @@ async def _seed(db_session_factory, players, games):
         db.add(team)
         db.add_all(games)
         await db.commit()
+        _TOKENS[team.id] = create_access_token({"sub": owner.id, "email": owner.email})
         return team.id, ids
 
 
+# GET /lineup needs a login; the owner's token per seeded team.
+_TOKENS: dict[str, str] = {}
+
+
 async def _roster(client, team_id):
-    r = await client.get(f"/teams/{team_id}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{team_id}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {_TOKENS[team_id]}"})
     assert r.status_code == 200
     body = r.json()
     return body, {p["full_name"].split()[0]: p for p in body["roster"]}

@@ -152,3 +152,14 @@ export function projectedTotal(
   const sum = slots.reduce((t, s) => t + (s.player_id ? projected[s.player_id] ?? 0 : 0), 0);
   return Math.round(sum * 100) / 100;
 }
+
+/** Why the lineup didn't load, from the GET /lineup status (null = network
+ * or unknown). "login" -> show a log-in prompt instead of an error. */
+export type LineupLoadProblem = { kind: "login" } | { kind: "message"; text: string };
+
+export function lineupLoadProblem(status: number | null): LineupLoadProblem {
+  if (status === 401) return { kind: "login" };
+  if (status === 403) return { kind: "message", text: "This league is private. Only its members can see lineups." };
+  if (status === 404) return { kind: "message", text: "We couldn't find this team." };
+  return { kind: "message", text: "Couldn't load this lineup. Try again in a moment." };
+}
