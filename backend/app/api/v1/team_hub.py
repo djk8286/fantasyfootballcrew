@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
+from app.services.league_home_service import league_home
 from app.services.lineup_slots import lineup_issues
 from app.services.season_weeks import league_start_week
 from app.services.team_activity_service import league_activity, team_record
@@ -103,3 +104,27 @@ async def get_league_activity(
     items = await league_activity(league, list(teams), db, viewer_id=viewer.id if viewer else None,
                                   team_id=team_id, limit=limit)
     return {"league_id": league_id, "items": items}
+
+
+@router.get("/leagues/{league_id}/home")
+async def get_league_home(
+    league_id: str,
+    week: int = Query(..., ge=1, le=18),
+    year: int = Query(..., ge=2020, le=2030),
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
+    """The league home page in one call.
+
+    my_matchup: the viewer's game this week, both sides with score (null
+    before kickoff) and projected (null without projections).
+    top_issue / issue_count: what's wrong with the viewer's lineup now.
+    last_week: the viewer's last finished game, with optimal_score and
+    bench_points (best legal lineup from that week's roster minus what
+    scored). scoreboard: every game this week, the viewer's marked mine.
+    standings: compact rows with rank and streak. activity: the 8 newest
+    feed items. Viewer-specific fields are null for guests."""
+    league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
+    if league is None:
+        raise HTTPException(status_code=404, detail="League not found")
+    return await league_home(league, week, year, db, viewer.id if viewer else None)
