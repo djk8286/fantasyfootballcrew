@@ -91,6 +91,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Room for the league pages' fixed mobile tab bar (LeagueShell). */
+@media (width < 48rem) {
+  body.has-league-tabbar {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
 /* Base styles */
 body {
   background-color: var(--color-surface-900);

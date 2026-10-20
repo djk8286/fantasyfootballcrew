@@ -301,12 +301,6 @@ export default function CommissionerPage() {
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center gap-3 flex-wrap gap-y-2">
-            <Link
-              href={`/leagues/${leagueId}`}
-              className="text-surface-400 hover:text-white transition-colors"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </Link>
             <Crown className="w-5 h-5 text-gold-400" />
             <h1 className="text-lg font-bold text-white">Commissioner Settings</h1>
             {league && <span className="text-surface-400 text-sm">{league.name}</span>}
