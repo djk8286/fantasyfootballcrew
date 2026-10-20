@@ -105,6 +105,21 @@ def require_team_or_league_access(team: Team, league: League, current_user: User
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this team")
 
 
+async def is_league_participant(league: League, user: User | None, db: AsyncSession) -> bool:
+    """Owns/co-owns some team in `league`, or is its commissioner/co-commissioner."""
+    if user is None:
+        return False
+    if user.id in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
+        return True
+    result = await db.execute(
+        select(Team.id).where(
+            Team.league_id == league.id,
+            (Team.owner_id == user.id) | (Team.co_owner_id == user.id),
+        )
+    )
+    return result.first() is not None
+
+
 async def require_league_participant(league: League, current_user: User, db: AsyncSession) -> None:
     """Raise 403 unless current_user owns/co-owns *some* team in `league`,
     or is its commissioner/co-commissioner -- i.e. is a legitimate member of
@@ -116,31 +131,42 @@ async def require_league_participant(league: League, current_user: User, db: Asy
     to do (there's no human on the other end to protect), but a total
     stranger to the league should not.
     """
-    allowed_ids = {league.commissioner_id, *(league.co_commissioner_ids or [])}
-    if current_user.id in allowed_ids:
-        return
-    result = await db.execute(
-        select(Team.id).where(
-            Team.league_id == league.id,
-            (Team.owner_id == current_user.id) | (Team.co_owner_id == current_user.id),
-        )
-    )
-    if result.first() is None:
+    if not await is_league_participant(league, current_user, db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
 
 
-async def require_league_read(league: League, current_user: User, db: AsyncSession) -> None:
-    """Read gate for league-scoped data that shouldn't be world-readable.
+# ─── Who may see rosters and lineups ─────────────────────────────────
+# Rosters (which players a team has) are public for OPEN and INVITE_ONLY
+# leagues -- the leagues the public listing shows -- so guests can browse
+# them, same as every fantasy site. PRIVATE leagues: members and accepted
+# invitees only. Lineups (slot assignments, starters, lineup issues,
+# projected totals and box scores built from them) need a login on top of
+# that. One rule, used by GET /teams/{id}/lineup, /teams/{id}/roster,
+# /teams/{id}, /teams/league/{id}, /teams/{id}/news, /teams/{id}/cap,
+# /leagues/{id}/home and /leagues/{id}/standings/weekly.
 
-    The caller must already be logged in (get_current_user). OPEN and
-    INVITE_ONLY leagues are discoverable (the public listing hides only
-    PRIVATE), so any logged-in user may read them. PRIVATE leagues are
-    readable only by members: a team owner/co-owner or a commissioner/
-    co-commissioner (require_league_participant's definition).
-    """
+async def can_view_rosters(league: League, viewer: User | None, db: AsyncSession) -> bool:
+    """PRIVATE leagues: members, plus anyone holding an accepted invite or
+    approved join request (user_can_join_league), so an invitee can still
+    look the league over and pick a team to claim."""
     if league.visibility != LeagueVisibility.PRIVATE:
-        return
-    await require_league_participant(league, current_user, db)
+        return True
+    if viewer is None:
+        return False
+    return await is_league_participant(league, viewer, db) or await user_can_join_league(db, league, viewer)
+
+
+async def can_view_lineups(league: League, viewer: User | None, db: AsyncSession) -> bool:
+    return viewer is not None and await can_view_rosters(league, viewer, db)
+
+
+async def require_league_read(league: League, current_user: User | None, db: AsyncSession) -> None:
+    """Gate for lineup data: 401 for guests, 403 for a PRIVATE league the
+    user isn't in or invited to (see can_view_lineups)."""
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if not await can_view_rosters(league, current_user, db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
 
 
 async def user_can_join_league(db: AsyncSession, league: League, user: User) -> bool:

@@ -27,8 +27,9 @@ import {
   tradesApi,
   waiversApi,
 } from "@/lib/api-client";
+import { errorStatus, loadProblem } from "@/lib/access-problem";
 import { initialWeek } from "@/lib/current-week";
-import { barShare, headline, homeMode, leagueChips, recapLine, recordLine, shortTeamName, winChance, type HomeSide, type Recap } from "@/lib/league-home";
+import { barShare, headline, homeMode, leagueChips, recapLine, recordLine, scoreboardTitle, shortTeamName, winChance, type HomeSide, type Recap } from "@/lib/league-home";
 
 // ─── Data ─────────────────────────────────────────────────────
 
@@ -73,15 +74,19 @@ async function fetchLeagueHome(id: string) {
   if (!league) return null;
   const year = state?.season ?? CURRENT_YEAR;
   const week = initialWeek({ param: null, state, draftComplete: league.draft_status === "completed" });
+  let homeStatus: number | null = null;
   const [home, cap, recap, draft] = await Promise.all([
-    leaguesApi.getHome(id, week, year).catch(() => null) as Promise<Home | null>,
+    leaguesApi.getHome(id, week, year).catch((err: unknown) => {
+      homeStatus = errorStatus(err);
+      return null;
+    }) as Promise<Home | null>,
     leaguesApi.getSalaryCapSettings(id).catch(() => null) as Promise<{ enabled?: boolean } | null>,
     leaguesApi.getTeamRecap(id).catch(() => null) as Promise<{ content: string; week: number } | null>,
     league.draft_status === "not_started"
       ? Promise.resolve(null)
       : (fetch(`/api/v1/drafts/find?league_id=${id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<{ id?: string } | null>),
   ]);
-  return { league, teams: Array.isArray(teams) ? teams : [], home, capEnabled: !!cap?.enabled, aiRecap: recap, draftId: draft?.id ?? null };
+  return { league, teams: Array.isArray(teams) ? teams : [], home, homeProblem: home ? null : loadProblem(homeStatus, "league"), capEnabled: !!cap?.enabled, aiRecap: recap, draftId: draft?.id ?? null };
 }
 
 type PageData = NonNullable<Awaited<ReturnType<typeof fetchLeagueHome>>>;
@@ -208,10 +213,9 @@ function Scoreboard({ home, leagueId, leagueName }: { home: Home; leagueId: stri
       <Num value={headline(s)} className={`text-sm ${lead ? "text-ink-100" : "text-ink-400"}`} />
     </Link>
   );
-  const scored = home.scoreboard.some((g) => g.team_a.score != null);
   return (
     <Card>
-      <CardHeader title={`Week ${home.week} ${scored ? "scores" : "projections"}`} />
+      <CardHeader title={scoreboardTitle(home.week, home.scoreboard)} />
       <div className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 xl:grid-cols-3">
         {home.scoreboard.map((g) => {
           const a = headline(g.team_a) ?? 0;
@@ -537,7 +541,16 @@ export default function LeagueHomePage() {
 
       {!home ? (
         <Card>
-          <p className="text-sm text-ink-400">Couldn&apos;t load this week. Try again in a moment.</p>
+          {data.homeProblem?.kind === "login" ? (
+            <p className="text-sm text-ink-300">
+              <Link href={`/login?next=${encodeURIComponent(`/leagues/${id}`)}`} className="font-semibold text-gold">
+                Log in
+              </Link>{" "}
+              {data.homeProblem.text}
+            </p>
+          ) : (
+            <p className="text-sm text-ink-400">{data.homeProblem?.text ?? "Couldn't load this week. Try again in a moment."}</p>
+          )}
         </Card>
       ) : (
         <div className="gap-4 space-y-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:space-y-0">

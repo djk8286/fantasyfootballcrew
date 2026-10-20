@@ -62,3 +62,17 @@ describe("header text", () => {
     expect(preDraftNote(6)).toBe("Weeks 1 to 5 came before the draft.");
   });
 });
+
+describe("groupRoster without lineup data", () => {
+  it("keeps roster order when slots are hidden from guests", () => {
+    const rows = [
+      { id: "a", position: "WR", slot: null },
+      { id: "b", position: "QB", slot: null },
+      { id: "c", position: "WR", slot: null },
+    ];
+    expect(groupRoster(rows).map((g) => [g.position, g.players.map((p) => p.id)])).toEqual([
+      ["QB", ["b"]],
+      ["WR", ["a", "c"]],
+    ]);
+  });
+});

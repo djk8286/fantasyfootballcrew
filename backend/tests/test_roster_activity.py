@@ -132,7 +132,7 @@ async def test_schedule_starts_at_the_draft_week_and_hides_unplayed_zeros(client
 @pytest.mark.asyncio
 async def test_roster_endpoint_has_record_streak_owner_and_slots(client, db_session_factory):
     s = await _league(db_session_factory, weeks=_season())
-    r = await client.get("/teams/team-a/roster", params={"week": 6, "year": YEAR})
+    r = await client.get("/teams/team-a/roster", params={"week": 6, "year": YEAR}, headers=s["bob"])
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["team"]["name"] == "Aces" and body["team"]["owner_username"] == "alice"

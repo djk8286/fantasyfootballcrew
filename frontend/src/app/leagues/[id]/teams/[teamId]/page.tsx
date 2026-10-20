@@ -26,10 +26,12 @@ import {
   leaguesApi,
   nflApi,
   standingsApi,
+  syncSession,
   teamsApi,
   tradesApi,
   waiversApi,
 } from "@/lib/api-client";
+import { errorStatus, loadProblem, type LoadProblem } from "@/lib/access-problem";
 import { initialWeek } from "@/lib/current-week";
 import { groupRoster, ordinal, preDraftNote, recordText, scheduleRows, type ScheduleWeek } from "@/lib/team-page";
 
@@ -54,7 +56,8 @@ interface RosterRow {
   last_week_points: number | null;
   game: Game | null;
   on_bye: boolean;
-  slot: string;
+  /** null for guests: lineups need a login (rosters don't, outside private leagues). */
+  slot: string | null;
 }
 
 interface TeamRoster {
@@ -71,8 +74,9 @@ interface TeamRoster {
   record: { wins: number; losses: number; ties: number; points_for: number; points_against: number; rank: number | null; teams: number; streak: string | null };
   week: number;
   league_start_week: number;
-  has_lineup_set: boolean;
-  issues: { kind: string; message: string }[];
+  lineup_visible?: boolean;
+  has_lineup_set: boolean | null;
+  issues: { kind: string; message: string }[] | null;
   roster: RosterRow[];
 }
 
@@ -100,6 +104,8 @@ const kickoffFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hou
 
 /** Everything the page needs, in parallel. Module-level so effects only set state in .then. */
 async function fetchTeamPage(leagueId: string, teamId: string) {
+  await syncSession();
+  let rosterStatus: number | null = null;
   const [state, league] = await Promise.all([
     nflApi.getCurrentWeek().catch(() => null),
     leaguesApi.get(leagueId).catch(() => null) as Promise<LeagueData | null>,
@@ -107,7 +113,10 @@ async function fetchTeamPage(leagueId: string, teamId: string) {
   const year = state?.season ?? CURRENT_YEAR;
   const week = initialWeek({ param: null, state, draftComplete: league?.draft_status === "completed" });
   const [roster, extras, schedule, activity, capSettings, bestBall] = await Promise.all([
-    teamsApi.getRoster(teamId, week, year).catch(() => null) as Promise<TeamRoster | null>,
+    teamsApi.getRoster(teamId, week, year).catch((err: unknown) => {
+      rosterStatus = errorStatus(err);
+      return null;
+    }) as Promise<TeamRoster | null>,
     teamsApi.get(teamId).catch(() => null) as Promise<TeamExtras | null>,
     standingsApi.getSchedule(leagueId, year).catch(() => null) as Promise<{ league_start_week?: number; schedule?: ScheduleWeek[] } | null>,
     leaguesApi.getActivity(leagueId, teamId, 20).catch(() => null) as Promise<{ items?: ActivityItem[] } | null>,
@@ -118,6 +127,7 @@ async function fetchTeamPage(leagueId: string, teamId: string) {
   return {
     league,
     roster,
+    rosterProblem: roster ? null : loadProblem(rosterStatus, "team"),
     extras,
     schedule: schedule?.schedule ?? [],
     activity: activity?.items ?? [],
@@ -186,7 +196,7 @@ function RosterTable({ rows, week }: { rows: RosterRow[]; week: number }) {
                 <GameCell row={p} />
               </div>
               <span className="text-right md:text-left">
-                {p.slot === "BN" ? <Badge>BN</Badge> : <Badge tone="win">Start</Badge>}
+                {p.slot == null ? <span className="text-xs text-ink-500">—</span> : p.slot === "BN" ? <Badge>BN</Badge> : <Badge tone="win">Start</Badge>}
               </span>
               <Num value={p.last_week_points} className="hidden text-right text-sm text-ink-300 md:block" />
               <Num value={p.season_points} className="text-right text-sm text-ink-300" />
@@ -242,6 +252,20 @@ function ScheduleCard({ weeks, teamId, leagueId, startWeek }: { weeks: ScheduleW
   );
 }
 
+function ProblemText({ problem, fallback, next }: { problem: LoadProblem | null; fallback: string; next: string }) {
+  if (problem?.kind === "login") {
+    return (
+      <p className="text-sm text-ink-300">
+        <Link href={`/login?next=${encodeURIComponent(next)}`} className="font-semibold text-gold">
+          Log in
+        </Link>{" "}
+        {problem.text}
+      </p>
+    );
+  }
+  return <p className="text-sm text-loss">{problem?.text ?? fallback}</p>;
+}
+
 function PageSkeleton() {
   return (
     <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
@@ -292,7 +316,7 @@ export default function TeamPage() {
     fetchTeamPage(leagueId, teamId).then((d) => {
       if (!live) return;
       setData(d);
-      setError(d.roster ? "" : "Couldn't load this team. Try again in a moment.");
+      setError(d.rosterProblem?.text ?? "");
     });
     return () => {
       live = false;
@@ -304,7 +328,7 @@ export default function TeamPage() {
   const extras = data?.extras;
   const eliminated = extras?.eliminated_week != null;
   const startWeek = data?.roster?.league_start_week ?? 1;
-  const issues = data?.roster?.issues.length ?? 0;
+  const issues = data?.roster?.issues?.length ?? 0;
   const ownerLine = useMemo(() => {
     if (!team) return "";
     if (team.is_cpu) return "CPU-controlled";
@@ -318,7 +342,7 @@ export default function TeamPage() {
     return (
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
         <Card>
-          <p className="text-sm text-loss">{error || "Team not found."}</p>
+          <ProblemText problem={data.rosterProblem} fallback={error || "Team not found."} next={`/leagues/${leagueId}/teams/${teamId}`} />
         </Card>
       </div>
     );
@@ -398,7 +422,17 @@ export default function TeamPage() {
         <p className="text-sm text-ink-400">No players yet. The roster fills in at the draft.</p>
       </Card>
     ) : (
-      <RosterTable rows={roster} week={week} />
+      <div className="space-y-2">
+        {data.roster.lineup_visible === false && (
+          <p className="rounded-card border border-ink-700 bg-ink-900 px-4 py-2 text-sm text-ink-300">
+            <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}`)}`} className="font-semibold text-gold">
+              Log in
+            </Link>{" "}
+            to see who&apos;s starting.
+          </p>
+        )}
+        <RosterTable rows={roster} week={week} />
+      </div>
     );
   const scheduleCard = <ScheduleCard weeks={data.schedule} teamId={teamId} leagueId={leagueId} startWeek={startWeek} />;
   const movesCard = (

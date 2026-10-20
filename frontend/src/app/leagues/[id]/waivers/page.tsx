@@ -276,12 +276,12 @@ export default function WaiversPage() {
     }
     const handle = setTimeout(() => {
       playersApi
-        .list({ search: search.trim(), limit: "10" })
+        .list({ search: search.trim(), limit: "10", available_in_league: leagueId })
         .then((data) => setSearchResults(Array.isArray(data) ? (data as PlayerSearchResult[]) : []))
         .catch(() => setSearchResults([]));
     }, 300);
     return () => clearTimeout(handle);
-  }, [search, addPlayerId]);
+  }, [search, addPlayerId, leagueId]);
 
   const handleSubmitClaim = async (e: React.FormEvent) => {
     e.preventDefault();

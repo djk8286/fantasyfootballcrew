@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Num } from "@/components/ui/Num";
 import { SkeletonRows } from "@/components/ui/Skeleton";
-import { ApiError, friendlyErrorMessage, isCurrentUser, isLoggedIn, leaguesApi, lineupsApi, nflApi, standingsApi, teamsApi } from "@/lib/api-client";
+import { ApiError, friendlyErrorMessage, isCurrentUser, isLoggedIn, syncSession, leaguesApi, lineupsApi, nflApi, standingsApi, teamsApi } from "@/lib/api-client";
 import {
   applyMove,
   benchIds,
@@ -79,6 +79,9 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 async function fetchLineupPage(teamId: string, leagueId: string, wk: number, year: number) {
+  // Reconcile the logged-in hint with the server first, so "can edit" and
+  // the guest prompt below agree with what the API actually answered.
+  await syncSession();
   let lineupStatus: number | null = null;
   const [lineup, team, league, schedule] = await Promise.all([
     lineupsApi.get(teamId, wk, year).catch((err: unknown) => {
@@ -267,12 +270,17 @@ export default function LineupPage() {
       setCanEdit(r.canEdit);
       setTeamName(r.teamName);
       setMatchup(r.matchup);
-      const problem = r.lineup ? null : lineupLoadProblem(r.lineupStatus);
+      // A page that thinks it's logged out never shows a lineup, even if a
+      // stray cookie got one from the API: guests see the log-in prompt.
+      const lineup = isLoggedIn() ? r.lineup : null;
+      const problem = lineup ? null : lineupLoadProblem(r.lineup ? 401 : r.lineupStatus);
       setNeedsLogin(problem?.kind === "login");
       setError(problem?.kind === "message" ? problem.text : "");
-      if (r.lineup) {
-        setData(r.lineup);
-        setSlots(r.lineup.slots);
+      if (lineup) {
+        setData(lineup);
+        setSlots(lineup.slots);
+      } else {
+        setData(null);
       }
       setPick(null);
     });

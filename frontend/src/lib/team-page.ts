@@ -5,7 +5,8 @@ export const ROSTER_GROUPS = ["QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "D
 export interface RosterRow {
   id: string;
   position: string;
-  slot: string;
+  /** null when the viewer can't see lineups (guests). */
+  slot: string | null;
 }
 
 /** Players grouped by position in roster order. Starters lead each group. Unknown positions go last. */

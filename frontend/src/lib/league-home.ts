@@ -104,3 +104,12 @@ export function shortTeamName(name: string, leagueName: string): string {
   const prefix = `${leagueName} `;
   return name.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : name;
 }
+
+/** Scoreboard card title: "scores" once any game has a score, "projections"
+ * when projected totals are shown, else "matchups" (guests don't get
+ * projections -- they're built from lineups). */
+export function scoreboardTitle(week: number, games: readonly { team_a: HomeSide; team_b: HomeSide }[]): string {
+  if (games.some((g) => g.team_a.score != null || g.team_b.score != null)) return `Week ${week} scores`;
+  if (games.some((g) => g.team_a.projected != null || g.team_b.projected != null)) return `Week ${week} projections`;
+  return `Week ${week} matchups`;
+}
