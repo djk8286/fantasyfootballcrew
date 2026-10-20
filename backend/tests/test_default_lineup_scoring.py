@@ -30,7 +30,7 @@ from app.services.default_lineup import (
     pre_week_ranking_stats,
 )
 from app.services.scoring_engine import DEFAULT_ROSTER_SLOTS
-from app.services.standings_service import calculate_week, get_standings, repair_default_lineup_scores
+from app.services.standings_service import calculate_week, get_standings, repair_default_lineup_scores, week_schedule_state
 
 YEAR = 2026
 WEEK = 3
@@ -288,6 +288,28 @@ async def test_bye_week_from_schedule_leaves_def_slot_empty(db_session_factory):
     starters = {s["labels"][pid] for pid in ws.lineup_data["default_starters"]}
     assert starters == DEFAULT_LABELS - {"DEF1"}
     assert ws.total_score == _week_points(DEFAULT_LABELS - {"DEF1"})
+
+
+@pytest.mark.asyncio
+async def test_washington_is_not_on_bye_when_espn_calls_it_wsh(db_session_factory):
+    # Sleeper says WAS, ESPN says WSH. A game row stored with ESPN's code
+    # must still count as Washington playing.
+    s = await _league(db_session_factory, games=[
+        _game("WSH", "LAC", datetime.now(timezone.utc) - timedelta(hours=3), state="post", completed=True),
+        _game("KC", "DEN", datetime.now(timezone.utc) - timedelta(hours=3), state="post", completed=True),
+    ])
+    async with db_session_factory() as db:
+        team_a = (await db.execute(select(Team).where(Team.id == s["a"]))).scalar_one()
+        for pid in team_a.roster:
+            if s["labels"][pid] == "QB1":
+                (await db.get(Player, pid)).team = "WAS"
+        await db.commit()
+        teams_playing, _ = await week_schedule_state(YEAR, WEEK, db)
+        assert "WAS" in teams_playing and "WSH" not in teams_playing
+    async with db_session_factory() as db:
+        await calculate_week(s["league"], WEEK, YEAR, db, sleeper_stats=s["stats"])
+    ws = await _ws(db_session_factory, s["league"], s["a"])
+    assert {s["labels"][pid] for pid in ws.lineup_data["default_starters"]} == DEFAULT_LABELS
 
 
 @pytest.mark.asyncio
