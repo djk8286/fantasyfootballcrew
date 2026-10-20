@@ -10,7 +10,7 @@ from app.models.transaction import Transaction, TransactionType, TransactionStat
 from app.models.user import User
 from app.schemas.trade import TradeProposalCreate
 from app.api.deps import get_current_user
-from app.services.cpu_trade_service import evaluate_cpu_response
+from app.services.cpu_trade_service import evaluate_cpu_response, apply_cpu_verdict, answer_pending_cpu_trades
 
 router = APIRouter(prefix="/leagues/{league_id}/trades", tags=["trades"])
 
@@ -68,11 +68,7 @@ async def propose_trade(
     # forever). Declined -> closed now; accepted -> normal commissioner review.
     if target_team.is_cpu:
         verdict = await evaluate_cpu_response(db, data.offered_player_ids, data.requested_player_ids)
-        details["cpu_response"] = "accepted" if verdict["accepted"] else "rejected"
-        details["cpu_reason"] = verdict["reason"]
-        details["cpu_value"] = {"received": verdict["value_received"], "given": verdict["value_given"]}
-        if not verdict["accepted"]:
-            trade_status = TransactionStatus.DENIED
+        trade_status = apply_cpu_verdict(details, verdict)
 
     trade = Transaction(
         league_id=league_id,
@@ -94,6 +90,10 @@ async def list_team_trades(
     db: AsyncSession = Depends(get_db),
 ):
     """List trades for a league, optionally filtered to those involving a given team (as proposer or target)."""
+    # Any offer still waiting on a CPU team gets its answer before we read
+    # (see cpu_trade_service.answer_pending_cpu_trades).
+    if await answer_pending_cpu_trades(db, league_id):
+        await db.commit()
     result = await db.execute(
         select(Transaction).where(
             Transaction.league_id == league_id,
