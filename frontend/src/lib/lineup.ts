@@ -140,3 +140,15 @@ export function moveWarning(
   const added = issuesFor(applyMove(slots, pick, target), players).find((i) => i.playerId && !before.has(i.playerId));
   return added ? added.message : null;
 }
+
+/** Projected points for the players in these slots. Null when the week
+ * has no projections, so the UI can show "—" instead of a fake 0. */
+export function projectedTotal(
+  slots: readonly Slot[],
+  projected: Record<string, number | null | undefined>,
+  available: boolean,
+): number | null {
+  if (!available) return null;
+  const sum = slots.reduce((t, s) => t + (s.player_id ? projected[s.player_id] ?? 0 : 0), 0);
+  return Math.round(sum * 100) / 100;
+}

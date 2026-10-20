@@ -23,6 +23,7 @@ from app.api.v1 import (
     playoffs_router, invites_router, dashboard_router,
     admin_router, nfl_router,
 )
+from app.api.v1.team_hub import router as team_hub_router
 
 # Before the FastAPI app is constructed, so instrumentation covers
 # everything from the very first request. No-ops entirely without
@@ -139,6 +140,7 @@ app.include_router(trades_router, prefix="/api/v1")
 app.include_router(waivers_router, prefix="/api/v1")
 app.include_router(coaches_router, prefix="/api/v1")
 app.include_router(lineups_router, prefix="/api/v1")
+app.include_router(team_hub_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(playoffs_router, prefix="/api/v1")
 app.include_router(invites_router, prefix="/api/v1")

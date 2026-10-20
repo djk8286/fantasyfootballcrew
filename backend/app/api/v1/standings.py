@@ -198,6 +198,9 @@ async def get_season_schedule_endpoint(
         "league_id": league_id,
         "league_name": league.name,
         "year": year,
+        # First week the league plays. Earlier weeks came before its draft
+        # and aren't in schedule.
+        "league_start_week": schedule[0]["week"] if schedule else 1,
         "schedule": schedule,
     }
 

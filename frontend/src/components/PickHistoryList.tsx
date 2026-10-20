@@ -1,7 +1,7 @@
 "use client";
 
 import PlayerAvatar from "./PlayerAvatar";
-import PositionBadge from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 import TeamBadge from "./TeamBadge";
 import { formatPickLabel } from "@/lib/draftPickMath";
 
@@ -70,7 +70,7 @@ export default function PickHistoryList({ picks, numTeams, myTeamId, onPlayerHov
                 onMouseLeave={() => onPlayerHover(null, null)}
               >
                 <span className="text-sm font-medium text-white truncate">{p.player?.full_name || "—"}</span>
-                {p.player && <PositionBadge pos={p.player.position} />}
+                {p.player && <PositionChip pos={p.player.position} />}
                 <span className="text-xs text-surface-500 shrink-0">{p.player?.team || ""}</span>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">

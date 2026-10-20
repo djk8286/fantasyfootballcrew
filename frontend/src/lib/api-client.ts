@@ -423,6 +423,15 @@ export interface LeagueListFilters {
 
 // Leagues
 export const leaguesApi = {
+  /** League home in one call. See GET /leagues/{id}/home. */
+  getHome: (leagueId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/home?week=${week}&year=${year}`),
+  /** League feed, newest first. teamId narrows it to one team. */
+  getActivity: (leagueId: string, teamId?: string, limit = 30) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (teamId) params.set("team_id", teamId);
+    return apiRequest(`/api/v1/leagues/${leagueId}/activity?${params.toString()}`);
+  },
   list: (filters?: LeagueListFilters) => {
     const params = new URLSearchParams();
     if (filters?.mine) params.set("mine", "true");
@@ -446,6 +455,11 @@ export const leaguesApi = {
     apiRequest("/api/v1/leagues", { method: "POST", body: data }),
   update: (id: string, data: Record<string, unknown>) =>
     apiRequest(`/api/v1/leagues/${id}`, { method: "PATCH", body: data }),
+  /** Commissioner, co-commissioners and team managers by username. Managers only. */
+  getMembers: (id: string) => apiRequest(`/api/v1/leagues/${id}/members`),
+  /** Add or remove a co-commissioner, or hand over the league, by username or email. */
+  manageCommissionerByName: (id: string, action: "add_co_commish" | "remove_co_commish" | "transfer", identifier: string) =>
+    apiRequest(`/api/v1/leagues/${id}/commissioner`, { method: "POST", body: { action, identifier } }),
   manageCommissioner: (id: string, action: string, userId: string) =>
     apiRequest(`/api/v1/leagues/${id}/commissioner`, {
       method: "POST",
@@ -507,6 +521,9 @@ export const teamsApi = {
     apiRequest(`/api/v1/teams/league/${leagueId}`),
   get: (teamId: string) =>
     apiRequest(`/api/v1/teams/${teamId}`),
+  /** Team, record, owner usernames and this week's roster rows in one call. */
+  getRoster: (teamId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/teams/${teamId}/roster?week=${week}&year=${year}`),
   create: (data: Record<string, unknown>) =>
     apiRequest("/api/v1/teams", { method: "POST", body: data }),
   update: (id: string, data: Record<string, unknown>) =>

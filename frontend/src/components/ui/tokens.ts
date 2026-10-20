@@ -87,3 +87,6 @@ export function formatPoints(value: number | null | undefined, digits = 1, signe
   const text = value.toFixed(digits);
   return signed && value > 0 ? `+${text}` : text;
 }
+
+/** Player positions in roster order, for filters and grouped lists. */
+export const POSITION_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF", "DB", "DL", "LB"];

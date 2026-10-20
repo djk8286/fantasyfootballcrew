@@ -6,7 +6,8 @@ import { Search, Loader2, Trophy } from "lucide-react";
 import { playersApi } from "@/lib/api-client";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import type { HoverPlayer } from "@/components/PlayerAvatar";
-import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
+import { POSITION_ORDER } from "@/components/ui/tokens";
 import RankBadge from "@/components/ui/RankBadge";
 
 interface PlayerRead {
@@ -265,7 +266,7 @@ export default function PlayersPage() {
                   >
                     <div className="flex items-center gap-2">
                       <PlayerLink id={p.id} className="text-sm font-semibold text-white truncate">{hp.full_name}</PlayerLink>
-                      <PositionBadge pos={p.position} />
+                      <PositionChip pos={p.position} />
                     </div>
                     <div className="flex items-center gap-3 text-xs text-surface-500 mt-0.5">
                       <span>{p.team || "FA"}</span>

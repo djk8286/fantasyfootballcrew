@@ -1,1746 +1,595 @@
 "use client";
 
-import PlayerLink from "@/components/PlayerLink";
-import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
 import Link from "next/link";
-import { leaguesApi, teamsApi, draftsApi, playersApi, standingsApi, nflApi, isLoggedIn, joinRequestsApi, isCurrentUser } from "@/lib/api-client";
-import { ownerLabel, type OwnerLabel } from "@/lib/owner-label";
-import { VisibilityBadge, ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
-import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
-import PositionBadge from "@/components/PositionBadge";
-import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Bot, Clock, ListChecks, Lock, Mail, Send, Shield, Swords, UserPlus, Users } from "lucide-react";
 import Avatar from "@/components/Avatar";
-import AvatarEditor from "@/components/AvatarEditor";
 import AdSlot from "@/components/AdSlot";
-import GameStatusBadge from "@/components/GameStatusBadge";
+import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
+import { ActivityFeed, type ActivityItem } from "@/components/ActivityFeed";
+import { PlayerNewsCard } from "@/components/PlayerNewsCard";
+import { SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
+import type { AdminLeague, AdminTeam } from "@/components/commissioner/types";
+import { Badge } from "@/components/ui/Badge";
+import { Button, buttonClasses } from "@/components/ui/Button";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { Num } from "@/components/ui/Num";
+import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
 import {
-  Trophy,
-  Users,
-  Calendar,
-  ArrowRight,
-  ChevronRight,
-  TrendingUp,
-  Swords,
-  Shield,
-  Plus,
-  Bot,
-  Settings,
-  Trash2,
-  Crown,
-  UserPlus,
-  UserMinus,
-  UserCheck,
-  Pencil,
-  X,
-  Check,
-  RefreshCw,
-  ArrowLeftRight,
-  ListOrdered,
-  ListChecks,
-  Lock,
-  Send,
-  Clock,
-  Mail,
-  DollarSign,
-  Sparkles,
-  Skull,
-  Copy,
-} from "lucide-react";
-import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
+  draftsApi,
+  friendlyErrorMessage,
+  isLoggedIn,
+  joinRequestsApi,
+  leaguesApi,
+  nflApi,
+  teamsApi,
+  tradesApi,
+  waiversApi,
+} from "@/lib/api-client";
+import { initialWeek } from "@/lib/current-week";
+import { barShare, headline, homeMode, leagueChips, recapLine, recordLine, shortTeamName, winChance, type HomeSide, type Recap } from "@/lib/league-home";
 
-// ─── Interfaces ───────────────────────────────────────────────
+// ─── Data ─────────────────────────────────────────────────────
 
-interface RosterPlayer {
-  id: string;
-  full_name: string;
-  first_name: string;
-  last_name: string;
-  position: string;
-  team: string | null;
-  avatar_url: string | null;
-  sleeper_id: string | null;
-  season_points: number | null;
-  season_points_year: number | null;
-}
-
-interface Team {
-  id: string;
-  name: string;
-  owner_id: string | null;
-  co_owner_id: string | null;
-  league_id: string;
-  avatar_url: string | null;
-  is_cpu: boolean;
-  conference: string | null;
-  wins: number;
-  losses: number;
-  ties: number;
-  points_for: number;
-  points_against: number;
-  roster: string[] | null;
-}
-
-interface LeagueData {
-  id: string;
-  name: string;
-  description: string | null;
-  commissioner_id: string;
-  league_type: string;
-  max_teams: number;
-  team_count: number | null;
-  draft_status: string;
-  draft_type: string;
-  co_commissioner_ids: string[] | null;
-  created_at: string;
-  visibility: "private" | "invite_only" | "open";
-  wanted_board_hidden: boolean;
-  conference_a_name: string | null;
-  conference_b_name: string | null;
-  // "commissioner"|"member"|"eligible"|"requested"|"invited"|"blocked",
-  // null only when logged out (backend doesn't compute it without a
-  // viewer). See get_league's _compute_viewer_join_status.
+interface LeagueData extends AdminLeague {
   viewer_join_status: string | null;
 }
 
-// ─── Avatar Options ──────────────────────────────────────────
-// (shared with other pages via @/lib/team-avatars)
+interface Home {
+  league: {
+    name: string;
+    league_type: string;
+    visibility: string;
+    draft_status: string;
+    team_count: number;
+    max_teams: number;
+    scoring: string;
+    best_ball: boolean;
+    is_commissioner: boolean;
+    is_member: boolean;
+  };
+  week: number;
+  year: number;
+  week_status: "upcoming" | "live" | "final" | "unknown";
+  my_team: { id: string; name: string; has_lineup_set: boolean } | null;
+  my_matchup: { me: HomeSide; opponent: HomeSide } | null;
+  top_issue: { kind: string; message: string } | null;
+  issue_count: number;
+  last_week: Recap | null;
+  scoreboard: { team_a: HomeSide; team_b: HomeSide; mine: boolean }[];
+  standings: { rank: number; team_id: string; name: string; wins: number; losses: number; ties: number; points_for: number; streak: string | null; mine: boolean }[];
+  activity: ActivityItem[];
+}
 
-// ─── League type helpers ─────────────────────────────────────
+const CURRENT_YEAR = new Date().getFullYear();
 
-const leagueTypeLabels: Record<string, string> = {
-  standard: "Standard",
-  two_man: "2-Man",
-  conference: "Conference",
-  guillotine: "Guillotine",
-  dual_squad: "Dual-Squad",
-};
+async function fetchLeagueHome(id: string) {
+  const [state, league, teams] = await Promise.all([
+    nflApi.getCurrentWeek().catch(() => null),
+    leaguesApi.get(id).catch(() => null) as Promise<LeagueData | null>,
+    teamsApi.getByLeague(id).catch(() => []) as Promise<AdminTeam[]>,
+  ]);
+  if (!league) return null;
+  const year = state?.season ?? CURRENT_YEAR;
+  const week = initialWeek({ param: null, state, draftComplete: league.draft_status === "completed" });
+  const [home, cap, recap, draft] = await Promise.all([
+    leaguesApi.getHome(id, week, year).catch(() => null) as Promise<Home | null>,
+    leaguesApi.getSalaryCapSettings(id).catch(() => null) as Promise<{ enabled?: boolean } | null>,
+    leaguesApi.getTeamRecap(id).catch(() => null) as Promise<{ content: string; week: number } | null>,
+    league.draft_status === "not_started"
+      ? Promise.resolve(null)
+      : (fetch(`/api/v1/drafts/find?league_id=${id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<{ id?: string } | null>),
+  ]);
+  return { league, teams: Array.isArray(teams) ? teams : [], home, capEnabled: !!cap?.enabled, aiRecap: recap, draftId: draft?.id ?? null };
+}
 
-const draftStatusConfig: Record<
-  string,
-  { label: string; color: string; icon: typeof Calendar }
-> = {
-  not_started: {
-    label: "Not Started",
-    color: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
-    icon: Calendar,
-  },
-  in_progress: {
-    label: "In Progress",
-    color: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-    icon: TrendingUp,
-  },
-  completed: {
-    label: "Completed",
-    color: "bg-green-500/15 text-green-400 border-green-500/25",
-    icon: Trophy,
-  },
-};
+type PageData = NonNullable<Awaited<ReturnType<typeof fetchLeagueHome>>>;
 
-const typeIcons: Record<string, typeof Users> = {
-  standard: Users,
-  two_man: Users,
-  conference: Swords,
-  guillotine: Skull,
-  dual_squad: Copy,
-};
+// ─── Pieces ───────────────────────────────────────────────────
 
-function AIBadge() {
+function Header({ data, isManager }: { data: PageData; isManager: boolean }) {
+  const { league, home } = data;
+  const chips = home ? leagueChips(home.league) : [];
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-400/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">
-      <Bot className="w-2.5 h-2.5" /> AI-Generated
-    </span>
+    <div className="flex flex-wrap items-start gap-4">
+      <div className="min-w-0 flex-1 basis-64">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink-100 lg:text-3xl">{league.name}</h1>
+        {league.description && <p className="mt-1 max-w-2xl text-sm text-ink-400">{league.description}</p>}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {chips.map((c) => (
+            <Badge key={c}>{c}</Badge>
+          ))}
+          {data.capEnabled && <SalaryCapBadge />}
+          {home?.league.best_ball && <BestBallBadge />}
+          {home?.league.best_ball && <ManagementWindowIndicator leagueId={league.id} />}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {league.draft_status === "completed" && data.draftId && (
+          <Link href={`/draft/${data.draftId}`} className={`${buttonClasses("ghost", "md")} max-sm:hidden`}>
+            Draft results
+          </Link>
+        )}
+        {isManager && (
+          <>
+            <Link href={`/leagues/${league.id}/commissioner?tab=invites`} className={buttonClasses("secondary", "md")}>
+              <UserPlus className="h-4 w-4" aria-hidden /> Invite
+            </Link>
+            <Link href={`/leagues/${league.id}/commissioner`} className={buttonClasses("secondary", "md")}>
+              <Shield className="h-4 w-4" aria-hidden /> Commissioner
+            </Link>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
-// Dashboard AI Summaries: per-team weekly recap, visible to every
-// manager on the league's own dashboard page (not gated behind
-// commissioner access like the AI Digest tab is) -- auto-generated by
-// the scheduler once the week's scores are final, so this is a pure
-// ambient read with no week-picker UI, same ai-panel visual language
-// (AIBadge + purple-tinted box) the commissioner panel's Digest tab
-// established.
-function TeamRecapSection({ leagueId }: { leagueId: string }) {
-  const [recap, setRecap] = useState<{ content: string; week: number; year: number } | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    leaguesApi
-      .getTeamRecap(leagueId)
-      // API answers 200 null when nothing has been generated yet.
-      .then((d) => setRecap((d as { content: string; week: number; year: number } | null) ?? null))
-      .catch(() => setRecap(null))
-      .finally(() => setLoading(false));
-  }, [leagueId]);
-
-  if (loading || !recap) return null;
-
+function SideBlock({ side, align, leagueId, mine, leagueName }: { side: HomeSide; align: "left" | "right"; leagueId: string; mine: boolean; leagueName: string }) {
+  const value = headline(side);
   return (
-    <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
-      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Bot className="w-4 h-4 text-gold-400" />
-            Week {recap.week} Team Recaps
-          </h2>
-          <AIBadge />
-        </div>
-        <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap">
-          {recap.content}
-        </div>
-      </div>
-    </section>
+    <div className={`min-w-0 ${align === "right" ? "text-right" : ""}`}>
+      <Link href={`/leagues/${leagueId}/teams/${side.team_id}`} title={side.name} className="block truncate text-sm font-semibold text-ink-100 hover:text-gold">
+        {shortTeamName(side.name, leagueName)}
+      </Link>
+      <Num value={value} size="score" className={`mt-1 block ${mine ? "text-ink-100" : "text-ink-300"}`} />
+      {side.score != null && side.projected != null && <span className="num text-xs text-ink-400">Proj {side.projected.toFixed(1)}</span>}
+    </div>
   );
 }
 
-// ─── Component ────────────────────────────────────────────────
-
-export default function LeagueDetailPage() {
-  const params = useParams();
-  const id = params.id as string;
-
-  const [league, setLeague] = useState<LeagueData | null>(null);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [draftId, setDraftId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Page-load failure only ("League not found") -- gates the full-page
-  // error screen below. Action failures (rename, claim, settings save,
-  // ...) must NEVER write to this one: every action handler used to
-  // share this same state, so any failed action (a 403 on renaming a
-  // team you don't own, a bad league-settings save, ...) replaced the
-  // *entire* page with "League not found" instead of showing what
-  // actually went wrong. See actionError below for what those use now.
-  const [error, setError] = useState("");
-  const [actionError, setActionError] = useState("");
-
-  // Avatar picker state
-  const [editingAvatarTeam, setEditingAvatarTeam] = useState<string | null>(null);
-
-  // Team rename state
-  const [editingNameTeam, setEditingNameTeam] = useState<string | null>(null);
-  const [nameDraft, setNameDraft] = useState("");
-  const [savingName, setSavingName] = useState(false);
-
-  // Commissioner panel state
-  const [showComPanel, setShowComPanel] = useState(false);
-
-  // League edit state
-  const [editingLeague, setEditingLeague] = useState(false);
-  const [leagueEditForm, setLeagueEditForm] = useState({
-    name: "",
-    description: "",
-    visibility: "open" as "open" | "invite_only" | "private",
-    wanted_board_hidden: false,
-    conference_a_name: "",
-    conference_b_name: "",
-  });
-
-  // Co-commissioner input
-  const [coCommishUserId, setCoCommishUserId] = useState("");
-
-  // Claim team state
-  const [claimingTeamId, setClaimingTeamId] = useState<string | null>(null);
-
-  // Delete confirmation
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-
-  // Get current "user" from localStorage
-
-  const getMyTeams = useCallback(() => {
-    if (typeof window === "undefined") return [] as string[];
-    try {
-      const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
-      return stored[id] ? [stored[id]] : [];
-    } catch {
-      return [];
-    }
-  }, [id]);
-
-  const isCommissioner = !!league && isCurrentUser(league.commissioner_id);
-  const isCoCommissioner = !!league && (league.co_commissioner_ids || []).some((cid) => isCurrentUser(cid));
-  const isLeagueManager = isCommissioner || isCoCommissioner;
-  // Co-Owner (2-Man Teams) only makes sense for TWO_MAN leagues -- see
-  // teams.py's matching server-side gate on claim/assign-co-owner.
-  const isTwoMan = league?.league_type === "two_man";
-  // Backend's claim_team/claim_co_owner (Step 6) already enforce this --
-  // this just keeps the buttons from being shown (and dead-ending in a
-  // 403) to someone who can't actually use them. "eligible" covers OPEN
-  // outright, plus INVITE_ONLY/PRIVATE once an invite's been accepted or
-  // a join request approved.
-  const canSelfClaim = isLoggedIn() && !isLeagueManager && league?.viewer_join_status === "eligible";
-
-  // Join-request state (Step 7) -- INVITE_ONLY leagues where the viewer
-  // isn't a member/manager/eligible yet.
-  const [joinMessage, setJoinMessage] = useState("");
-  const [submittingJoinRequest, setSubmittingJoinRequest] = useState(false);
-  const [joinRequestError, setJoinRequestError] = useState("");
-
-  // Salary-Cap + Contract Leagues (Phase 5) -- a bolt-on flag, fetched
-  // separately since it's its own API resource (like playoff/rivalry
-  // settings), purely to decide whether the SalaryCapBadge renders.
-  const [capEnabled, setCapEnabled] = useState(false);
-
-  // Best-Ball Hybrid (Phase 6) -- same bolt-on-flag pattern as capEnabled.
-  const [bestBallEnabled, setBestBallEnabled] = useState(false);
-
-  // W/L/T/PF/PA computed server-side from weekly scores (GET
-  // /leagues/{id}/standings). The Team model's own wins/losses/points
-  // columns are never written by the backend, so rendering them directly
-  // showed 0-0 / 0.0 for every team all season.
-  const [records, setRecords] = useState<Record<string, Pick<Team, "wins" | "losses" | "ties" | "points_for" | "points_against">>>({});
-
-  useEffect(() => {
-    if (!id) return;
-    standingsApi
-      .getStandings(id)
-      .then((d) => {
-        const rows = ((d as { standings?: Array<{ team_id: string; wins: number; losses: number; ties: number; points_for: number; points_against: number }> })?.standings) || [];
-        const map: typeof records = {};
-        for (const r of rows) {
-          map[r.team_id] = { wins: r.wins, losses: r.losses, ties: r.ties, points_for: r.points_for, points_against: r.points_against };
-        }
-        setRecords(map);
-      })
-      .catch(() => {});
-  }, [id]);
-
-  // ─── Data fetching ─────────────────────────────────────
-
-  useEffect(() => {
-    if (!id) return;
-
-    Promise.all([
-      leaguesApi.get(id).catch(() => null),
-      teamsApi.getByLeague(id).catch(() => [] as Team[]),
-    ])
-      .then(([leagueData, teamData]) => {
-        if (!leagueData) {
-          setError("League not found");
-          return;
-        }
-        const l = leagueData as LeagueData;
-        setLeague(l);
-        setTeams(Array.isArray(teamData) ? (teamData as Team[]) : []);
-
-        if (l.draft_status !== "not_started") {
-          fetch(`/api/v1/drafts/find?league_id=${id}`)
-            .then((res) => res.json())
-            .then((data) => setDraftId(data.id))
-            .catch(() => {});
-        }
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load league");
-      })
-      .finally(() => setLoading(false));
-
-    leaguesApi
-      .getSalaryCapSettings(id)
-      .then((data) => setCapEnabled(!!(data as { enabled?: boolean })?.enabled))
-      .catch(() => {});
-
-    leaguesApi
-      .getBestBallSettings(id)
-      .then((data) => setBestBallEnabled(!!(data as { enabled?: boolean })?.enabled))
-      .catch(() => {});
-  }, [id]);
-
-  // Resolve roster player IDs into actual player data. Team Roster used to
-  // show nothing but team name badges -- teams[].roster is a list of player
-  // IDs, not player objects, so drafted rosters were never actually visible
-  // anywhere on this page.
-  const [playersById, setPlayersById] = useState<Record<string, RosterPlayer>>({});
-  useEffect(() => {
-    const ids = new Set<string>();
-    teams.forEach((t) => (t.roster || []).forEach((pid) => ids.add(pid)));
-    const unresolved = [...ids].filter((pid) => !(pid in playersById));
-    if (unresolved.length === 0) return;
-
-    Promise.all(
-      unresolved.map((pid) =>
-        playersApi
-          .get(pid, id)
-          .then((p) => {
-            const raw = p as Omit<RosterPlayer, "full_name">;
-            const full_name = `${raw.first_name ?? ""} ${raw.last_name ?? ""}`.trim() || "Unknown Player";
-            return [pid, { ...raw, full_name } as RosterPlayer] as const;
-          })
-          .catch(() => [pid, null] as const),
-      ),
-    ).then((pairs) => {
-      setPlayersById((prev) => {
-        const next = { ...prev };
-        for (const [pid, p] of pairs) if (p) next[pid] = p;
-        return next;
-      });
-    });
-  }, [teams, playersById, id]);
-
-  // Each player's REAL current-week score (not last season's total) --
-  // "League dashboard/team management: show the team's players and
-  // their active/current scores." Week comes from the real live NFL
-  // state (nflApi.getCurrentWeek -- straight from Sleeper, same as the
-  // backend scheduler uses), not a frontend guess -- that's also what
-  // makes "week 1 started Wednesday, doesn't roll to week 2 until after
-  // Monday night" just work correctly without any date math here.
-  // team_id -> player_id -> {score, ...}. currentWeekLoaded distinguishes
-  // "haven't fetched yet" from "fetched, nobody's played" so a player
-  // isn't shown a wrong/stale number for a split second on load.
-  const [currentWeekBreakdown, setCurrentWeekBreakdown] = useState<Record<string, Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }>>>({});
-  const [currentWeekLoaded, setCurrentWeekLoaded] = useState(false);
-  useEffect(() => {
-    if (!id) return;
-    nflApi
-      .getCurrentWeek()
-      .then(async ({ season, week }) => {
-        const weekly = await standingsApi.getWeeklyScores(id, week, season).catch(() => null);
-        const teamScores = (weekly as { team_scores?: { team_id: string; lineup_data: { breakdown?: Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }> } | null }[] })?.team_scores || [];
-        const byTeam: Record<string, Record<string, { name: string; score: number; position: string; game_status?: string; is_bench?: boolean }>> = {};
-        for (const ts of teamScores) {
-          if (ts.lineup_data?.breakdown) byTeam[ts.team_id] = ts.lineup_data.breakdown;
-        }
-        setCurrentWeekBreakdown(byTeam);
-        setCurrentWeekLoaded(true);
-      })
-      .catch(() => setCurrentWeekLoaded(true));
-  }, [id]);
-
-  // Fixed hover card state -- same pattern the draft room already uses.
-  const [hoveredPlayer, setHoveredPlayer] = useState<RosterPlayer | null>(null);
-  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
-  const handlePlayerHover = useCallback((player: RosterPlayer | null, el: HTMLElement | null) => {
-    if (player && el) {
-      setHoveredPlayer(player);
-      const rect = el.getBoundingClientRect();
-      setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
-    } else {
-      setHoveredPlayer(null);
-      setHoverPos(null);
-    }
-  }, []);
-
-  const refreshTeams = async () => {
-    try {
-      const data = await teamsApi.getByLeague(id);
-      setTeams(Array.isArray(data) ? (data as Team[]) : []);
-    } catch {
-      // silent
-    }
-  };
-
-  const refreshLeague = async () => {
-    try {
-      const data = await leaguesApi.get(id);
-      if (data) setLeague(data as LeagueData);
-    } catch {
-      // silent
-    }
-  };
-
-  // Auto-refresh teams/league every 8s while this page is open -- before
-  // this, the only way to see someone else claim a team, rename it, or
-  // change their avatar was your own next action (or a manual reload).
-  // Everyone else's teams just sat there looking like unclaimed CPU
-  // teams until you refreshed. 8s (vs. the draft room's 2s) since this
-  // isn't a live-turn-based flow -- nobody's staring at this page
-  // waiting on a countdown the way they are mid-draft.
-  useEffect(() => {
-    if (!id) return;
-    const interval = setInterval(() => {
-      refreshTeams();
-      refreshLeague();
-    }, 8000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  // ─── Actions ─────────────────────────────────────────────
-
-  const handleSetAvatar = async (url: string) => {
-    if (!editingAvatarTeam) return;
-    // Errors intentionally propagate -- AvatarEditor's own try/catch
-    // shows them inline in the modal instead of this page's error banner.
-    await teamsApi.update(editingAvatarTeam, { avatar_url: url });
-    await refreshTeams();
-    setEditingAvatarTeam(null);
-  };
-
-  const handleRenameTeam = async (teamId: string) => {
-    const trimmed = nameDraft.trim();
-    if (!trimmed) {
-      setEditingNameTeam(null);
-      return;
-    }
-    setSavingName(true);
-    try {
-      await teamsApi.update(teamId, { name: trimmed });
-      await refreshTeams();
-      setEditingNameTeam(null);
-    } catch (err) {
-      // Exit edit mode on failure too -- leaving the input open with no
-      // visible feedback (the real error lands in the page-wide banner,
-      // easy to miss below the fold) reads as "the rename bar is just
-      // broken" rather than "that failed, here's why."
-      setActionError(err instanceof Error ? err.message : "Failed to rename team");
-      setEditingNameTeam(null);
-    } finally {
-      setSavingName(false);
-    }
-  };
-
-  const handleClaimTeam = async (teamId: string) => {
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.claim(teamId);
-      // Update localStorage
-      const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
-      stored[id] = teamId;
-      localStorage.setItem("ffc_user_teams", JSON.stringify(stored));
-      await Promise.all([refreshTeams(), refreshLeague()]);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to claim team");
-    }
-    setClaimingTeamId(null);
-  };
-
-  const handleClaimCoOwner = async (teamId: string) => {
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.claimCoOwner(teamId);
-      await Promise.all([refreshTeams(), refreshLeague()]);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
-    }
-    setClaimingTeamId(null);
-  };
-
-  // ─── Commissioner team-management overrides ─────────────────────
-  // Fixing a wrong claim, or hand-assigning teams, used to have no path
-  // at all -- ownership was entirely self-service. These call the same
-  // require_commissioner-gated endpoints a manager (not the person
-  // being assigned/removed) uses.
-
-  const handleRemoveOwner = async (teamId: string, teamName: string) => {
-    if (!window.confirm(`Remove the owner from "${teamName}"? If there's a co-owner, they become the new owner; otherwise the team goes back to CPU.`)) return;
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.removeOwner(teamId);
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to remove owner");
-    }
-    setClaimingTeamId(null);
-  };
-
-  const handleRemoveCoOwnerAsManager = async (teamId: string) => {
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.removeCoOwner(teamId);
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to remove co-owner");
-    }
-    setClaimingTeamId(null);
-  };
-
-  const handleAssignOwner = async (teamId: string) => {
-    const identifier = window.prompt("Assign this team to (username or email):");
-    if (!identifier || !identifier.trim()) return;
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.assignOwner(teamId, identifier.trim());
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to assign owner");
-    }
-    setClaimingTeamId(null);
-  };
-
-  const handleAssignCoOwner = async (teamId: string) => {
-    const identifier = window.prompt("Assign co-owner (username or email):");
-    if (!identifier || !identifier.trim()) return;
-    setClaimingTeamId(teamId);
-    try {
-      await teamsApi.assignCoOwner(teamId, identifier.trim());
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to assign co-owner");
-    }
-    setClaimingTeamId(null);
-  };
-
-  const handleRequestToJoin = async () => {
-    setSubmittingJoinRequest(true);
-    setJoinRequestError("");
-    try {
-      await joinRequestsApi.create(id, joinMessage || undefined);
-      setJoinMessage("");
-      await refreshLeague(); // picks up the new viewer_join_status: "requested"
-    } catch (err) {
-      setJoinRequestError(err instanceof Error ? err.message : "Failed to send join request");
-    }
-    setSubmittingJoinRequest(false);
-  };
-
-  const handleDeleteTeam = async (teamId: string) => {
-    try {
-      await teamsApi.delete(teamId);
-      setDeleteConfirmId(null);
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to delete team");
-    }
-  };
-
-  // Conference reassignment (Phase 3 Step 7) -- the backend PATCH already
-  // enforced commissioner-only + "A"/"B" validation since before this
-  // phase; this is purely the missing frontend surface for it. No
-  // confirm dialog (trivially reversible -- click again to swap back)
-  // and no balance warning, matching the backend having neither on this
-  // path either.
-  const [swappingConferenceTeamId, setSwappingConferenceTeamId] = useState<string | null>(null);
-  const handleSwapConference = async (teamId: string, newConference: "A" | "B") => {
-    setSwappingConferenceTeamId(teamId);
-    try {
-      await teamsApi.update(teamId, { conference: newConference });
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to reassign conference");
-    }
-    setSwappingConferenceTeamId(null);
-  };
-
-  const handleFillCpuAll = async () => {
-    if (!league) return;
-    setLoading(true);
-    try {
-      const slotsLeft = league.max_teams - teams.length;
-      await teamsApi.bulkAddCpu(league.id, slotsLeft);
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to add CPU teams");
-    }
-    setLoading(false);
-  };
-
-  const handleAddOneCpu = async () => {
-    if (!league) return;
-    setLoading(true);
-    try {
-      await teamsApi.bulkAddCpu(league.id, 1, league.name + " Team");
-      await refreshTeams();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to add team");
-    }
-    setLoading(false);
-  };
-
-  const handleSaveLeagueSettings = async () => {
-    if (!league) return;
-    try {
-      await leaguesApi.update(league.id, {
-        name: leagueEditForm.name,
-        description: leagueEditForm.description || null,
-        visibility: leagueEditForm.visibility,
-        wanted_board_hidden: leagueEditForm.wanted_board_hidden,
-        conference_a_name: leagueEditForm.conference_a_name,
-        conference_b_name: leagueEditForm.conference_b_name,
-      });
-      await refreshLeague();
-      setEditingLeague(false);
-      setActionError("");
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to update league");
-    }
-  };
-
-  const handleAddCoCommish = async () => {
-    if (!league || !coCommishUserId.trim()) return;
-    try {
-      await leaguesApi.manageCommissioner(league.id, "add_co_commish", coCommishUserId.trim());
-      await refreshLeague();
-      setCoCommishUserId("");
-      setActionError("");
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to add co-commissioner");
-    }
-  };
-
-  const handleRemoveCoCommish = async (userId: string) => {
-    if (!league) return;
-    try {
-      await leaguesApi.manageCommissioner(league.id, "remove_co_commish", userId);
-      await refreshLeague();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to remove co-commissioner");
-    }
-  };
-
-  const handleTransferCommissioner = async (userId: string) => {
-    if (!league) return;
-    try {
-      await leaguesApi.manageCommissioner(league.id, "transfer", userId);
-      await refreshLeague();
-      setActionError("");
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to transfer commissioner");
-    }
-  };
-
-  // ─── Helper: team owner display ─────────────────────────
-
-  function getOwnerDisplay(team: Team): OwnerLabel {
-    return ownerLabel({
-      ownerId: team.owner_id,
-      coOwnerId: team.co_owner_id,
-      isCpu: team.is_cpu,
-      commissionerId: league?.commissioner_id,
-      isOwnerMe: isCurrentUser(team.owner_id) || (team.owner_id === "placeholder" && getMyTeams().includes(team.id)),
-      isCoOwnerMe: !!team.co_owner_id && isCurrentUser(team.co_owner_id),
-    });
-  }
-
-  // ─── Render ──────────────────────────────────────────────
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
-          <span className="text-surface-400">Loading league...</span>
-        </div>
+function MatchupCard({ home, leagueId, leagueName }: { home: Home; leagueId: string; leagueName: string }) {
+  const m = home.my_matchup!;
+  const live = home.week_status === "live";
+  const final = home.week_status === "final";
+  const started = m.me.score != null;
+  const share = barShare(headline(m.me), headline(m.opponent));
+  const chance = !started ? winChance(m.me.projected, m.opponent.projected) : null;
+  const canSetLineup = !home.league.best_ball && !final && home.my_team;
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-label font-semibold uppercase text-ink-400">Your matchup · Week {home.week}</h2>
+        {live ? <Badge tone="live">Live</Badge> : final ? <Badge>Final</Badge> : <span className="text-xs text-ink-400">Not started</span>}
       </div>
-    );
-  }
-
-  if (error || !league) {
-    return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-white mb-2">League not found</h2>
-          <p className="text-surface-400 text-sm mb-4">{error || "This league doesn't exist."}</p>
-          <Link href="/dashboard" className="text-gold-400 hover:text-gold-300 text-sm font-medium">
-            Back to Dashboard
+      <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+        <SideBlock side={m.me} align="left" leagueId={leagueId} leagueName={leagueName} mine />
+        <span className="pb-2 text-xs text-ink-400">vs</span>
+        <SideBlock side={m.opponent} align="right" leagueId={leagueId} leagueName={leagueName} mine={false} />
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink-700" aria-hidden>
+        <div className="h-full rounded-full bg-gold" style={{ width: `${Math.round(share * 100)}%` }} />
+      </div>
+      <div className="mt-1.5 flex justify-between gap-3 text-xs text-ink-400">
+        <span>{started ? (final ? "Final score" : "Live score") : chance != null ? `Projected · ${chance}% to win` : "No projections yet"}</span>
+        <span>Projections from Sleeper</span>
+      </div>
+      {canSetLineup && (
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <Link href={`/leagues/${leagueId}/teams/${home.my_team!.id}/lineup`} className={buttonClasses("primary", "md")}>
+            <ListChecks className="h-4 w-4" aria-hidden /> Set lineup
+            {home.top_issue && (
+              <span className="ml-1 rounded-chip bg-ink-950/25 px-1.5 py-0.5 text-xs font-medium">
+                {home.top_issue.message}
+                {home.issue_count > 1 && ` +${home.issue_count - 1}`}
+              </span>
+            )}
+          </Link>
+          <Link href={`/leagues/${leagueId}/teams/${m.opponent.team_id}`} className={buttonClasses("secondary", "md")}>
+            Scout {shortTeamName(m.opponent.name, leagueName)}
           </Link>
         </div>
+      )}
+    </Card>
+  );
+}
+
+function RecapCard({ recap }: { recap: Recap }) {
+  const text = recapLine(recap);
+  if (!text) return null;
+  return (
+    <Card className="border-warn/40 bg-warn/[0.06]">
+      <p className="flex items-start gap-3 text-sm text-ink-200">
+        <span className="shrink-0">
+          <Badge tone="warn">Wk {recap.week}</Badge>
+        </span>
+        <span>{text}</span>
+      </p>
+    </Card>
+  );
+}
+
+function Scoreboard({ home, leagueId, leagueName }: { home: Home; leagueId: string; leagueName: string }) {
+  if (home.scoreboard.length === 0) return null;
+  const tileSide = (s: HomeSide, lead: boolean) => (
+    <Link href={`/leagues/${leagueId}/teams/${s.team_id}`} className="flex items-center justify-between gap-3 py-0.5 hover:text-gold">
+      <span title={s.name} className={`truncate text-sm ${lead ? "font-semibold text-ink-100" : "text-ink-300"}`}>{shortTeamName(s.name, leagueName)}</span>
+      <Num value={headline(s)} className={`text-sm ${lead ? "text-ink-100" : "text-ink-400"}`} />
+    </Link>
+  );
+  const scored = home.scoreboard.some((g) => g.team_a.score != null);
+  return (
+    <Card>
+      <CardHeader title={`Week ${home.week} ${scored ? "scores" : "projections"}`} />
+      <div className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 xl:grid-cols-3">
+        {home.scoreboard.map((g) => {
+          const a = headline(g.team_a) ?? 0;
+          const b = headline(g.team_b) ?? 0;
+          return (
+            <div
+              key={g.team_a.team_id}
+              className={`min-w-[11rem] shrink-0 snap-start rounded-control border px-3 py-2 sm:min-w-0 ${g.mine ? "border-gold/60 bg-gold/[0.06]" : "border-ink-700 bg-ink-950/40"}`}
+            >
+              {tileSide(g.team_a, a > b)}
+              {tileSide(g.team_b, b > a)}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function StandingsCard({ home, leagueId, leagueName }: { home: Home; leagueId: string; leagueName: string }) {
+  return (
+    <Card className="px-0 lg:px-0">
+      <div className="px-4 lg:px-5">
+        <CardHeader
+          title="Standings"
+          action={
+            <Link href={`/leagues/${leagueId}/standings`} className="text-xs font-medium text-gold hover:text-gold-hi">
+              Full table
+            </Link>
+          }
+        />
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-label uppercase text-ink-400">
+            <th className="w-10 pb-2 pl-4 text-left font-semibold lg:pl-5">#</th>
+            <th className="pb-2 text-left font-semibold">Team</th>
+            <th className="w-12 pb-2 text-right font-semibold">W-L</th>
+            <th className="w-16 pb-2 text-right font-semibold">PF</th>
+            <th className="w-16 pb-2 pl-3 pr-4 text-right font-semibold lg:pr-5">Strk</th>
+          </tr>
+        </thead>
+        <tbody>
+          {home.standings.map((r) => (
+            <tr key={r.team_id} className={`border-t border-ink-700 ${r.mine ? "bg-gold/[0.07]" : ""}`}>
+              <td className="num py-2 pl-4 text-ink-400 lg:pl-5">{r.rank}</td>
+              <td className="max-w-0 py-2 pr-2">
+                <Link href={`/leagues/${leagueId}/teams/${r.team_id}`} title={r.name} className={`block truncate hover:text-gold ${r.mine ? "font-semibold text-gold" : "text-ink-100"}`}>
+                  {shortTeamName(r.name, leagueName)}
+                </Link>
+              </td>
+              <td className="num py-2 text-right text-ink-100">{recordLine(r)}</td>
+              <td className="py-2 text-right">
+                <Num value={r.points_for} className="text-sm text-ink-300" />
+              </td>
+              <td className={`num py-2 pr-4 text-right lg:pr-5 ${r.streak?.startsWith("W") ? "text-win" : r.streak?.startsWith("L") ? "text-loss" : "text-ink-400"}`}>
+                {r.streak ?? "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function DraftCard({ data, isManager, onError }: { data: PageData; isManager: boolean; onError: (m: string) => void }) {
+  const { league, teams } = data;
+  const router = useRouter();
+  const [starting, setStarting] = useState(false);
+  const full = teams.length >= league.max_teams;
+  if (league.draft_status === "in_progress") {
+    return (
+      <Card you>
+        <div className="flex flex-wrap items-center gap-3">
+          <Swords className="h-5 w-5 text-gold" aria-hidden />
+          <p className="flex-1 text-sm font-semibold text-ink-100">The draft is on.</p>
+          <Link href={`/draft/${data.draftId ?? league.id}`} className={buttonClasses("primary", "md")}>
+            Enter draft room
+          </Link>
+        </div>
+      </Card>
+    );
+  }
+  async function start() {
+    setStarting(true);
+    try {
+      const d = (await draftsApi.create(league.id, 15)) as { id: string };
+      router.push(`/draft/${d.id}`);
+    } catch (err) {
+      onError(friendlyErrorMessage(err, "Couldn't start the draft."));
+      setStarting(false);
+    }
+  }
+  return (
+    <Card>
+      <CardHeader title="Draft" />
+      <p className="text-sm text-ink-200">
+        {full ? `All ${league.max_teams} teams are in.` : `${teams.length} of ${league.max_teams} teams are in.`}{" "}
+        {isManager ? (full ? "Start the draft when everyone is ready." : "Fill the open spots with CPU teams or invite people.") : "The commissioner starts the draft."}
+      </p>
+      <div className="mt-3 flex -space-x-2">
+        {teams.slice(0, 12).map((t) => (
+          <Avatar key={t.id} url={t.avatar_url} size={28} rounded="rounded-full" className="border-2 border-ink-900" title={t.name} />
+        ))}
+      </div>
+      {isManager && (
+        <div className="mt-4">
+          <Button variant="primary" onClick={start} disabled={starting}>
+            {starting ? "Starting" : "Start draft"}
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** For people who aren't in the league yet: claim an open team or ask in. */
+function JoinCard({ data, onChanged, onError }: { data: PageData; onChanged: () => void; onError: (m: string) => void }) {
+  const { league, teams } = data;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const status = league.viewer_join_status;
+  const open = teams.filter((t) => t.is_cpu || !t.owner_id || t.owner_id === "cpu" || t.owner_id === "placeholder");
+
+  if (!isLoggedIn()) {
+    return (
+      <Card>
+        <p className="text-sm text-ink-300">
+          <Link href="/login" className="font-medium text-gold hover:text-gold-hi">
+            Log in
+          </Link>{" "}
+          to join this league.
+        </p>
+      </Card>
+    );
+  }
+  async function claim(teamId: string) {
+    setBusy(teamId);
+    try {
+      await teamsApi.claim(teamId);
+      onChanged();
+    } catch (err) {
+      onError(friendlyErrorMessage(err, "Couldn't claim that team."));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function request() {
+    setBusy("request");
+    try {
+      await joinRequestsApi.create(league.id, note || undefined);
+      setNote("");
+      onChanged();
+    } catch (err) {
+      onError(friendlyErrorMessage(err, "Couldn't send the request."));
+    } finally {
+      setBusy(null);
+    }
+  }
+  if (status === "eligible") {
+    return (
+      <Card>
+        <CardHeader title="Join this league" />
+        {open.length === 0 ? (
+          <p className="text-sm text-ink-400">Every team has a manager.</p>
+        ) : (
+          <ul className="divide-y divide-ink-700">
+            {open.map((t) => (
+              <li key={t.id} className="flex items-center gap-3 py-2">
+                <Avatar url={t.avatar_url} size={28} />
+                <span className="flex-1 truncate text-sm text-ink-100">{t.name}</span>
+                <Button size="sm" variant="primary" disabled={busy === t.id} onClick={() => claim(t.id)}>
+                  {busy === t.id ? "Claiming" : "Claim"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    );
+  }
+  if (status === "requested") {
+    return (
+      <Card>
+        <p className="flex items-center gap-2 text-sm text-ink-300">
+          <Clock className="h-4 w-4 text-warn" aria-hidden /> Your request to join is waiting on the commissioner.
+        </p>
+      </Card>
+    );
+  }
+  if (status === "invited") {
+    return (
+      <Card>
+        <p className="flex items-center gap-2 text-sm text-ink-300">
+          <Mail className="h-4 w-4 text-gold" aria-hidden /> You have an invite. Use the link in your email to join.
+        </p>
+      </Card>
+    );
+  }
+  if (status === "blocked") {
+    return (
+      <Card>
+        {league.visibility === "invite_only" ? (
+          <>
+            <p className="flex items-center gap-2 text-sm text-ink-300">
+              <Lock className="h-4 w-4 text-ink-400" aria-hidden /> This league is invite only. Ask the commissioner in.
+            </p>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="Add a note (optional)"
+              className="mt-3 w-full rounded-control border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-400"
+            />
+            <Button className="mt-2" variant="primary" onClick={request} disabled={busy === "request"}>
+              <Send className="h-4 w-4" aria-hidden /> {busy === "request" ? "Sending" : "Ask to join"}
+            </Button>
+          </>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-ink-300">
+            <Lock className="h-4 w-4 text-ink-400" aria-hidden /> This league is private.
+          </p>
+        )}
+      </Card>
+    );
+  }
+  return null;
+}
+
+function PageSkeleton() {
+  return (
+    <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+      <Skeleton className="h-8 w-64" />
+      <Skeleton className="h-5 w-80" />
+      <div className="gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Card>
+          <SkeletonRows rows={4} />
+        </Card>
+        <Card>
+          <SkeletonRows rows={6} />
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────
+
+export default function LeagueHomePage() {
+  const { id } = useParams<{ id: string }>();
+  const [data, setData] = useState<PageData | null | undefined>(undefined);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetchLeagueHome(id).then((d) => live && setData(d));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  // Live weeks refresh scores every minute. Before the draft, refresh
+  // every 8s so claims by other people show up.
+  const status = data?.home?.week_status;
+  const mode = data ? homeMode(data.league.draft_status) : null;
+  useEffect(() => {
+    if (status !== "live" && mode !== "predraft") return;
+    const t = setInterval(() => fetchLeagueHome(id).then((d) => d && setData(d)), mode === "predraft" ? 8000 : 60000);
+    return () => clearInterval(t);
+  }, [id, status, mode]);
+
+  async function reload() {
+    const d = await fetchLeagueHome(id);
+    if (d) setData(d);
+  }
+
+  if (data === undefined) return <PageSkeleton />;
+  if (data === null) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+        <Card>
+          <p className="text-sm font-semibold text-ink-100">League not found.</p>
+          <Link href="/dashboard" className="mt-2 inline-block text-sm text-gold hover:text-gold-hi">
+            Back to your leagues
+          </Link>
+        </Card>
       </div>
     );
   }
 
-  const sortedTeams = teams
-    .map((t) => (records[t.id] ? { ...t, ...records[t.id] } : t))
-    .sort((a, b) => b.wins - a.wins || a.losses - b.losses || (b.points_for || 0) - (a.points_for || 0));
-  const statusConfig = draftStatusConfig[league.draft_status] || draftStatusConfig.not_started;
-  const StatusIcon = statusConfig.icon;
-  const typeLabel = leagueTypeLabels[league.league_type] || league.league_type;
-  const TypeIcon = typeIcons[league.league_type] || Users;
-  // getMyTeams() is the legacy localStorage-based claim record; teams
-  // where the current user is owner_id or co_owner_id (the real,
-  // account-backed source of truth) weren't being recognized as "mine"
-  // here even though every permission check elsewhere in the backend
-  // already treats co-owners as equal team managers.
-  const myTeamIds = Array.from(
-    new Set([
-      // Legacy localStorage claims only count while actually logged in.
-      ...(isLoggedIn() ? getMyTeams() : []),
-      ...teams
-        .filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id))
-        .map((t) => t.id),
-    ]),
-  );
+  const { home } = data;
+  const isManager = !!home?.league.is_commissioner;
+  const isMember = !!home?.league.is_member;
+
+  async function cancelMove(item: ActivityItem) {
+    if (!item.cancel) return;
+    setBusyId(item.id);
+    try {
+      if (item.cancel.type === "trade") await tradesApi.cancel(id, item.cancel.id);
+      else await waiversApi.cancelClaim(id, item.cancel.id);
+      await reload();
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't cancel that. Try again."));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-surface-900">
-      {/* Avatar Picker Overlay */}
-      {editingAvatarTeam && (
-        <AvatarEditor
-          title="Choose Team Avatar"
-          currentUrl={teams.find((t) => t.id === editingAvatarTeam)?.avatar_url || null}
-          onSave={handleSetAvatar}
-          onClose={() => setEditingAvatarTeam(null)}
-        />
-      )}
+    <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+      <Header data={data} isManager={isManager} />
 
-      {/* Back link */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <Link
-          href="/dashboard"
-          className="inline-flex items-center gap-1 text-surface-400 hover:text-gold-400 transition-colors text-sm"
-        >
-          <ChevronRight className="w-4 h-4 rotate-180" />
-          Back to Dashboard
-        </Link>
-      </div>
-
-      {/* Action error banner -- visible regardless of which action on
-          this page failed (rename, claim, settings save, ...). See
-          actionError's declaration for why this exists as its own
-          state instead of reusing the page-load `error`. */}
-      {actionError && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div
-            role="alert"
-            className="flex items-start gap-2.5 p-3.5 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm"
-          >
-            <span className="flex-1">{actionError}</span>
-            <button
-              onClick={() => setActionError("")}
-              aria-label="Dismiss"
-              className="text-red-400/70 hover:text-red-400 transition-colors shrink-0"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* League Header */}
-      <section
-        className={`relative overflow-hidden border-b ${
-          league.draft_status === "in_progress" ? "border-gold-400/30" : "border-surface-700"
-        }`}
-      >
-        <div className="absolute inset-0 bg-gradient-to-b from-surface-850 via-surface-900 to-surface-900" />
-        <div
-          className={`absolute top-0 right-0 w-[500px] h-[500px] rounded-full blur-3xl ${
-            league.draft_status === "in_progress" ? "bg-gold-400/10" : "bg-gold-400/5"
-          }`}
-        />
-
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8">
-            {/* Name + Description */}
-            <div className="flex-1 min-w-0">
-              {editingLeague ? (
-                <div className="space-y-3 max-w-xl">
-                  <input
-                    type="text"
-                    value={leagueEditForm.name}
-                    onChange={(e) => setLeagueEditForm((f) => ({ ...f, name: e.target.value }))}
-                    className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 text-xl font-bold"
-                    placeholder="League name"
-                  />
-                  <textarea
-                    value={leagueEditForm.description}
-                    onChange={(e) => setLeagueEditForm((f) => ({ ...f, description: e.target.value }))}
-                    className="w-full px-4 py-2.5 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400 text-sm resize-none"
-                    rows={2}
-                    placeholder="Description (optional)"
-                  />
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div>
-                      <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Visibility</label>
-                      <select
-                        value={leagueEditForm.visibility}
-                        onChange={(e) => setLeagueEditForm((f) => ({ ...f, visibility: e.target.value as typeof f.visibility }))}
-                        className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white focus:outline-none focus:ring-2 focus:ring-gold-400"
-                      >
-                        <option value="open">Open</option>
-                        <option value="invite_only">Invite Only</option>
-                        <option value="private">Private</option>
-                      </select>
-                    </div>
-                    {leagueEditForm.visibility !== "private" && (
-                      <label className="flex items-center gap-2 text-xs text-surface-400 cursor-pointer mt-4">
-                        <input
-                          type="checkbox"
-                          checked={leagueEditForm.wanted_board_hidden}
-                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, wanted_board_hidden: e.target.checked }))}
-                          className="rounded border-surface-600 bg-surface-900 text-gold-400 focus:ring-gold-400"
-                        />
-                        Pause Wanted Board listing
-                      </label>
-                    )}
-                  </div>
-                  {league.league_type === "conference" && (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div>
-                        <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Conference A Name</label>
-                        <input
-                          type="text"
-                          value={leagueEditForm.conference_a_name}
-                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, conference_a_name: e.target.value }))}
-                          placeholder="Conference A"
-                          maxLength={40}
-                          className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">Conference B Name</label>
-                        <input
-                          type="text"
-                          value={leagueEditForm.conference_b_name}
-                          onChange={(e) => setLeagueEditForm((f) => ({ ...f, conference_b_name: e.target.value }))}
-                          placeholder="Conference B"
-                          maxLength={40}
-                          className="px-3 py-1.5 bg-surface-900 border border-surface-600 rounded-lg text-xs text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-gold-400"
-                        />
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleSaveLeagueSettings}
-                      className="inline-flex items-center gap-1.5 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2 rounded-lg font-semibold text-xs transition-all"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      Save
-                    </button>
-                    <button
-                      onClick={() => setEditingLeague(false)}
-                      className="inline-flex items-center gap-1.5 border border-surface-600 hover:border-surface-500 text-surface-300 px-4 py-2 rounded-lg text-xs transition-all"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-3">
-                    <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
-                      {league.name}
-                    </h1>
-                    <VisibilityBadge visibility={league.visibility} />
-                    {capEnabled && <SalaryCapBadge />}
-                    {bestBallEnabled && <BestBallBadge />}
-                    {bestBallEnabled && <ManagementWindowIndicator leagueId={id} />}
-                    {isLeagueManager && (
-                      <button
-                        onClick={() => {
-                          setLeagueEditForm({
-                            name: league.name,
-                            description: league.description || "",
-                            visibility: league.visibility,
-                            wanted_board_hidden: league.wanted_board_hidden,
-                            conference_a_name: league.conference_a_name || "",
-                            conference_b_name: league.conference_b_name || "",
-                          });
-                          setEditingLeague(true);
-                        }}
-                        className="text-surface-500 hover:text-gold-400 transition-colors"
-                        title="Edit league settings"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  {league.description && (
-                    <p className="text-surface-400 text-sm md:text-base leading-relaxed max-w-2xl mt-2">
-                      {league.description}
-                    </p>
-                  )}
-                  {teams.length > 0 && (
-                    <div className="flex items-center gap-1.5 mt-4">
-                      {teams.slice(0, 8).map((team) => (
-                        <Avatar
-                          key={team.id}
-                          url={team.avatar_url}
-                          size={32}
-                          rounded="rounded-full"
-                          className="border-2 border-surface-900 -ml-2 first:ml-0"
-                          title={team.name}
-                        />
-                      ))}
-                      {teams.length > 8 && (
-                        <span className="text-surface-500 text-xs ml-2">
-                          +{teams.length - 8} more
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            {/* Draft + Commissioner Buttons */}
-            {/* No shrink-0 here (confirmed empirically -- see the commit
-                this landed in): flex-wrap alone does NOT shrink a flex
-                item's own contribution to an ancestor flex row's layout --
-                that's governed by flex-shrink, and shrink-0 pins this
-                container at its full *unwrapped* intrinsic width (10
-                buttons, 1400px+) regardless of whether its own children
-                can wrap. The sibling name/description block (flex-1
-                min-w-0, so it DOES shrink) was getting squeezed to a
-                literal 0px, wrapping the league name one word per line.
-                Removing shrink-0 lets this container's own min-content
-                width shrink to just its widest single child once
-                flex-wrap is honored, so both siblings share space. An
-                explicit max-width keeps it from claiming more than a
-                reasonable chunk of a very wide viewport once it's free to
-                shrink -- flex-shrink alone would still let it eat almost
-                all the width purely because it starts out much wider
-                than the title block's flex-basis. */}
-            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-end gap-2 lg:max-w-160">
-              {isLeagueManager && (
-                <Link
-                  href={`/leagues/${id}/commissioner`}
-                  className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                >
-                  <Shield className="w-4 h-4" />
-                  Commissioner
-                </Link>
-              )}
-              {/* Settings pages are all commissioner/co-commissioner-only
-                  server-side (require_commissioner) -- showing these links
-                  to a member just walked them into a page that either
-                  403s on save or (before the settings-page gate added
-                  alongside this) rendered the full editor UI for
-                  something they could never actually change. */}
-              {isLeagueManager && (
-                <>
-                  <Link
-                    href={`/leagues/${id}/scoring`}
-                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                  >
-                    <Settings className="w-4 h-4" />
-                    Scoring
-                  </Link>
-                  <Link
-                    href={`/leagues/${id}/roster-slots`}
-                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                  >
-                    <ListChecks className="w-4 h-4" />
-                    Roster Slots
-                  </Link>
-                  <Link
-                    href={`/leagues/${id}/playoff-settings`}
-                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                  >
-                    <Settings className="w-4 h-4" />
-                    Playoff Settings
-                  </Link>
-                  <Link
-                    href={`/leagues/${id}/salary-cap-settings`}
-                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                  >
-                    <DollarSign className="w-4 h-4" />
-                    Salary Cap Settings
-                  </Link>
-                  <Link
-                    href={`/leagues/${id}/best-ball-settings`}
-                    className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Best-Ball Settings
-                  </Link>
-                </>
-              )}
-              <Link
-                href={`/leagues/${id}/standings`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Trophy className="w-4 h-4" />
-                Standings
-              </Link>
-              <Link
-                href={`/leagues/${id}/schedule`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Calendar className="w-4 h-4" />
-                Schedule
-              </Link>
-              <Link
-                href={`/leagues/${id}/playoffs`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <Trophy className="w-4 h-4" />
-                Playoffs
-              </Link>
-              <Link
-                href={`/leagues/${id}/trades`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <ArrowLeftRight className="w-4 h-4" />
-                Trades
-              </Link>
-              <Link
-                href={`/leagues/${id}/waivers`}
-                className="inline-flex items-center gap-2 border border-surface-600 hover:border-gold-400/50 text-surface-300 hover:text-gold-400 px-5 py-3 rounded-xl font-semibold text-sm transition-all"
-              >
-                <ListOrdered className="w-4 h-4" />
-                Waivers
-              </Link>
-              {league.draft_status === "not_started" ? (
-                // Commissioner-only server-side (create_draft's
-                // require_commissioner) -- a member seeing this button at
-                // all just walked into a guaranteed 403, which used to
-                // show as a confusing generic error (see the comment
-                // below on the catch block). Members instead see nothing
-                // here until the commissioner actually starts the draft.
-                isLeagueManager && (
-                  <button
-                    onClick={async () => {
-                      setLoading(true);
-                      try {
-                        const draftRes = await draftsApi.create(league.id, 15) as { id: string };
-                        window.location.href = `/draft/${draftRes.id}`;
-                      } catch (err) {
-                        // Was a hardcoded "make sure you have 2 teams" message
-                        // regardless of the real cause -- actively misled a
-                        // real user (their league had 4 teams; the actual
-                        // failure was transient/unrelated) into thinking
-                        // their own setup was the problem.
-                        setActionError(err instanceof Error ? err.message : "Failed to create draft.");
-                        setLoading(false);
-                      }
-                    }}
-                    disabled={loading}
-                    className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loading ? "Creating Draft..." : "Start Draft"}
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                )
-              ) : (
-                <Link
-                  href={`/draft/${draftId || league.id}`}
-                  className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-6 py-3 rounded-xl font-bold text-sm transition-all hover:shadow-xl hover:shadow-gold-400/30 hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <Swords className="w-4 h-4" />
-                  View Draft
-                </Link>
-              )}
-            </div>
-          </div>
-
-          {/* Stats Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-8">
-            <div className="bg-surface-800 border border-surface-700 rounded-xl px-5 py-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-gold-400/10 border border-gold-400/20 flex items-center justify-center shrink-0">
-                <Users className="w-5 h-5 text-gold-400" />
-              </div>
-              <div>
-                <p className="text-surface-400 text-xs font-medium uppercase tracking-wider">Teams</p>
-                <p className="text-white text-lg font-semibold">{teams.length} / {league.max_teams}</p>
-              </div>
-            </div>
-            <div className="bg-surface-800 border border-surface-700 rounded-xl px-5 py-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-gold-400/10 border border-gold-400/20 flex items-center justify-center shrink-0">
-                <TypeIcon className="w-5 h-5 text-gold-400" />
-              </div>
-              <div>
-                <p className="text-surface-400 text-xs font-medium uppercase tracking-wider">Type</p>
-                <p className="text-white text-lg font-semibold">{typeLabel}</p>
-              </div>
-            </div>
-            <div className="bg-surface-800 border border-surface-700 rounded-xl px-5 py-4 flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${statusConfig.color}`}>
-                <StatusIcon className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-surface-400 text-xs font-medium uppercase tracking-wider">Draft</p>
-                <p className="text-white text-lg font-semibold">{statusConfig.label}</p>
-              </div>
-            </div>
-            <div className="bg-surface-800 border border-surface-700 rounded-xl px-5 py-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-purple-400/10 border border-purple-400/20 flex items-center justify-center shrink-0">
-                <Shield className="w-5 h-5 text-purple-400" />
-              </div>
-              <div>
-                <p className="text-surface-400 text-xs font-medium uppercase tracking-wider">Manage</p>
-                <p className="text-white text-lg font-semibold">
-                  {isLeagueManager ? "Manager" : myTeamIds.length > 0 ? "Member" : isLoggedIn() ? "Not a member" : "Guest"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Commissioner Panel */}
-      {showComPanel && isLeagueManager && (
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
-          <div className="bg-surface-850 border border-surface-700 rounded-2xl p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Crown className="w-5 h-5 text-gold-400" />
-              <h2 className="text-lg font-bold text-white">Commissioner Controls</h2>
-            </div>
-
-            {/* Current managers */}
-            <div className="mb-5">
-              <h3 className="text-sm font-semibold text-surface-300 mb-2">League Management Team</h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between bg-surface-800 border border-surface-700 rounded-lg px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <Crown className="w-4 h-4 text-yellow-400" />
-                    <span className="text-sm text-white font-medium">{league.commissioner_id}</span>
-                    <span className="text-[10px] text-yellow-400 font-semibold uppercase tracking-wider bg-yellow-400/10 px-2 py-0.5 rounded">Owner</span>
-                  </div>
-                </div>
-                {(league.co_commissioner_ids || []).map((coId) => (
-                  <div key={coId} className="flex items-center justify-between bg-surface-800 border border-surface-700 rounded-lg px-4 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <Shield className="w-4 h-4 text-purple-400" />
-                      <span className="text-sm text-white">{coId}</span>
-                      <span className="text-[10px] text-purple-400 font-semibold uppercase tracking-wider bg-purple-400/10 px-2 py-0.5 rounded">Co</span>
-                    </div>
-                    {isCommissioner && (
-                      <button
-                        onClick={() => handleRemoveCoCommish(coId)}
-                        className="text-surface-500 hover:text-red-400 transition-colors"
-                        title="Remove co-commissioner"
-                      >
-                        <UserMinus className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Add co-commissioner (owner only) */}
-            {isCommissioner && (
-              <div className="border-t border-surface-700 pt-4">
-                <h3 className="text-sm font-semibold text-surface-300 mb-2">Add Co-Commissioner</h3>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={coCommishUserId}
-                    onChange={(e) => setCoCommishUserId(e.target.value)}
-                    placeholder="Enter user ID..."
-                    className="flex-1 px-4 py-2 bg-surface-900 border border-surface-600 rounded-lg text-white placeholder-surface-500 text-sm focus:outline-none focus:ring-2 focus:ring-gold-400"
-                  />
-                  <button
-                    onClick={handleAddCoCommish}
-                    disabled={!coCommishUserId.trim()}
-                    className="inline-flex items-center gap-1.5 bg-purple-500 hover:bg-purple-400 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-all disabled:opacity-50"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    Add
-                  </button>
-                </div>
-                <p className="text-surface-500 text-xs mt-1">Co-commissioners can manage teams but can&apos;t add/remove other commissioners.</p>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      <TeamRecapSection leagueId={id} />
-
-      {/* Standings Table */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-white">Standings</h2>
-          <span className="text-surface-400 text-xs">{teams.length} teams</span>
-        </div>
-
-        {sortedTeams.length > 0 ? (
-          <div className="overflow-x-auto rounded-xl border border-surface-700">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-surface-800 border-b border-surface-700">
-                  <th className="text-left px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-12">#</th>
-                  <th className="text-left px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">Team</th>
-                  <th className="text-left px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">Owner</th>
-                  <th className="text-center px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">W</th>
-                  <th className="text-center px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">L</th>
-                  <th className="text-center px-4 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">T</th>
-                  <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">PF</th>
-                  <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider">PA</th>
-                  {(isLeagueManager || canSelfClaim) && <th className="text-right px-5 py-3.5 text-surface-400 font-medium text-xs uppercase tracking-wider w-16">Actions</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-700">
-                {sortedTeams.map((team, idx) => {
-                  const rank = idx + 1;
-                  const owner = getOwnerDisplay(team);
-                  const isMyTeam = myTeamIds.includes(team.id);
-
-                  return (
-                    <tr
-                      key={team.id}
-                      className={`transition-colors ${
-                        isMyTeam ? "bg-gold-400/5 border-l-2 border-l-gold-400" : "bg-surface-900 hover:bg-surface-800/80"
-                      }`}
-                    >
-                      <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-xs font-bold ${
-                            rank <= 3
-                              ? "bg-gold-400/10 text-gold-400 border border-gold-400/20"
-                              : "bg-surface-800 text-surface-400 border border-surface-700"
-                          }`}
-                        >
-                          {rank}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          {/* Avatar */}
-                          <div
-                            className="relative cursor-pointer hover:opacity-80 transition-opacity"
-                            onClick={() => {
-                              if (isMyTeam || isLeagueManager) setEditingAvatarTeam(team.id);
-                            }}
-                            // Only a real control when it actually does
-                            // something -- otherwise (someone else's team,
-                            // viewer isn't the commissioner) it stays a
-                            // plain, non-interactive div rather than a fake
-                            // keyboard stop that does nothing when pressed.
-                            role={isMyTeam || isLeagueManager ? "button" : undefined}
-                            tabIndex={isMyTeam || isLeagueManager ? 0 : undefined}
-                            onKeyDown={(e) => {
-                              if ((isMyTeam || isLeagueManager) && (e.key === "Enter" || e.key === " ")) {
-                                e.preventDefault();
-                                setEditingAvatarTeam(team.id);
-                              }
-                            }}
-                            title={isMyTeam || isLeagueManager ? "Click to change avatar" : ""}
-                            aria-label={isMyTeam || isLeagueManager ? `Change avatar for ${team.name}` : undefined}
-                          >
-                            <Avatar url={team.avatar_url} size={36} className="border border-surface-700/50" />
-                            {(isMyTeam || isLeagueManager) && (
-                              <span className="absolute -top-1 -right-1 w-4 h-4 bg-surface-800 border border-surface-600 rounded-full flex items-center justify-center">
-                                <Pencil className="w-2.5 h-2.5 text-surface-400" />
-                              </span>
-                            )}
-                          </div>
-                          <div>
-                            {editingNameTeam === team.id ? (
-                              <span className="inline-flex items-center gap-1.5 align-middle">
-                                <input
-                                  autoFocus
-                                  value={nameDraft}
-                                  onChange={(e) => setNameDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") handleRenameTeam(team.id);
-                                    if (e.key === "Escape") setEditingNameTeam(null);
-                                  }}
-                                  disabled={savingName}
-                                  className="px-2 py-1 bg-surface-900 border border-gold-400/50 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-1 focus:ring-gold-400 w-40"
-                                />
-                                <button
-                                  onClick={() => handleRenameTeam(team.id)}
-                                  disabled={savingName}
-                                  aria-label="Save team name"
-                                  className="text-green-400 hover:text-green-300 disabled:opacity-50"
-                                >
-                                  <Check className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => setEditingNameTeam(null)}
-                                  disabled={savingName}
-                                  aria-label="Cancel rename"
-                                  className="text-surface-500 hover:text-white disabled:opacity-50"
-                                >
-                                  <X className="w-4 h-4" />
-                                </button>
-                              </span>
-                            ) : (
-                              <span className="font-medium text-white">
-                                {team.name}
-                                {(isMyTeam || isLeagueManager) && (
-                                  <button
-                                    onClick={() => { setEditingNameTeam(team.id); setNameDraft(team.name); }}
-                                    aria-label={`Rename ${team.name}`}
-                                    title="Rename team"
-                                    className="ml-1.5 align-middle text-surface-500 hover:text-gold-400 transition-colors"
-                                  >
-                                    <Pencil className="w-3 h-3 inline" />
-                                  </button>
-                                )}
-                              </span>
-                            )}
-                            {league.league_type === "conference" && (
-                              <span className="ml-2 inline-block align-middle">
-                                <ConferenceBadge
-                                  conference={team.conference}
-                                  displayName={conferenceShortLabel(team.conference, league.conference_a_name, league.conference_b_name)}
-                                />
-                              </span>
-                            )}
-                            {isMyTeam && (
-                              <span className="ml-2 text-[10px] text-gold-400 font-semibold uppercase tracking-wider bg-gold-400/10 px-1.5 py-0.5 rounded">Your Team</span>
-                            )}
-                            <Link
-                              href={`/leagues/${id}/teams/${team.id}`}
-                              className="ml-2 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium"
-                            >
-                              Team →
-                            </Link>
-                            <Link
-                              href={`/leagues/${id}/standings`}
-                              className="ml-2 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium"
-                            >
-                              Standings →
-                            </Link>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        {owner.isHuman ? (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`inline-flex items-center gap-1 ${
-                              owner.isMe ? "text-gold-400" : "text-surface-400"
-                            }`}>
-                              <UserCheck className="w-3.5 h-3.5" />
-                              {owner.label}
-                            </span>
-                            {/* Co-Owner (2-Man Teams) is a TWO_MAN-league-only
-                                concept -- hidden and non-functional in every
-                                other league type (see teams.py's matching
-                                server-side league_type == TWO_MAN gate on
-                                claim/assign-co-owner). A team that already
-                                has a co_owner_id from before this gate (or
-                                because its league's type changed since) can
-                                still have it removed either way -- that's
-                                cleanup, not a new co-own assignment. */}
-                            {isTwoMan && !team.co_owner_id && !owner.isMe && (isLeagueManager || canSelfClaim) && (
-                              <button
-                                onClick={() => handleClaimCoOwner(team.id)}
-                                disabled={claimingTeamId === team.id}
-                                className="text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
-                                title="Join this team as co-owner — you'll share management with the primary owner"
-                              >
-                                {claimingTeamId === team.id ? "Joining…" : "Join as Co-Owner"}
-                              </button>
-                            )}
-                            {/* Commissioner overrides -- fixing a wrong
-                                claim or hand-assigning teams no longer
-                                requires the affected person to act. */}
-                            {isLeagueManager && (
-                              <>
-                                <button
-                                  onClick={() => handleRemoveOwner(team.id, team.name)}
-                                  disabled={claimingTeamId === team.id}
-                                  className="text-[10px] text-surface-500 hover:text-red-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
-                                  title="Remove this team's owner"
-                                >
-                                  Remove
-                                </button>
-                                {team.co_owner_id ? (
-                                  <button
-                                    onClick={() => handleRemoveCoOwnerAsManager(team.id)}
-                                    disabled={claimingTeamId === team.id}
-                                    className="text-[10px] text-surface-500 hover:text-red-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
-                                    title="Remove this team's co-owner"
-                                  >
-                                    Remove Co-Owner
-                                  </button>
-                                ) : isTwoMan ? (
-                                  <button
-                                    onClick={() => handleAssignCoOwner(team.id)}
-                                    disabled={claimingTeamId === team.id}
-                                    className="text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
-                                    title="Assign a specific person as co-owner"
-                                  >
-                                    Assign Co-Owner
-                                  </button>
-                                ) : null}
-                              </>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-surface-500 italic flex items-center gap-1">
-                            <Bot className="w-3.5 h-3.5" />
-                            {owner.label}
-                            {isLeagueManager && (
-                              <button
-                                onClick={() => handleAssignOwner(team.id)}
-                                disabled={claimingTeamId === team.id}
-                                className="ml-1 text-[10px] text-surface-500 hover:text-gold-400 transition-colors font-medium underline decoration-dotted disabled:opacity-50 not-italic"
-                                title="Assign a specific person to this team"
-                              >
-                                Assign
-                              </button>
-                            )}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-4 text-center text-white font-medium">{team.wins}</td>
-                      <td className="px-4 py-4 text-center text-white">{team.losses}</td>
-                      <td className="px-4 py-4 text-center text-surface-400">{team.ties}</td>
-                      <td className="px-5 py-4 text-right text-white font-medium">{team.points_for?.toFixed(1) || "0.0"}</td>
-                      <td className="px-5 py-4 text-right text-surface-400">{team.points_against?.toFixed(1) || "0.0"}</td>
-                      {(isLeagueManager || canSelfClaim) && (
-                        <td className="px-5 py-4 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {/* Claim CPU team -- open to any eligible
-                                logged-in user (Step 7), not just managers.
-                                This is what actually makes claiming
-                                self-service instead of commissioner-only;
-                                the backend has enforced this per-visibility
-                                since Step 6 regardless. */}
-                            {team.is_cpu && (
-                              <button
-                                onClick={() => handleClaimTeam(team.id)}
-                                disabled={claimingTeamId === team.id}
-                                className="p-1.5 text-surface-500 hover:text-green-400 transition-colors disabled:opacity-50"
-                                title="Claim this CPU team"
-                              >
-                                <UserCheck className="w-4 h-4" />
-                              </button>
-                            )}
-                            {/* Swap conference -- commissioner/co-commissioner only */}
-                            {isLeagueManager && league.league_type === "conference" && team.conference && (
-                              <button
-                                onClick={() => handleSwapConference(team.id, team.conference === "A" ? "B" : "A")}
-                                disabled={swappingConferenceTeamId === team.id}
-                                className="p-1.5 text-surface-500 hover:text-gold-400 transition-colors disabled:opacity-50"
-                                title={`Move to ${conferenceShortLabel(team.conference === "A" ? "B" : "A", league.conference_a_name, league.conference_b_name)}`}
-                              >
-                                <ArrowLeftRight className="w-4 h-4" />
-                              </button>
-                            )}
-                            {/* Delete team -- commissioner/co-commissioner only */}
-                            {isLeagueManager && (
-                              deleteConfirmId === team.id ? (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => handleDeleteTeam(team.id)}
-                                    className="p-1.5 text-red-400 hover:text-red-300 transition-colors"
-                                    title="Confirm delete"
-                                  >
-                                    <Check className="w-4 h-4" />
-                                  </button>
-                                  <button
-                                    onClick={() => setDeleteConfirmId(null)}
-                                    className="p-1.5 text-surface-500 hover:text-white transition-colors"
-                                    title="Cancel"
-                                  >
-                                    <X className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => setDeleteConfirmId(team.id)}
-                                  className="p-1.5 text-surface-500 hover:text-red-400 transition-colors"
-                                  title="Delete team"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )
-                            )}
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="bg-surface-800 border border-surface-700 rounded-xl p-12 text-center">
-            <Users className="w-12 h-12 text-surface-600 mx-auto mb-3" />
-            <h3 className="text-white font-semibold mb-1">No teams yet</h3>
-            <p className="text-surface-400 text-sm">Add teams to this league to see standings.</p>
-          </div>
-        )}
-      </section>
-
-      {/* Team Management */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-10">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-white">Team Management</h2>
-          <button
-            onClick={refreshTeams}
-            className="inline-flex items-center gap-1.5 text-surface-400 hover:text-gold-400 text-sm transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Refresh
+      {error && (
+        <div role="alert" className="flex items-start gap-3 rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
+          <span className="flex-1">{error}</span>
+          <button type="button" onClick={() => setError("")} className="text-loss/70 hover:text-loss" aria-label="Dismiss">
+            ×
           </button>
         </div>
+      )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Team rosters — used to only show name badges, never the
-              actual drafted players. teams[].roster is a list of player
-              IDs resolved via playersById (see fetch effect above). */}
-          <div className="lg:col-span-2 bg-surface-800 border border-surface-700 rounded-2xl p-6">
-            <h3 className="text-sm font-semibold text-surface-300 mb-3">Team Rosters</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {sortedTeams.map((team) => {
-                const isMyTeam = myTeamIds.includes(team.id);
-                const isCpu = team.is_cpu || team.owner_id === "cpu";
-                const rosterIds = team.roster || [];
-                const roster = rosterIds
-                  .map((pid) => playersById[pid])
-                  .filter((p): p is RosterPlayer => !!p);
-                return (
-                  <div
-                    key={team.id}
-                    className={`rounded-xl border p-3 ${
-                      isMyTeam
-                        ? "bg-gold-400/5 border-gold-400/20"
-                        : "bg-surface-900 border-surface-700"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <Avatar url={team.avatar_url} size={20} rounded="rounded-md" />
-                      <span className="font-medium text-sm text-white truncate flex-1">{team.name}</span>
-                      {isCpu && <Bot className="w-3 h-3 text-surface-500 shrink-0" />}
-                      {isMyTeam && <Crown className="w-3 h-3 text-gold-500 shrink-0" />}
-                      {rosterIds.length > 0 && (
-                        <span className="text-[10px] text-surface-500 shrink-0">{rosterIds.length}</span>
-                      )}
-                    </div>
-                    {rosterIds.length === 0 ? (
-                      <p className="text-surface-600 text-xs">No players drafted yet</p>
-                    ) : roster.length < rosterIds.length ? (
-                      <p className="text-surface-600 text-xs">Loading roster…</p>
-                    ) : (
-                      <div className="space-y-1 max-h-40 overflow-y-auto">
-                        {roster.map((p) => {
-                          const live = currentWeekBreakdown[team.id]?.[p.id];
-                          // This week's real score only -- 0 (not last
-                          // season's total) for a player who simply
-                          // hasn't played yet this week, so the number
-                          // shown here always means "this week," never a
-                          // number that looks current but isn't.
-                          const weeklyScore = live?.score ?? 0;
-                          return (
-                          <div key={p.id} className={`flex items-center gap-1.5 text-xs ${live?.is_bench ? "opacity-50" : ""}`}>
-                            <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
-                            <PlayerLink id={p.id} className="text-surface-300 truncate flex-1">{p.full_name}</PlayerLink>
-                            {currentWeekLoaded && (
-                              <span className="flex items-center gap-1.5 shrink-0">
-                                <GameStatusBadge status={live?.game_status} />
-                                <span
-                                  className={`text-[10px] font-semibold ${weeklyScore > 0 ? "text-green-400" : "text-surface-500"}`}
-                                  title={live != null ? "This week's actual score so far" : "Hasn't played yet this week"}
-                                >
-                                  {weeklyScore.toFixed(1)}
-                                </span>
-                              </span>
-                            )}
-                            <PositionBadge pos={p.position} />
-                          </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {teams.length < league.max_teams && Array.from({ length: league.max_teams - teams.length }).map((_, i) => (
-                <div key={`empty-${i}`} className="rounded-xl border border-dashed border-surface-700 bg-surface-900/50 p-3 flex items-center gap-2 text-surface-600 text-xs">
-                  <Plus className="w-3 h-3" />
-                  <span>Empty Slot</span>
-                </div>
-              ))}
-            </div>
+      {!home ? (
+        <Card>
+          <p className="text-sm text-ink-400">Couldn&apos;t load this week. Try again in a moment.</p>
+        </Card>
+      ) : (
+        <div className="gap-4 space-y-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:space-y-0">
+          <div className="min-w-0 space-y-4">
+            {!isMember && !isManager && <JoinCard data={data} onChanged={reload} onError={setError} />}
+            {mode !== "season" && <DraftCard data={data} isManager={isManager} onError={setError} />}
+            {mode === "season" && home.my_matchup && <MatchupCard home={home} leagueId={id} leagueName={data.league.name} />}
+            {mode === "season" && home.last_week && <RecapCard recap={home.last_week} />}
+            {mode === "season" && <Scoreboard home={home} leagueId={id} leagueName={data.league.name} />}
+            <Card>
+              <CardHeader title="League activity" />
+              <ActivityFeed items={home.activity} onCancel={cancelMove} busyId={busyId} empty="Nothing has happened yet." />
+            </Card>
+            {data.aiRecap?.content && (
+              <Card>
+                <CardHeader
+                  title={`Week ${data.aiRecap.week} recaps`}
+                  action={
+                    <span className="flex items-center gap-1 text-xs text-ink-400">
+                      <Bot className="h-3.5 w-3.5" aria-hidden /> AI written
+                    </span>
+                  }
+                />
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-200">{data.aiRecap.content}</p>
+              </Card>
+            )}
           </div>
-
-          {/* Action buttons */}
-          <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-            <h3 className="text-sm font-semibold text-surface-300 mb-3">Actions</h3>
-            <p className="text-surface-500 text-xs mb-4">
-              {teams.length >= league.max_teams
-                ? `All ${league.max_teams} teams filled${league.draft_status === "not_started" ? " — ready to draft." : "."}`
-                : `${teams.length} of ${league.max_teams} teams filled — add more to start the draft.`}
-            </p>
-            <div className="flex flex-col gap-2">
-              {teams.length < league.max_teams && (
-                <>
-                  <button
-                    onClick={handleFillCpuAll}
-                    disabled={loading}
-                    className="inline-flex items-center justify-center gap-2 bg-surface-700 hover:bg-surface-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
-                  >
-                    <Bot className="w-4 h-4" />
-                    Fill All with CPU Teams
-                  </button>
-                  <button
-                    onClick={handleAddOneCpu}
-                    disabled={loading}
-                    className="inline-flex items-center justify-center gap-2 border border-surface-600 hover:border-surface-500 text-surface-300 hover:text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add One CPU Team
-                  </button>
-                </>
-              )}
-              {!isCommissioner && !isLoggedIn() && (
-                <div className="border-t border-surface-700 pt-3 mt-1">
-                  <p className="text-surface-500 text-xs">
-                    <Link href="/login" className="text-gold-400 hover:text-gold-300 font-medium">
-                      Log in
-                    </Link>{" "}
-                    to claim a team.
-                  </p>
-                </div>
-              )}
-
-              {/* Join UX for Invite-only/Private leagues (Step 7) --
-                  branches on viewer_join_status, which already accounts
-                  for accepted invites/approved requests (Step 6's exact
-                  claim-gating logic, computed server-side so this can't
-                  drift out of sync with what the claim buttons above
-                  will actually let through). Only relevant once logged
-                  in -- logged-out visitors get the generic prompt above
-                  regardless of visibility, since there's no viewer to
-                  compute a status for yet. */}
-              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "blocked" && (
-                <div className="border-t border-surface-700 pt-3 mt-1">
-                  {league.visibility === "invite_only" ? (
-                    <>
-                      <p className="text-surface-400 text-xs flex items-center gap-1.5 mb-2">
-                        <Lock className="w-3.5 h-3.5 text-surface-500" />
-                        This is an invite-only league. Ask the commissioner for an invite, or request to join below.
-                      </p>
-                      {joinRequestError && (
-                        <p className="text-red-400 text-xs mb-2" role="alert">{joinRequestError}</p>
-                      )}
-                      <textarea
-                        value={joinMessage}
-                        onChange={(e) => setJoinMessage(e.target.value)}
-                        placeholder="Optional note to the commissioner..."
-                        rows={2}
-                        className="w-full px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-xs text-white placeholder-surface-500 resize-none mb-2"
-                      />
-                      <button
-                        onClick={handleRequestToJoin}
-                        disabled={submittingJoinRequest}
-                        className="inline-flex items-center justify-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 w-full"
-                      >
-                        {submittingJoinRequest ? (
-                          <div className="w-3.5 h-3.5 border-2 border-surface-900 border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Send className="w-3.5 h-3.5" />
-                        )}
-                        Request to Join
-                      </button>
-                    </>
-                  ) : (
-                    <p className="text-surface-400 text-xs flex items-center gap-1.5">
-                      <Lock className="w-3.5 h-3.5 text-surface-500" />
-                      This league is private.
-                    </p>
-                  )}
-                </div>
-              )}
-              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "requested" && (
-                <div className="border-t border-surface-700 pt-3 mt-1">
-                  <p className="text-surface-400 text-xs flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-yellow-400" />
-                    Your request to join is pending commissioner review.
-                  </p>
-                </div>
-              )}
-              {isLoggedIn() && !isLeagueManager && league.viewer_join_status === "invited" && (
-                <div className="border-t border-surface-700 pt-3 mt-1">
-                  <p className="text-surface-400 text-xs flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 text-gold-400" />
-                    You&apos;ve been invited to this league -- check your email for the invite link.
-                  </p>
-                </div>
-              )}
-            </div>
+          <div className="space-y-4">
+            {mode === "season" && home.standings.length > 0 ? (
+              <StandingsCard home={home} leagueId={id} leagueName={data.league.name} />
+            ) : (
+              <Card>
+                <CardHeader title="Teams" />
+                <ul className="divide-y divide-ink-700">
+                  {data.teams.map((t) => (
+                    <li key={t.id} className="flex items-center gap-2.5 py-2">
+                      <Avatar url={t.avatar_url} size={24} />
+                      <Link href={`/leagues/${id}/teams/${t.id}`} className="flex-1 truncate text-sm text-ink-100 hover:text-gold">
+                        {t.name}
+                      </Link>
+                      {t.is_cpu && <Users className="h-3.5 w-3.5 text-ink-400" aria-label="CPU" />}
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            )}
+            {home.my_team && mode === "season" && <PlayerNewsCard teamId={home.my_team.id} title="News on your players" digest={false} limit={4} />}
           </div>
         </div>
-      </section>
+      )}
 
-      {/* Renders nothing at all unless AdSense is actually configured --
-          see AdSlot.tsx. Bottom of the page, below every real feature,
-          so it can never push anything else down or compete for
-          attention with something the user came here to do. */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
-        <AdSlot placement="league-page-bottom" />
-      </div>
-
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
+      <AdSlot placement="league-page-bottom" />
     </div>
   );
 }

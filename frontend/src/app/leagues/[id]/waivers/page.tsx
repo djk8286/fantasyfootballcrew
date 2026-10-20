@@ -8,7 +8,6 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ListOrdered, Send, X, PlayCircle, Star, Plus, DollarSign, Flame } from "lucide-react";
 import { leaguesApi, teamsApi, waiversApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
-import PositionBadge from "@/components/PositionBadge";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
