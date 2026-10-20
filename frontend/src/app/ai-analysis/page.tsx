@@ -1,6 +1,8 @@
 "use client";
 
-import { leagueLabel } from "@/lib/league-label";
+import { leagueLabel, historySummaryLabel } from "@/lib/league-label";
+import Markdown from "@/components/Markdown";
+import { tradeOptionLabel, defaultComparePair } from "@/lib/trade-label";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
@@ -120,13 +122,14 @@ function AnalysisResult({ analysis }: { analysis: string }) {
   const notConfigured = analysis.startsWith("AI Analysis: LLM API not configured");
   return (
     <div
-      className={`mt-6 p-5 rounded-2xl border whitespace-pre-wrap text-sm leading-relaxed ${
+      className={`mt-6 p-5 rounded-2xl border text-sm leading-relaxed ${
         notConfigured
-          ? "bg-surface-800/50 border-surface-700 text-surface-400"
+          ? "bg-surface-800/50 border-surface-700 text-surface-400 whitespace-pre-wrap"
           : "bg-purple-400/5 border-purple-400/20 text-surface-200"
       }`}
     >
-      {analysis}
+      {/* Model output is Markdown; rendered safely (no raw HTML). */}
+      {notConfigured ? analysis : <Markdown text={analysis} />}
     </div>
   );
 }
@@ -135,7 +138,27 @@ function AnalysisResult({ analysis }: { analysis: string }) {
 // itself is), newest first. Clicking one just redisplays its saved
 // result -- these tools are one-shot Q&A, not a re-runnable chat, so
 // there's nothing to "continue," only to look back at.
+// The user's leagues (once per page) so Recent rows can tell same-named
+// leagues apart.
+let myLeaguesOnce: Promise<League[]> | null = null;
+function useMyLeagues(): League[] {
+  const [leagues, setLeagues] = useState<League[]>([]);
+  useEffect(() => {
+    myLeaguesOnce ??= leaguesApi
+      .list({ mine: true })
+      .then((d) => (Array.isArray(d) ? (d as League[]) : []))
+      .catch(() => []);
+    let alive = true;
+    myLeaguesOnce.then((l) => alive && setLeagues(l));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return leagues;
+}
+
 function HistoryList({ items, onSelect }: { items: HistoryItem[]; onSelect: (result: string) => void }) {
+  const leagues = useMyLeagues();
   if (items.length === 0) return null;
   return (
     <div className="mt-8">
@@ -150,10 +173,10 @@ function HistoryList({ items, onSelect }: { items: HistoryItem[]; onSelect: (res
             onClick={() => onSelect(item.result)}
             className="w-full flex items-center justify-between gap-3 text-left px-3 py-2 rounded-lg bg-surface-800/50 border border-surface-700 hover:border-gold-400/40 text-sm text-surface-300 hover:text-white transition-all"
           >
-            <span className="truncate">{item.summary}</span>
+            <span className="truncate">{historySummaryLabel(item, leagues)}</span>
             {item.created_at && (
               <span className="text-xs text-surface-500 shrink-0">
-                {new Date(item.created_at).toLocaleDateString()}
+                {new Date(item.created_at).toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" })}
               </span>
             )}
           </button>
@@ -359,6 +382,8 @@ function TradeTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [teamNames, setTeamNames] = useState<Record<string, string>>({});
+  const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
 
   const loadHistory = useCallback((lid: string) => {
     aiApi
@@ -381,6 +406,20 @@ function TradeTab() {
         const all = Array.isArray(data) ? (data as TradeItem[]) : [];
         setTrades(all);
         setTradeId(all[0]?.id || "");
+        // Names for the picker labels (one batched player lookup).
+        const ids = [...new Set(all.flatMap((t) => [...(t.details?.offered_player_ids || []), ...(t.details?.requested_player_ids || [])]))];
+        if (ids.length)
+          playersApi
+            .byIds(ids)
+            .then((ps) => setPlayerNames(Object.fromEntries(ps.map((p) => [p.id, `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim()]))))
+            .catch(() => {});
+      })
+      .catch(() => {});
+    teamsApi
+      .getByLeague(lid)
+      .then((data) => {
+        const ts = Array.isArray(data) ? (data as { id: string; name: string }[]) : [];
+        setTeamNames(Object.fromEntries(ts.map((t) => [t.id, t.name])));
       })
       .catch(() => {});
   }, []);
@@ -447,8 +486,7 @@ function TradeTab() {
               >
                 {trades.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.status} trade ({(t.details?.offered_player_ids || []).length} for{" "}
-                    {(t.details?.requested_player_ids || []).length})
+                    {tradeOptionLabel(t, (id) => teamNames[id], (id) => playerNames[id])}
                   </option>
                 ))}
               </select>
@@ -512,8 +550,11 @@ function CompareTeamsTab() {
       .then((data) => {
         const all = Array.isArray(data) ? (data as RosterTeam[]) : [];
         setTeams(all);
-        setTeamAId(all[0]?.id || "");
-        setTeamBId(all[1]?.id || all[0]?.id || "");
+        // Team A = your team when you have one; Team B = a different team,
+        // never the same one by default (QA 2026-10-19).
+        const [a, b] = defaultComparePair(all, getCurrentUserId());
+        setTeamAId(a);
+        setTeamBId(b);
       })
       .catch(() => {});
   }, [leagueId]);

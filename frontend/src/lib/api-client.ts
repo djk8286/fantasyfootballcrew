@@ -42,11 +42,35 @@ export function setSession(userId: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(USER_HINT_KEY, userId);
   localStorage.removeItem(LEGACY_TOKEN_KEY);
+  markAccessFresh();
 }
 
 function clearSessionHint(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(USER_HINT_KEY);
+  localStorage.removeItem(ACCESS_AT_KEY);
+}
+
+// Proactive refresh (QA 2026-10-19 BUG J): the access cookie lives ~15
+// min, so the first request after that used to go out, 401, refresh, and
+// be retried -- harmless (a 401 is raised by auth before any handler side
+// effect, so the retry is the only write) but noisy in the network panel.
+// We remember when the access cookie was last issued (shared across tabs
+// via localStorage) and refresh *before* sending once it's about to lapse.
+// The 401 -> refresh -> retry path below stays as the fallback.
+const ACCESS_AT_KEY = "ffc_access_at";
+const ACCESS_REFRESH_AFTER_MS = 14 * 60_000; // server lifetime is 15 min
+
+function markAccessFresh(): void {
+  if (typeof window !== "undefined") localStorage.setItem(ACCESS_AT_KEY, String(Date.now()));
+}
+
+/** True when the access cookie was issued long enough ago that it's about
+ * to (or did) expire. Unknown issue time -> false (fall back to 401 retry). */
+export function accessLikelyExpired(issuedAt: string | null, now: number = Date.now()): boolean {
+  if (!issuedAt) return false;
+  const t = Number(issuedAt);
+  return !Number.isFinite(t) || now - t > ACCESS_REFRESH_AFTER_MS;
 }
 
 /** Clear local state immediately and revoke the server session (refresh
@@ -77,7 +101,10 @@ function refreshSession(): Promise<boolean> {
       // 401 "Refresh superseded" = another tab rotated the refresh token a
       // moment ago; the shared cookie jar already has the new one, so a
       // retry will succeed.
-      .then(async (r) => r.ok || (r.status === 401 && (await r.text().catch(() => "")).includes("superseded")))
+      .then(async (r) => {
+        if (r.ok) markAccessFresh();
+        return r.ok || (r.status === 401 && (await r.text().catch(() => "")).includes("superseded"));
+      })
       .catch(() => false)
       .finally(() => {
         // Let a later expiry trigger a new refresh.
@@ -289,6 +316,14 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
       throw new Error(`Failed to fetch ${url} — ${e instanceof Error ? e.message : "network error"}`);
     }
   };
+  if (
+    typeof window !== "undefined" &&
+    isLoggedIn() &&
+    !NO_REFRESH_ENDPOINTS.includes(endpoint) &&
+    accessLikelyExpired(localStorage.getItem(ACCESS_AT_KEY))
+  ) {
+    await refreshSession();
+  }
   let response = await doFetch();
   // The ~15-minute access cookie expired (or is missing but a refresh
   // cookie may still exist): refresh once and retry. Login/register/etc.
@@ -545,6 +580,15 @@ export const playersApi = {
     apiRequest(`/api/v1/players/${id}${leagueId ? `?league_id=${leagueId}` : ""}`),
   topProspects: (limit = 100) => apiRequest(`/api/v1/players/top-prospects?limit=${limit}`),
   detail: (id: string) => apiRequest(`/api/v1/players/${id}/detail`),
+  /** Batched lookup; 150 ids per call keeps the URL ~5.5 KB (server caps at 400). */
+  byIds: async (ids: string[]): Promise<{ id: string; first_name?: string; last_name?: string }[]> => {
+    const out: { id: string; first_name?: string; last_name?: string }[] = [];
+    for (let i = 0; i < ids.length; i += 150) {
+      const chunk = ids.slice(i, i + 150);
+      out.push(...(await apiRequest<typeof out>(`/api/v1/players?ids=${chunk.map(encodeURIComponent).join(",")}`)));
+    }
+    return out;
+  },
 };
 
 // Scoring

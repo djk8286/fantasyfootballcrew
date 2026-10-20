@@ -99,22 +99,24 @@ export default function TradesPage() {
     const unresolved = [...ids].filter((id) => !(id in playerNames));
     if (unresolved.length === 0) return;
 
-    Promise.all(
-      unresolved.map((id) =>
-        playersApi
-          .get(id)
-          .then((p) => {
-            const player = p as { first_name?: string; last_name?: string };
-            return [id, `${player.first_name ?? ""} ${player.last_name ?? ""}`.trim() || id] as const;
-          })
-          .catch(() => [id, id] as const),
-      ),
-    ).then((pairs) => {
-      setPlayerNames((prev) => ({ ...prev, ...Object.fromEntries(pairs) }));
-    });
+    // One batched request (was one GET per rostered player, with raw
+    // UUIDs on screen until all of them returned -- QA 2026-10-19 BUG I).
+    playersApi
+      .byIds(unresolved)
+      .then((players) => {
+        const found = new Map(players.map((p) => [p.id, `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim()]));
+        setPlayerNames((prev) => ({
+          ...prev,
+          ...Object.fromEntries(unresolved.map((id) => [id, found.get(id) || "Unknown player"])),
+        }));
+      })
+      .catch(() => {
+        setPlayerNames((prev) => ({ ...prev, ...Object.fromEntries(unresolved.map((id) => [id, "Unknown player"])) }));
+      });
   }, [teams, trades, playerNames]);
 
-  const playerLabel = (id: string) => playerNames[id] || id;
+  // Never show a raw id: "…" while the batched name lookup is in flight.
+  const playerLabel = (id: string) => playerNames[id] ?? "…";
 
   const toggleId = (list: string[], setList: (v: string[]) => void, id: string) => {
     setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);

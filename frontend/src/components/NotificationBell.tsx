@@ -139,7 +139,7 @@ export default function NotificationBell() {
               </button>
             )}
           </div>
-          <div className="max-h-96 overflow-y-auto divide-y divide-surface-700/50">
+          <div className="max-h-96 overflow-y-auto overflow-x-hidden divide-y divide-surface-700/50">
             {notifications.length === 0 ? (
               <div className="p-6 text-center text-surface-500 text-sm">
                 Nothing yet. Trade and waiver updates show up here.
@@ -154,8 +154,10 @@ export default function NotificationBell() {
                   }`}
                 >
                   {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-gold-400 mt-1.5 shrink-0" />}
-                  <div className={`min-w-0 ${n.is_read ? "ml-3.5" : ""}`}>
-                    <p className={`text-xs leading-snug ${n.is_read ? "text-surface-400" : "text-surface-200"}`}>
+                  {/* Long messages wrap (they were clipped, with a horizontal
+                      scrollbar showing as a gray bar -- QA 2026-10-19). */}
+                  <div className={`min-w-0 flex-1 ${n.is_read ? "ml-3.5" : ""}`}>
+                    <p className={`text-xs leading-snug whitespace-normal break-words ${n.is_read ? "text-surface-400" : "text-surface-200"}`}>
                       {n.message}
                     </p>
                     <span className="text-[10px] text-surface-500">{timeAgo(n.created_at)}</span>
