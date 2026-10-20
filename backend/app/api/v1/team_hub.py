@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user_optional
+from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
 from app.api.v1.lineups import (
     _current_lineup,
     _get_team_league_or_404,
@@ -128,3 +128,49 @@ async def get_league_home(
     if league is None:
         raise HTTPException(status_code=404, detail="League not found")
     return await league_home(league, week, year, db, viewer.id if viewer else None)
+
+
+@router.get("/leagues/{league_id}/members")
+async def get_league_members(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User = Depends(get_current_user),
+):
+    """Who runs the league and who manages each team, by username.
+    Commissioners and co-commissioners only. `viewer_is_owner` is true
+    for the commissioner, who alone can add or remove co-commissioners."""
+    league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
+    if league is None:
+        raise HTTPException(status_code=404, detail="League not found")
+    require_commissioner(league, viewer)
+    teams = list((await db.execute(select(Team).where(Team.league_id == league_id).order_by(Team.name))).scalars().all())
+    co_ids = list(league.co_commissioner_ids or [])
+    ids = {league.commissioner_id, *co_ids} | {t.owner_id for t in teams if t.owner_id} | {t.co_owner_id for t in teams if t.co_owner_id}
+    users = {u.id: u for u in (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()} if ids else {}
+
+    def person(uid: str | None) -> dict | None:
+        if not uid or uid not in users:
+            return None
+        u = users[uid]
+        return {"user_id": u.id, "username": u.username or u.email.split("@")[0]}
+
+    team_of: dict[str, list[str]] = {}
+    for t in teams:
+        for uid in (t.owner_id, t.co_owner_id):
+            if uid in users:
+                team_of.setdefault(uid, []).append(t.name)
+    return {
+        "viewer_is_owner": viewer.id == league.commissioner_id,
+        "commissioner": person(league.commissioner_id),
+        "co_commissioners": [p for p in (person(c) for c in co_ids) if p],
+        "teams": [{
+            "team_id": t.id,
+            "name": t.name,
+            "owner": person(t.owner_id),
+            "co_owner": person(t.co_owner_id),
+        } for t in teams],
+        "members": sorted(
+            ({**person(uid), "teams": names} for uid, names in team_of.items()),
+            key=lambda m: m["username"].lower(),
+        ),
+    }
