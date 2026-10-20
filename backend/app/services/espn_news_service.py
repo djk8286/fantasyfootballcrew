@@ -20,6 +20,7 @@ every call has a hard timeout, one failing feed never fails the pass,
 and the scheduler polls at most every few hours (REFRESH_INTERVAL_S).
 """
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -39,6 +40,50 @@ RETENTION_DAYS = 30
 ESPN_TEAM_IDS = [*range(1, 31), 33, 34]
 # Small pause between feed requests -- 33 requests per pass, spread out.
 REQUEST_SPACING_S = 0.5
+
+
+# ─── Does the article really mention the player? ──────────────────────
+# ESPN tags round-ups (rankings, waiver pickups, awards trackers) with
+# every athlete named anywhere in the body, often 10+ of them. Showing
+# such an article as "news about Kyler Murray" when he's line 40 of a
+# generic pickups list is misleading (QA 2026-10-20). Rule: a tag counts
+# when it's the article's only athlete tag (ESPN's tag is then about him,
+# even if the headline uses a nickname), or when the headline/description
+# names him: full name, or last name alone when no other tagged athlete
+# in the same article shares it.
+
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _norm(text: str) -> str:
+    text = text.lower().replace("\u2019", "'").replace(".", "")
+    text = re.sub(r"[^a-z0-9'\- ]+", " ", text)
+    return " ".join(text.split())
+
+
+def _strip_suffix(name: str) -> str:
+    words = _norm(name).split()
+    while len(words) > 1 and words[-1] in _NAME_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def _contains_words(haystack: str, needle: str) -> bool:
+    return bool(needle) and re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
+
+
+def article_mentions(first_name: str | None, last_name: str | None, headline: str, description: str | None,
+                     *, sole_tag: bool, other_last_names: tuple[str, ...] | list[str] = ()) -> bool:
+    """Whether an ESPN-tagged article is really about this player (see above)."""
+    if sole_tag:
+        return True
+    text = _norm(f"{headline} {description or ''}")
+    last = _strip_suffix(last_name or "")
+    full = _strip_suffix(f"{first_name or ''} {last_name or ''}")
+    if _contains_words(text, full):
+        return True
+    others = {_strip_suffix(n) for n in other_last_names}
+    return len(last) >= 3 and last not in others and _contains_words(text, last)
 
 
 def _parse_published(value: str | None) -> datetime | None:
@@ -93,10 +138,14 @@ async def save_articles(articles: list[dict[str, Any]], db: AsyncSession) -> int
     espn_ids = {aid for a in articles for aid in a["athlete_ids"]}
     if not espn_ids:
         return 0
-    rows = (await db.execute(select(Player.id, Player.espn_id).where(Player.espn_id.in_(espn_ids)))).all()
+    rows = (await db.execute(
+        select(Player.id, Player.espn_id, Player.first_name, Player.last_name).where(Player.espn_id.in_(espn_ids))
+    )).all()
     players_by_espn: dict[str, list[str]] = {}
-    for pid, eid in rows:
+    names: dict[str, tuple[str, str]] = {}
+    for pid, eid, first, last in rows:
         players_by_espn.setdefault(eid, []).append(pid)
+        names[pid] = (first or "", last or "")
 
     ext_ids = {a["external_id"] for a in articles}
     existing = {
@@ -110,9 +159,15 @@ async def save_articles(articles: list[dict[str, Any]], db: AsyncSession) -> int
 
     added = 0
     for a in articles:
+        tagged = [pid for eid in a["athlete_ids"] for pid in players_by_espn.get(eid, [])]
         for eid in a["athlete_ids"]:
             for pid in players_by_espn.get(eid, []):
                 if (a["external_id"], pid) in existing:
+                    continue
+                first, last = names[pid]
+                others = [names[o][1] for o in tagged if o != pid]
+                if not article_mentions(first, last, a["headline"], a["description"],
+                                        sole_tag=len(a["athlete_ids"]) == 1, other_last_names=others):
                     continue
                 existing.add((a["external_id"], pid))
                 db.add(PlayerNews(
@@ -161,14 +216,35 @@ async def recent_news_for_players(
     if not player_ids:
         return []
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    # Over-fetch, then drop tags the article doesn't back up (article_mentions):
+    # rows stored before that check existed are filtered here too.
     result = await db.execute(
         select(PlayerNews, Player)
         .join(Player, Player.id == PlayerNews.player_id)
         .where(PlayerNews.player_id.in_(player_ids), PlayerNews.published_at >= since)
         .order_by(PlayerNews.published_at.desc())
-        .limit(limit)
+        .limit(limit * 4)
     )
-    return [(n, p) for n, p in result.all()]
+    rows = [(n, p) for n, p in result.all()]
+    if not rows:
+        return []
+    keys = {(n.source, n.external_id) for n, _ in rows}
+    tags: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for source, ext, pid, last in (await db.execute(
+        select(PlayerNews.source, PlayerNews.external_id, PlayerNews.player_id, Player.last_name)
+        .join(Player, Player.id == PlayerNews.player_id)
+        .where(PlayerNews.external_id.in_({k[1] for k in keys}))
+    )).all():
+        if (source, ext) in keys:
+            tags.setdefault((source, ext), []).append((pid, last or ""))
+    kept = []
+    for n, p in rows:
+        tagged = tags.get((n.source, n.external_id), [(p.id, p.last_name or "")])
+        others = [last for pid, last in tagged if pid != p.id]
+        if article_mentions(p.first_name, p.last_name, n.headline, n.description,
+                            sole_tag=len(tagged) == 1, other_last_names=others):
+            kept.append((n, p))
+    return kept[:limit]
 
 
 def serialize(news: PlayerNews, player: Player) -> dict[str, Any]:

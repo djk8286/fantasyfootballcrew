@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barShare, headline, homeMode, leagueChips, recapLine, shortTeamName, winChance, type Recap } from "./league-home";
+import { barShare, headline, homeMode, leagueChips, recapLine, scoreboardTitle, shortTeamName, winChance, type Recap } from "./league-home";
 
 const recap = (over: Partial<Recap>): Recap => ({
   week: 6, result: "L", score: 57.6, opponent_score: 109.04, opponent_team_id: "b", opponent_name: "Team 11",
@@ -47,5 +47,18 @@ describe("league home helpers", () => {
     expect(shortTeamName("QA Test League Team 4", "QA Test League")).toBe("Team 4");
     expect(shortTeamName("QA Tester Team", "QA Test League")).toBe("QA Tester Team");
     expect(shortTeamName("QA Test League", "QA Test League")).toBe("QA Test League");
+  });
+});
+
+describe("scoreboardTitle", () => {
+  const side = (score: number | null, projected: number | null) => ({ team_id: "t", name: "T", score, projected });
+  it("says scores once games start", () => {
+    expect(scoreboardTitle(7, [{ team_a: side(10, 90), team_b: side(null, 80) }])).toBe("Week 7 scores");
+  });
+  it("says projections before kickoff when projections are shown", () => {
+    expect(scoreboardTitle(7, [{ team_a: side(null, 90), team_b: side(null, 80) }])).toBe("Week 7 projections");
+  });
+  it("says matchups for guests, who get no projections", () => {
+    expect(scoreboardTitle(7, [{ team_a: side(null, null), team_b: side(null, null) }])).toBe("Week 7 matchups");
   });
 });

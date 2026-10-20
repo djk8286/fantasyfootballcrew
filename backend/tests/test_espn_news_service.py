@@ -62,8 +62,8 @@ def test_parse_articles_keeps_only_athlete_tagged_with_url_and_time():
 
 @pytest.mark.asyncio
 async def test_refresh_saves_real_links_dedupes_across_feeds_and_reruns(db_session_factory, httpx_mock):
-    league_wide = {"articles": [_article(10, "QB news", ["111"]), _article(11, "Two players", ["111", "222"])]}
-    team_feed = {"articles": [_article(11, "Two players", ["111", "222"]), _article(12, "Unknown athlete", ["999"])]}
+    league_wide = {"articles": [_article(10, "QB news", ["111"]), _article(11, "Pat Player and Sam Player swap teams", ["111", "222"])]}
+    team_feed = {"articles": [_article(11, "Pat Player and Sam Player swap teams", ["111", "222"]), _article(12, "Unknown athlete", ["999"])]}
     httpx_mock.add_response(url=re.compile(FEED_RE.pattern + r"team=7.*"), json=team_feed, is_reusable=True)
     httpx_mock.add_response(url=re.compile(r".*/nfl/news\?limit=50$"), json=league_wide, is_reusable=True)
 
@@ -179,12 +179,73 @@ async def test_team_news_lists_a_multi_player_article_once(client, db_session_fa
     team = await _team_with_news(db_session_factory)
     async with db_session_factory() as db:
         p2 = await _player(db, "222", first="Second", last="Guy")
+        first = (await db.execute(select(PlayerNews).where(PlayerNews.external_id == "40"))).scalar_one()
+        first.headline = "Real News and Second Guy headline"
         t = await db.get(Team, team.id)
         t.roster = [*t.roster, p2.id]
-        db.add(PlayerNews(player_id=p2.id, source="ESPN", external_id="40", headline="Real headline",
+        db.add(PlayerNews(player_id=p2.id, source="ESPN", external_id="40", headline="Real News and Second Guy headline",
                           url="https://www.espn.com/nfl/story/_/id/40/x",
                           published_at=datetime.now(timezone.utc) - timedelta(hours=1)))
         await db.commit()
     body = (await client.get(f"/teams/{team.id}/news")).json()
     assert len(body["articles"]) == 1
     assert sorted(body["articles"][0]["player_names"]) == ["Real News", "Second Guy"]
+
+
+# ─── Tags only when the article really mentions the player (QA 2026-10-20) ──
+
+@pytest.mark.parametrize("first,last,headline,desc,sole,others,expected", [
+    # Generic round-up tagged with a dozen athletes: not "news about" him.
+    ("Kyler", "Murray", "Knockout league pickups: Trio of Lions among best pickups for Week 7",
+     "Who to add this week.", False, ["Goff", "LaPorta"], False),
+    ("Jared", "Goff", "Knockout league pickups: Trio of Lions among best pickups for Week 7",
+     "Jared Goff headlines the adds.", False, ["Murray"], True),
+    # ESPN's only athlete tag: trusted even when the headline uses a nickname.
+    ("Cameron", "Heyward", "Cam Heyward details Steelers' preparation for Paris game", "", True, [], True),
+    # Last name alone, possessive, punctuation and suffixes.
+    ("Jalen", "Hurts", "Saturday sounds off on Sirianni having to field questions about Hurts flying", "", False, ["Saturday"], True),
+    ("Davante", "Adams", "What does Davante Adams' injury mean for other Rams pass catchers?", "", False, ["Higbee"], True),
+    ("Amon-Ra", "St. Brown", "Amon-Ra St. Brown leads Lions", "", False, ["Goff"], True),
+    ("Kenneth", "Walker III", "Rest-of-season rankings: Kenneth Walker rises", "", False, ["Hurts"], True),
+    # Shared last name among the tags: needs the full name.
+    ("Josh", "Allen", "Allen leads the MVP race", "", False, ["Allen"], False),
+    ("Josh", "Allen", "Josh Allen leads the MVP race", "", False, ["Allen"], True),
+    # Substrings don't count.
+    ("Mike", "Evans", "Evansville native signs", "", False, ["X"], False),
+])
+def test_article_mentions(first, last, headline, desc, sole, others, expected):
+    assert svc.article_mentions(first, last, headline, desc, sole_tag=sole, other_last_names=others) is expected
+
+
+@pytest.mark.asyncio
+async def test_refresh_skips_roundup_tags_that_dont_name_the_player(db_session_factory, httpx_mock):
+    roundup = _article(60, "Knockout league pickups: Jared Goff among best adds", ["111", "222", "333"])
+    roundup["description"] = "Three Lions to add."
+    httpx_mock.add_response(url=re.compile(FEED_RE.pattern), json={"articles": [roundup]}, is_reusable=True)
+    async with db_session_factory() as db:
+        goff = await _player(db, "111", first="Jared", last="Goff")
+        await _player(db, "222", first="Kyler", last="Murray")
+        await _player(db, "333", first="Sam", last="LaPorta")
+        stats = await svc.refresh_player_news(db, team_ids=[])
+        rows = (await db.execute(select(PlayerNews))).scalars().all()
+    assert stats["added"] == 1
+    assert [(r.external_id, r.player_id) for r in rows] == [("60", goff.id)]
+
+
+@pytest.mark.asyncio
+async def test_old_untrue_tags_are_hidden_when_read(db_session_factory):
+    """Rows saved before the check existed are filtered on the way out."""
+    async with db_session_factory() as db:
+        murray = await _player(db, "222", first="Kyler", last="Murray")
+        goff = await _player(db, "111", first="Jared", last="Goff")
+        when = datetime.now(timezone.utc) - timedelta(hours=1)
+        for p in (murray, goff):
+            db.add(PlayerNews(player_id=p.id, source="ESPN", external_id="70",
+                              headline="Free-agent pickups for Week 7: Jared Goff and more",
+                              url="https://www.espn.com/nfl/story/_/id/70/x", published_at=when))
+        db.add(PlayerNews(player_id=murray.id, source="ESPN", external_id="71",
+                          headline="Cardinals QB day-to-day with foot injury",
+                          url="https://www.espn.com/nfl/story/_/id/71/x", published_at=when))
+        await db.commit()
+        got = await svc.recent_news_for_players([murray.id, goff.id], db)
+    assert sorted((n.external_id, p.last_name) for n, p in got) == [("70", "Goff"), ("71", "Murray")]

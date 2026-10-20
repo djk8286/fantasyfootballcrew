@@ -7,7 +7,15 @@ from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
-from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league, require_commissioner
+from app.api.deps import (
+    can_view_rosters,
+    get_current_user,
+    get_current_user_optional,
+    require_commissioner,
+    require_league_read,
+    require_team_or_league_access,
+    user_can_join_league,
+)
 from app.services.standings_service import get_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
@@ -552,55 +560,86 @@ async def _with_live_records(teams: list[Team], league_id: str, db: AsyncSession
     return out
 
 
+async def _hide_rosters_unless_visible(reads: list[TeamRead], league_id: str, viewer: User | None,
+                                       db: AsyncSession) -> list[TeamRead]:
+    """PRIVATE league and the viewer isn't a member: team names and records
+    stay readable (invitees need them to pick a team to claim), the roster
+    comes back null. See deps.can_view_rosters."""
+    league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
+    if league is None or await can_view_rosters(league, viewer, db):
+        return reads
+    return [r.model_copy(update={"roster": None}) for r in reads]
+
+
+async def _team_league_rosters_visible_or_raise(team_id: str, viewer: User | None, db: AsyncSession) -> tuple[Team, League]:
+    team = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    league = (await db.execute(select(League).where(League.id == team.league_id))).scalar_one_or_none()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)  # raises 401/403
+    return team, league
+
+
 @router.get("/league/{league_id}", response_model=list[TeamRead])
-async def get_league_teams(league_id: str, db: AsyncSession = Depends(get_db)):
+async def get_league_teams(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
     result = await db.execute(select(Team).where(Team.league_id == league_id))
     teams = result.scalars().all()
-    return await _with_live_records(list(teams), league_id, db)
+    return await _hide_rosters_unless_visible(await _with_live_records(list(teams), league_id, db), league_id, viewer, db)
 
 
 @router.get("/{team_id}", response_model=TeamRead)
-async def get_team(team_id: str, db: AsyncSession = Depends(get_db)):
+async def get_team(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    return (await _with_live_records([team], team.league_id, db))[0]
+    return (await _hide_rosters_unless_visible(await _with_live_records([team], team.league_id, db), team.league_id, viewer, db))[0]
 
 
 @router.get("/{team_id}/cap")
-async def get_team_cap(team_id: str, db: AsyncSession = Depends(get_db)):
+async def get_team_cap(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
     """A team's active contracts + dead money + derived cap space.
     Ungated public read, mirroring get_team's own unauthenticated-read
     house style. Always available regardless of the league's
     salary_cap_settings.enabled (cheap, informative even for a league
     considering turning the feature on later -- cap_total will just be
     the default and every contracts list will be empty) -- gating on
-    `enabled` is a frontend rendering decision, not an API-serving one."""
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    league_result = await db.execute(select(League).where(League.id == team.league_id))
-    league = league_result.scalar_one_or_none()
-    if not league:
-        raise HTTPException(status_code=404, detail="League not found")
+    `enabled` is a frontend rendering decision, not an API-serving one.
+    Contracts list the roster, so PRIVATE leagues are members only."""
+    team, league = await _team_league_rosters_visible_or_raise(team_id, viewer, db)
     return await team_cap_summary(team, league, db)
 
 
 @router.get("/{team_id}/news")
-async def get_team_player_news(team_id: str, db: AsyncSession = Depends(get_db)):
+async def get_team_player_news(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
     """This team's player news: the daily digest (see team_news_service.py)
     plus the real ESPN articles about its rostered players from the last
     week, read live from player_news so links are as fresh as the last
     ESPN poll even when the digest is a day old. Ungated public read.
     404 only when the team doesn't exist. "Nothing yet" is a normal empty
     200 (content null, no articles): it used to 404, which every visitor's
-    console logged as a failed request on fresh teams (QA 2026-10-19)."""
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+    console logged as a failed request on fresh teams (QA 2026-10-19).
+    It's news about the roster, so PRIVATE leagues are members only."""
+    team, _ = await _team_league_rosters_visible_or_raise(team_id, viewer, db)
     news = await get_team_news(team_id, db)
     recent = await espn_news_service.recent_news_for_players(list(team.roster or []), db, days=7, limit=60)
     return {

@@ -33,4 +33,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # API answers can depend on who's asking (cookie auth), so no shared
+        # or browser cache may keep one unless the endpoint opted in itself
+        # (e.g. the draft state's ETag + no-cache). Without this, Vercel's
+        # proxy labels them "public, max-age=0, must-revalidate".
+        if request.url.path.startswith("/api/") and "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "private, no-store"
         return response

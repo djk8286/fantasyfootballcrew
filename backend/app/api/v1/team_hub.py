@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_current_user_optional, require_commissioner
+from app.api.deps import (
+    can_view_lineups,
+    can_view_rosters,
+    get_current_user,
+    get_current_user_optional,
+    require_commissioner,
+    require_league_read,
+)
 from app.api.v1.lineups import (
     _current_lineup,
     _get_team_league_or_404,
@@ -39,12 +46,21 @@ async def get_team_roster(
     week: int = Query(..., ge=1, le=18),
     year: int = Query(..., ge=2020, le=2030),
     db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
 ):
     """One call for the team page: the team with owner usernames, its
     record from standings (Team.points_for is never written), the league's
     first week, and the roster rows GET /lineup returns, each with the
-    slot he fills this week ("BN" on the bench)."""
+    slot he fills this week ("BN" on the bench).
+
+    Visibility (deps.can_view_rosters / can_view_lineups): PRIVATE league
+    -> members only (401 guest, 403 non-member). Guests on other leagues
+    get the roster without lineup data: slots, issues, has_lineup_set are
+    null, and each row's slot and is_starter are null."""
     team, league = await _get_team_league_or_404(team_id, db)
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)  # raises 401/403
+    show_lineup = await can_view_lineups(league, viewer, db)
     teams = (await db.execute(select(Team).where(Team.league_id == league.id))).scalars().all()
     roster = await _resolve_roster(team, db)
     games = await load_week_games(year, week, db)
@@ -56,7 +72,9 @@ async def get_team_roster(
     rows = []
     for p in roster:
         row = _serialize_roster_player(p, p.id in slot_of, scoring, games, week, year)
-        row["slot"] = slot_of.get(p.id, "BN")
+        row["slot"] = slot_of.get(p.id, "BN") if show_lineup else None
+        if not show_lineup:
+            row["is_starter"] = None
         rows.append(row)
 
     return {
@@ -75,9 +93,10 @@ async def get_team_roster(
         "week": week,
         "year": year,
         "league_start_week": await league_start_week(league.id, year, db),
-        "has_lineup_set": current.has_lineup_set,
-        "slots": current.slots,
-        "issues": lineup_issues(current.slots, _player_states(roster, games), current.unplaced),
+        "lineup_visible": show_lineup,
+        "has_lineup_set": current.has_lineup_set if show_lineup else None,
+        "slots": current.slots if show_lineup else None,
+        "issues": lineup_issues(current.slots, _player_states(roster, games), current.unplaced) if show_lineup else None,
         "roster": rows,
     }
 
@@ -127,7 +146,10 @@ async def get_league_home(
     league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
     if league is None:
         raise HTTPException(status_code=404, detail="League not found")
-    return await league_home(league, week, year, db, viewer.id if viewer else None)
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)  # raises 401/403
+    return await league_home(league, week, year, db, viewer.id if viewer else None,
+                             show_projections=await can_view_lineups(league, viewer, db))
 
 
 @router.get("/leagues/{league_id}/members")

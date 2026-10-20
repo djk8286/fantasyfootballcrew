@@ -11,11 +11,12 @@ from app.models.player import Player
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
-from app.api.deps import get_current_user, require_commissioner
+from app.api.deps import can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read
 from app.services.draft_manager import build_rank_by_id, get_rank_score, FANTASY_POSITIONS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats, fetch_trending_add_counts
 from app.services.scoring_engine import calculate_player_score
 from app.services.waiver_service import _priority_order, process_league_waivers
+from app.services.roster_guard import rostered_player_ids
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 
 router = APIRouter(prefix="/leagues/{league_id}/waivers", tags=["waivers"])
@@ -46,6 +47,7 @@ async def list_free_agents(
     league_id: str,
     limit_per_position: int = 25,
     db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
 ):
     """
     Best available (unrostered) free agents for this league, ranked by the
@@ -57,13 +59,13 @@ async def list_free_agents(
     fixed in the draft room (see get_draft_state).
     """
     league = await _get_league(league_id, db)
+    # Who's NOT rostered is the inverse of the rosters, so a PRIVATE league's
+    # free-agent list follows the same rule as its rosters (deps.can_view_rosters).
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)
     scoring_config = league.scoring_config or {}
 
-    teams_result = await db.execute(select(Team).where(Team.league_id == league_id))
-    teams = teams_result.scalars().all()
-    rostered_ids = set()
-    for t in teams:
-        rostered_ids.update(t.roster or [])
+    rostered_ids = await rostered_player_ids(db, league_id)
 
     players_result = await db.execute(
         select(Player).where(

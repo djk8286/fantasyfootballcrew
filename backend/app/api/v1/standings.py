@@ -18,7 +18,7 @@ from app.services.standings_service import (
 )
 from app.services.guillotine_service import process_league_guillotine
 from app.services.nfl_schedule_service import game_teams, get_week_games
-from app.api.deps import get_current_user, require_commissioner
+from app.api.deps import can_view_lineups, can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
 
@@ -75,9 +75,14 @@ async def get_weekly_scores(
     week: int = Query(..., ge=1, le=18, description="Week number (1-18)"),
     year: int = Query(..., ge=2020, le=2030, description="Season year"),
     db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
 ):
     """
     Get all team scores for a specific week.
+
+    lineup_data (who started, per-player points) is lineup data: null for
+    guests and, in PRIVATE leagues, non-members get 401/403 (see
+    deps.can_view_lineups). Totals and matchups stay public otherwise.
 
     Returns scores for each team and head-to-head matchups.
     """
@@ -86,6 +91,9 @@ async def get_weekly_scores(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)  # raises 401/403
+    show_lineups = await can_view_lineups(league, viewer, db)
 
     # Fetch weekly scores
     scores_result = await db.execute(
@@ -162,7 +170,7 @@ async def get_weekly_scores(
             "team_id": ws.team_id,
             "total_score": ws.total_score,
             "projected_score": ws.projected_score,
-            "lineup_data": lineup_data,
+            "lineup_data": lineup_data if show_lineups else None,
         })
 
     return {

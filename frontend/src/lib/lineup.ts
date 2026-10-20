@@ -1,3 +1,5 @@
+import { loadProblem } from "./access-problem";
+
 export interface Slot {
   slot: string;
   player_id: string | null;
@@ -153,13 +155,10 @@ export function projectedTotal(
   return Math.round(sum * 100) / 100;
 }
 
-/** Why the lineup didn't load, from the GET /lineup status (null = network
- * or unknown). "login" -> show a log-in prompt instead of an error. */
+/** Why the lineup didn't load (see access-problem.ts). */
 export type LineupLoadProblem = { kind: "login" } | { kind: "message"; text: string };
 
 export function lineupLoadProblem(status: number | null): LineupLoadProblem {
-  if (status === 401) return { kind: "login" };
-  if (status === 403) return { kind: "message", text: "This league is private. Only its members can see lineups." };
-  if (status === 404) return { kind: "message", text: "We couldn't find this team." };
-  return { kind: "message", text: "Couldn't load this lineup. Try again in a moment." };
+  const p = loadProblem(status, "lineup");
+  return p.kind === "login" ? { kind: "login" } : p;
 }

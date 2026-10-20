@@ -6,12 +6,13 @@ from app.models.player import Player
 from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
-from app.api.deps import get_current_user_optional
+from app.api.deps import can_view_rosters, get_current_user_optional, require_league_read
 from app.services import espn_news_service
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import build_rank_by_id, get_rank_score
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING
+from app.services.roster_guard import rostered_player_ids
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -152,9 +153,18 @@ async def list_players(
     league_id: str = None,
     sort_by: str = None,
     ids: str = None,
+    available_in_league: str = None,
     db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
 ):
-    """ids: comma-separated player ids (max MAX_IDS) -- one batched lookup
+    """available_in_league: only free agents in that league -- anyone on
+    any team's roster there is left out (roster_guard.rostered_player_ids,
+    the same check waiver grants and draft picks use). The waiver page's
+    "search free agents" box used to search every player, so rostered ones
+    (Lamar Jackson on the searcher's own team, QA 2026-10-20) showed up as
+    addable.
+
+    ids: comma-separated player ids (max MAX_IDS) -- one batched lookup
     for pages that need names for a whole league's rosters (the trades
     page used to fire one GET per rostered player and showed raw UUIDs
     until every one returned; QA 2026-10-19 BUG I).
@@ -174,6 +184,16 @@ async def list_players(
             return []
         query = query.where(Player.id.in_(id_list))
         limit = len(id_list)
+    if available_in_league:
+        avail_league = await db.get(League, available_in_league)
+        if avail_league is None:
+            raise HTTPException(status_code=404, detail="League not found")
+        # The free-agent pool is the inverse of the rosters: same rule.
+        if not await can_view_rosters(avail_league, viewer, db):
+            await require_league_read(avail_league, viewer, db)
+        rostered = await rostered_player_ids(db, available_in_league)
+        if rostered:
+            query = query.where(~Player.id.in_(rostered))
     if position:
         query = query.where(Player.position == position.upper())
     if team:

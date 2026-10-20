@@ -81,7 +81,10 @@ async def _recap(league: League, team: Team, opp_name: dict, results: list[dict]
     }
 
 
-async def league_home(league: League, week: int, year: int, db: AsyncSession, viewer_id: str | None) -> dict[str, Any]:
+async def league_home(league: League, week: int, year: int, db: AsyncSession, viewer_id: str | None,
+                      show_projections: bool = True) -> dict[str, Any]:
+    """show_projections False (guests): per-team projected totals, which are
+    built from each team's current lineup, come back null."""
     teams = list((await db.execute(select(Team).where(Team.league_id == league.id))).scalars().all())
     names = {t.id: t.name for t in teams}
     mine = next((t for t in teams if viewer_id and viewer_id in (t.owner_id, t.co_owner_id)), None)
@@ -102,7 +105,7 @@ async def league_home(league: League, week: int, year: int, db: AsyncSession, vi
     def side(tid: str) -> dict:
         return {"team_id": tid, "name": names.get(tid, "Unknown"),
                 "score": scores.get(tid) if show_scores else None,
-                "projected": by_team.get(tid, {}).get("projected")}
+                "projected": by_team.get(tid, {}).get("projected") if show_projections else None}
 
     scoreboard = [{"team_a": side(a), "team_b": side(b), "mine": bool(mine) and mine.id in (a, b)}
                   for a, b in _effective_matchups(league, teams, week)]
