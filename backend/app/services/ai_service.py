@@ -248,9 +248,12 @@ Write, covering:
 4. VERDICT -- which team has the stronger season-long profile right
    now, and why -- this is about the whole season, not who'd win one
    specific week
-A team with very few games_played (early season) has a thinner sample --
-say so explicitly rather than overstating an early trend. Do not invent
-stats or context beyond what's given above.
+A team with very few games_played has a thinner sample -- say so
+explicitly rather than overstating an early trend. games_played counts only
+the weeks THIS league has scored: when first_scored_week is later than week
+1, the league started mid-season (earlier NFL weeks predate it), so say e.g.
+"this league has scored weeks 6-6 so far" rather than implying the teams
+missed games. Do not invent stats or context beyond what's given above.
 """
 
 PLAYER_COMPARISON_PROMPT = """

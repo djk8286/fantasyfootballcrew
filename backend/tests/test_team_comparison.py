@@ -194,3 +194,28 @@ async def test_team_comparison_rejects_a_non_member_of_the_league(client, db_ses
     client.headers["Authorization"] = f"Bearer {stranger_token}"
     r = await client.post("/ai/team-comparison", json={"team_a_id": team_a_id, "team_b_id": team_b_id})
     assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_build_team_trend_mid_season_league_reports_its_first_week_and_ignores_old_seasons(db_session_factory):
+    """QA 2026-10-19: a league created in week 6 has one scored game; the
+    trend now says which weeks those are, and last season's rows don't
+    count toward this season's games_played."""
+    async with db_session_factory() as db:
+        commissioner = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                             username=f"u{uuid.uuid4().hex[:8]}", hashed_password="x")
+        db.add(commissioner)
+        await db.flush()
+        league = League(id=str(uuid.uuid4()), name="Late Start League", commissioner_id=commissioner.id,
+                         league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
+        db.add(league)
+        team = Team(id=str(uuid.uuid4()), name="Late Team", league_id=league.id, owner_id=commissioner.id, roster=[])
+        db.add(team)
+        await db.flush()
+        db.add(WeeklyScore(id=str(uuid.uuid4()), league_id=league.id, team_id=team.id, week=17, year=YEAR - 1, total_score=80.0))
+        db.add(WeeklyScore(id=str(uuid.uuid4()), league_id=league.id, team_id=team.id, week=6, year=YEAR, total_score=101.5))
+        await db.commit()
+        trend = await build_team_trend(team, db, {})
+    assert trend["games_played"] == 1
+    assert trend["weekly_points"] == [{"week": 6, "points": 101.5}]
+    assert (trend["first_scored_week"], trend["latest_scored_week"]) == (6, 6)

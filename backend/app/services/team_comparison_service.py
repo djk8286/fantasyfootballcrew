@@ -37,9 +37,15 @@ async def _weekly_totals(team_id: str, db: AsyncSession) -> list[dict[str, Any]]
     config (not a recompute), same source of truth the Standings/
     Schedule pages already use."""
     result = await db.execute(
-        select(WeeklyScore).where(WeeklyScore.team_id == team_id).order_by(WeeklyScore.week)
+        select(WeeklyScore).where(WeeklyScore.team_id == team_id).order_by(WeeklyScore.year, WeeklyScore.week)
     )
-    return [{"week": w.week, "points": round(w.total_score, 2)} for w in result.scalars().all()]
+    rows = result.scalars().all()
+    if not rows:
+        return []
+    # Only the latest season this team has scores in (no carry-over rows
+    # from a prior year inflating games_played).
+    season = max(w.year for w in rows)
+    return [{"week": w.week, "points": round(w.total_score, 2)} for w in rows if w.year == season]
 
 
 async def _position_group_points(team: Team, db: AsyncSession, scoring: dict) -> dict[str, float]:
@@ -88,6 +94,11 @@ async def build_team_trend(team: Team, db: AsyncSession, scoring: dict) -> dict[
         "team_name": team.name,
         "weekly_points": weekly,
         "games_played": len(points),
+        # A league created mid-season only has scores from the week it
+        # started (QA 2026-10-19: "Week 6" yet "only one game played" read
+        # as a contradiction). Lets the analysis say *why* the sample is small.
+        "first_scored_week": weekly[0]["week"] if weekly else None,
+        "latest_scored_week": weekly[-1]["week"] if weekly else None,
         "average_points": round(mean(points), 2) if points else 0.0,
         "consistency_stdev": round(pstdev(points), 2) if len(points) > 1 else 0.0,
         "trend": _trend_label(points),

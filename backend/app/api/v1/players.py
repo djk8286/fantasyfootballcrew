@@ -140,6 +140,9 @@ async def _get_scoring_config(league_id: str | None, db: AsyncSession) -> dict |
     return (league.scoring_config or {}) if league else None
 
 
+MAX_IDS = 400
+
+
 @router.get("", response_model=list[PlayerRead])
 async def list_players(
     position: str = None,
@@ -148,15 +151,29 @@ async def list_players(
     limit: int = 100,
     league_id: str = None,
     sort_by: str = None,
+    ids: str = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """sort_by: rank (real data-driven overall rank, replacing the old
+    """ids: comma-separated player ids (max MAX_IDS) -- one batched lookup
+    for pages that need names for a whole league's rosters (the trades
+    page used to fire one GET per rostered player and showed raw UUIDs
+    until every one returned; QA 2026-10-19 BUG I).
+
+    sort_by: rank (real data-driven overall rank, replacing the old
     static tier list -- see draft_manager.build_rank_by_id), points (last
     season's fantasy points), yards / touchdowns (last season's raw
     totals), or projected (Sleeper's synced per-game projection). Each
     has a fixed best-first direction. Omitted: unsorted (DB order), same
     as before this param existed."""
     query = select(Player)
+    if ids is not None:
+        id_list = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
+        if len(id_list) > MAX_IDS:
+            raise HTTPException(status_code=422, detail=f"At most {MAX_IDS} ids per request")
+        if not id_list:
+            return []
+        query = query.where(Player.id.in_(id_list))
+        limit = len(id_list)
     if position:
         query = query.where(Player.position == position.upper())
     if team:

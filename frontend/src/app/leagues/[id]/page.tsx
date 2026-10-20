@@ -1639,7 +1639,9 @@ export default function LeagueDetailPage() {
           <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
             <h3 className="text-sm font-semibold text-surface-300 mb-3">Actions</h3>
             <p className="text-surface-500 text-xs mb-4">
-              {teams.length} of {league.max_teams} teams filled — add more to start the draft.
+              {teams.length >= league.max_teams
+                ? `All ${league.max_teams} teams filled${league.draft_status === "not_started" ? " — ready to draft." : "."}`
+                : `${teams.length} of ${league.max_teams} teams filled — add more to start the draft.`}
             </p>
             <div className="flex flex-col gap-2">
               {teams.length < league.max_teams && (

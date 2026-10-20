@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Newspaper, Users } from "lucide-react";
-import { playersApi, isLoggedIn } from "@/lib/api-client";
+import { playersApi, nflApi, isLoggedIn } from "@/lib/api-client";
+import { projectionTile } from "@/lib/projection-label";
 import PositionBadge from "@/components/PositionBadge";
 
 interface NewsItem {
@@ -87,6 +88,14 @@ export default function PlayerDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  const [currentWeek, setCurrentWeek] = useState<number | null>(null);
+  useEffect(() => {
+    nflApi
+      .getCurrentWeek()
+      .then((w) => setCurrentWeek(w.season_type === "regular" ? w.week : null))
+      .catch(() => setCurrentWeek(null));
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-surface-900 flex items-center justify-center">
@@ -150,14 +159,16 @@ export default function PlayerDetailPage() {
                 {player.season_points != null ? player.season_points.toFixed(1) : "—"}
               </p>
             </div>
-            {player.projected_points != null && (
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-surface-500">
-                  Proj{player.projected_week ? ` wk ${player.projected_week}` : ""}
-                </p>
-                <p className="text-2xl font-bold text-white">{player.projected_points.toFixed(1)}</p>
-              </div>
-            )}
+            {player.projected_points != null && (() => {
+              const tile = projectionTile(player.projected_points, player.projected_week, currentWeek, player.bye_week);
+              return (
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-surface-500">{tile.label}</p>
+                  <p className="text-2xl font-bold text-white">{tile.value != null ? tile.value.toFixed(1) : "—"}</p>
+                  {tile.note && <p className="text-[10px] text-surface-500">{tile.note}</p>}
+                </div>
+              );
+            })()}
           </div>
         </div>
         <p className="text-[11px] text-surface-500 -mt-3">Fantasy points use the site&apos;s default scoring.</p>
