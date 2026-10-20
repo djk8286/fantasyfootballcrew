@@ -40,6 +40,7 @@ import httpx
 from sqlalchemy import select
 from app.core.database import async_session, background_session as draft_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, rebuild_season_stats_from_weeks, SLEEPER_API
+from app.services import roster_repair
 from app.services.standings_service import calculate_week, notify_matchup_results, repair_default_lineup_scores
 from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
@@ -488,6 +489,15 @@ async def _repair_default_lineups_once() -> None:
     print(f"[scheduler] Default-lineup repair re-scored {len(changes)} team-week(s)")
 
 
+async def _repair_duplicate_rosters_once() -> None:
+    async with async_session() as db:
+        changes = await roster_repair.repair_duplicate_rostered_players(db)
+    for c in changes:
+        print(f"[scheduler] Roster repair: league {c['league_id']} player {c['player_id']} removed from team "
+              f"{c['removed_from']} ({c.get('removed_from_name', '')}), kept on {c['kept_on']} ({c.get('kept_on_name', '')})")
+    print(f"[scheduler] Roster repair resolved {len(changes)} duplicate roster entr{'y' if len(changes) == 1 else 'ies'}")
+
+
 async def _refresh_espn_news_once() -> None:
     async with async_session() as db:
         stats = await espn_news_service.refresh_player_news(db)
@@ -668,6 +678,13 @@ async def run_scheduler() -> None:
         await run_job("repair_default_lineups", _repair_default_lineups_once)
     except Exception as e:
         print(f"[scheduler] Default-lineup repair failed: {e}")
+
+    # One-time cleanup of players on two rosters in a league (QA 10-19,
+    # Josh Allen) -- idempotent, a no-op once none are left.
+    try:
+        await run_job("repair_duplicate_rosters", _repair_duplicate_rosters_once)
+    except Exception as e:
+        print(f"[scheduler] Duplicate-roster repair failed: {e}")
 
     while True:
         try:
