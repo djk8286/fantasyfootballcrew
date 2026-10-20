@@ -17,6 +17,7 @@ import {
   issuesFor,
   moveWarning,
   playerWarning,
+  projectedTotal,
   targetsFor,
   type Issue,
   type LineupPlayer,
@@ -43,6 +44,7 @@ interface RosterPlayer {
   avatar_url: string | null;
   season_points: number | null;
   last_week_points: number | null;
+  projected_points?: number | null;
   game: Game | null;
   on_bye: boolean;
 }
@@ -52,6 +54,8 @@ interface LineupResponse {
   has_lineup_set: boolean;
   slots: Slot[];
   roster: RosterPlayer[];
+  projected_total?: number | null;
+  matchup?: { opponent_team_id: string; projected: number | null; opponent_projected: number | null } | null;
 }
 
 interface ScheduleSide {
@@ -102,7 +106,7 @@ function GameMeta({ player }: { player: RosterPlayer }) {
     : g.status === "post" ? <span className="text-ink-400">{g.detail || "Final"}</span>
     : <span className="text-ink-400">{kickoffFormat.format(new Date(g.kickoff_at))}</span>;
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1.5 whitespace-nowrap">
       <span className="text-ink-300">{g.home ? "vs" : "@"} {g.opponent}</span>
       {when}
       {g.locked && <Lock className="h-3 w-3 text-ink-400" aria-label="Locked" />}
@@ -133,7 +137,7 @@ function LineupRow({
   const tone = issue ? (issue.kind === "empty" ? "border-l-warn" : "border-l-loss") : "border-l-transparent";
   return (
     <div
-      className={`grid grid-cols-[3rem_1fr_auto] items-center gap-3 border-l-2 px-3 py-2 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_5.5rem] ${tone} ${
+      className={`grid grid-cols-[3rem_1fr_2.75rem_auto] items-center gap-3 border-l-2 px-3 py-2 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_4rem_5.5rem] ${tone} ${
         mode === "picked" ? "bg-gold/[0.07] ring-1 ring-inset ring-gold" : mode === "target" ? "bg-ink-850 ring-1 ring-inset ring-ink-400" : ""
       } ${mode === "dim" ? "opacity-35" : ""}`}
     >
@@ -145,12 +149,13 @@ function LineupRow({
               <PlayerLink id={player.id} className="truncate text-sm font-medium text-ink-100">
                 {player.full_name}
               </PlayerLink>
-              <span className="shrink-0 text-xs text-ink-400">
+              <span className="hidden shrink-0 text-xs text-ink-400 md:inline">
                 {player.position} · {player.team}
               </span>
               <InjuryTag status={player.injury_status} onBye={player.on_bye} />
             </div>
-            <div className="mt-0.5 text-xs md:hidden">
+            <div className="mt-0.5 flex min-w-0 gap-1 overflow-hidden whitespace-nowrap text-xs md:hidden">
+              <span className="shrink-0 text-ink-400">{label === "BN" || label.includes("FLEX") ? `${player.position} ${player.team}` : player.team} ·</span>
               <GameMeta player={player} />
             </div>
           </>
@@ -165,6 +170,7 @@ function LineupRow({
         )}
       </div>
       <div className="hidden text-xs md:block">{player && <GameMeta player={player} />}</div>
+      <Num value={player?.projected_points} className="text-right text-sm font-medium text-ink-100" />
       <Num value={player?.last_week_points} className="hidden text-right text-sm text-ink-300 md:block" />
       <Num value={player?.season_points} className="hidden text-right text-sm text-ink-300 md:block" />
       <div className="flex justify-end">
@@ -193,10 +199,11 @@ function LineupRow({
 
 function TableHead({ title }: { title: string }) {
   return (
-    <div className="grid grid-cols-[3rem_1fr_auto] gap-3 border-b border-ink-700 px-3 pb-2 text-label font-semibold uppercase text-ink-400 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_5.5rem]">
+    <div className="grid grid-cols-[3rem_1fr_2.75rem_auto] gap-3 border-b border-ink-700 px-3 pb-2 text-label font-semibold uppercase text-ink-400 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_4rem_5.5rem]">
       <span>Slot</span>
       <span>{title}</span>
       <span className="hidden md:block">Game</span>
+      <span className="text-right">Proj</span>
       <span className="hidden text-right md:block">Last wk</span>
       <span className="hidden text-right md:block">Season</span>
       <span />
@@ -281,6 +288,12 @@ export default function LineupPage() {
 
   const roster = useMemo(() => data?.roster ?? [], [data]);
   const byId = useMemo(() => Object.fromEntries(roster.map((p) => [p.id, p])), [roster]);
+  const hasProjections = data?.projected_total != null;
+  const myProjected = useMemo(
+    () => projectedTotal(slots, Object.fromEntries(roster.map((p) => [p.id, p.projected_points])), hasProjections),
+    [slots, roster, hasProjections],
+  );
+  const oppProjected = data?.matchup?.opponent_projected ?? null;
   const players = useMemo(
     () =>
       Object.fromEntries(
@@ -357,12 +370,12 @@ export default function LineupPage() {
     setPick(null);
     const prev = slots;
     try {
-      const res = (await lineupsApi.optimize(teamId, week, year)) as { slots: Slot[]; skipped_inactive?: string[] };
+      const res = (await lineupsApi.optimize(teamId, week, year)) as { slots: Slot[]; skipped_inactive?: string[]; ranked_by?: string };
       setSlots(res.slots);
       setData((d) => (d ? { ...d, has_lineup_set: true } : d));
       setError("");
       const skipped = res.skipped_inactive?.length ? ` Skipped ${res.skipped_inactive.join(", ")}.` : "";
-      setToast({ message: `Auto-filled your best lineup.${skipped}`, undo: prev });
+      setToast({ message: `Auto-filled your best lineup${res.ranked_by === "projection" ? " by projection" : ""}.${skipped}`, undo: prev });
     } catch (err) {
       setError(errorText(err, "Auto-fill didn't work. Try again."));
     } finally {
@@ -425,14 +438,26 @@ export default function LineupPage() {
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-gold">{matchup.me.name}</p>
               <Num value={matchup.me.score} digits={2} size="lg" className="text-ink-100" />
+              {hasProjections && (
+                <p className="text-xs text-ink-400">
+                  Proj <Num value={myProjected} className="text-ink-300" />
+                </p>
+              )}
             </div>
             <span className="text-xs text-ink-400">vs</span>
             <div className="min-w-0 text-right">
               <p className="truncate text-sm font-medium text-ink-300">{matchup.opp.name}</p>
               <Num value={matchup.opp.score} digits={2} size="lg" className="text-ink-300" />
+              {hasProjections && (
+                <p className="text-xs text-ink-400">
+                  Proj <Num value={oppProjected} className="text-ink-300" />
+                </p>
+              )}
             </div>
           </div>
-          <p className="mt-2 text-xs text-ink-400">Each player locks at his own game&apos;s kickoff.</p>
+          <p className="mt-2 text-xs text-ink-400">
+            Each player locks at his own game&apos;s kickoff.{hasProjections && " Projections are from Sleeper, scored with your league's rules."}
+          </p>
         </Card>
       )}
 
