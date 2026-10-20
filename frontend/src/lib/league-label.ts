@@ -55,3 +55,14 @@ export function switcherLabels(
     others: mine.filter((l) => l.id !== current.id).map((l) => ({ id: l.id, label: leagueLabel(l, all) })),
   };
 }
+
+/** Labels for rows that each name a league (player page "In your
+ * leagues"): one entry per league id, so a league listed twice doesn't
+ * collide with itself, then disambiguated like the switcher (QA
+ * 2026-10-20: two plain "QA Test League" rows). */
+export function rowLeagueLabels(
+  rows: { league_id: string; league_name: string; league_created_at?: string | null }[],
+): Map<string, string> {
+  const leagues = [...new Map(rows.map((r) => [r.league_id, { id: r.league_id, name: r.league_name, created_at: r.league_created_at }])).values()];
+  return new Map(leagues.map((l) => [l.id, leagueLabel(l, leagues)]));
+}

@@ -108,3 +108,35 @@ async def test_current_matchup_context_noop_when_nfl_state_unavailable(db_sessio
         opponent_roster, matchups = await ai_module._current_matchup_context(teams[0], league, db)
     assert opponent_roster == {}
     assert matchups == {}
+
+
+@pytest.mark.asyncio
+async def test_lineup_inputs_carry_bye_and_game_from_lineup_source(db_session_factory, monkeypatch):
+    """QA 2026-10-20: the AI started a TE on bye as "Questionable" because
+    the roster it saw had injury status but no bye or game."""
+    from datetime import datetime, timezone
+    from app.models.nfl_game import NFLGame
+
+    league, teams = await _make_league_with_teams(db_session_factory, num_teams=2)
+    async with db_session_factory() as db:
+        te = Player(id=str(uuid.uuid4()), sleeper_id="te1", first_name="Chig", last_name="Okonkwo",
+                    position="TE", team="WAS", injury_status="Questionable")
+        qb = Player(id=str(uuid.uuid4()), sleeper_id="qb1", first_name="Caleb", last_name="Williams",
+                    position="QB", team="CHI")
+        db.add_all([te, qb, NFLGame(
+            espn_event_id="w7", week=7, year=2026, season_type=2,
+            home_team="CHI", home_team_name="Chicago Bears", away_team="NE", away_team_name="New England Patriots",
+            status_state="pre", status_detail="", completed=False,
+            kickoff_at=datetime(2026, 10, 23, 0, 15, tzinfo=timezone.utc),
+        )])
+        team = await db.get(Team, teams[0].id)
+        team.roster = [te.id, qb.id]
+        await db.commit()
+        monkeypatch.setattr(ai_module, "fetch_nfl_state", _mock_nfl_state(2026, 7))
+        inputs = await ai_module._lineup_prompt_inputs(team, league, db)
+
+    roster = inputs["roster"]
+    assert roster[te.id]["on_bye"] is True and roster[te.id]["game"] is None
+    assert roster[te.id]["injury_status"] == "Questionable"
+    assert roster[qb.id]["on_bye"] is False
+    assert roster[qb.id]["game"]["opponent"] == "NE" and roster[qb.id]["game"]["home"] is True

@@ -269,7 +269,8 @@ export default function WaiversPage() {
   const playerLabel = (id: string) => playerNames[id] || "Loading…";
 
   useEffect(() => {
-    if (search.trim().length < 2) {
+    // A picked player fills the box with his name; don't re-open results for it.
+    if (addPlayerId || search.trim().length < 2) {
       setSearchResults([]);
       return;
     }
@@ -280,7 +281,7 @@ export default function WaiversPage() {
         .catch(() => setSearchResults([]));
     }, 300);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, addPlayerId]);
 
   const handleSubmitClaim = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -383,7 +384,12 @@ export default function WaiversPage() {
                 <input
                   type="text"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    // Typing a new name drops the previous pick, so the claim
+                    // can't silently add someone other than who the box shows.
+                    setAddPlayerId("");
+                  }}
                   placeholder="Search by name..."
                   className="w-full px-3 py-2 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm placeholder-surface-500 focus:outline-none focus:ring-1 focus:ring-gold-400"
                 />
