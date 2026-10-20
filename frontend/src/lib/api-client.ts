@@ -455,6 +455,11 @@ export const leaguesApi = {
     apiRequest("/api/v1/leagues", { method: "POST", body: data }),
   update: (id: string, data: Record<string, unknown>) =>
     apiRequest(`/api/v1/leagues/${id}`, { method: "PATCH", body: data }),
+  /** Commissioner, co-commissioners and team managers by username. Managers only. */
+  getMembers: (id: string) => apiRequest(`/api/v1/leagues/${id}/members`),
+  /** Add or remove a co-commissioner, or hand over the league, by username or email. */
+  manageCommissionerByName: (id: string, action: "add_co_commish" | "remove_co_commish" | "transfer", identifier: string) =>
+    apiRequest(`/api/v1/leagues/${id}/commissioner`, { method: "POST", body: { action, identifier } }),
   manageCommissioner: (id: string, action: string, userId: string) =>
     apiRequest(`/api/v1/leagues/${id}/commissioner`, {
       method: "POST",

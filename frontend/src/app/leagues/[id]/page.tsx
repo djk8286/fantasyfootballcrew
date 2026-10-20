@@ -3,15 +3,13 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Bot, ChevronDown, Clock, ListChecks, Lock, Mail, Send, Shield, Swords, UserPlus, Users } from "lucide-react";
+import { Bot, Clock, ListChecks, Lock, Mail, Send, Shield, Swords, UserPlus, Users } from "lucide-react";
 import Avatar from "@/components/Avatar";
 import AdSlot from "@/components/AdSlot";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 import { ActivityFeed, type ActivityItem } from "@/components/ActivityFeed";
 import { PlayerNewsCard } from "@/components/PlayerNewsCard";
 import { SalaryCapBadge, BestBallBadge } from "@/components/LeagueBadges";
-import { LeagueDetailsForm } from "@/components/commissioner/LeagueDetailsForm";
-import { TeamsAdmin } from "@/components/commissioner/TeamsAdmin";
 import type { AdminLeague, AdminTeam } from "@/components/commissioner/types";
 import { Badge } from "@/components/ui/Badge";
 import { Button, buttonClasses } from "@/components/ui/Button";
@@ -444,42 +442,6 @@ function JoinCard({ data, onChanged, onError }: { data: PageData; onChanged: () 
   return null;
 }
 
-function CommissionerTools({ data, onChanged }: { data: PageData; onChanged: () => Promise<void> }) {
-  const id = data.league.id;
-  const links: [string, string][] = [
-    ["Scoring", `/leagues/${id}/scoring`],
-    ["Roster slots", `/leagues/${id}/roster-slots`],
-    ["Playoffs", `/leagues/${id}/playoff-settings`],
-    ["Salary cap", `/leagues/${id}/salary-cap-settings`],
-    ["Best ball", `/leagues/${id}/best-ball-settings`],
-  ];
-  return (
-    <details className="group rounded-card border border-ink-700 bg-ink-900">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-ink-100 lg:px-5">
-        <Shield className="h-4 w-4 text-gold" aria-hidden /> Commissioner tools
-        <ChevronDown className="ml-auto h-4 w-4 text-ink-400 transition-transform group-open:rotate-180" aria-hidden />
-      </summary>
-      <div className="space-y-6 border-t border-ink-700 px-4 py-4 lg:px-5">
-        <div className="flex flex-wrap gap-2">
-          {links.map(([label, href]) => (
-            <Link key={href} href={href} className={buttonClasses("secondary", "sm")}>
-              {label}
-            </Link>
-          ))}
-        </div>
-        <section>
-          <h3 className="mb-2 text-label font-semibold uppercase text-ink-400">League details</h3>
-          <LeagueDetailsForm league={data.league} onSaved={onChanged} />
-        </section>
-        <section>
-          <h3 className="mb-1 text-label font-semibold uppercase text-ink-400">Teams</h3>
-          <TeamsAdmin league={data.league} teams={data.teams} onChanged={onChanged} />
-        </section>
-      </div>
-    </details>
-  );
-}
-
 function PageSkeleton() {
   return (
     <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
@@ -626,8 +588,6 @@ export default function LeagueHomePage() {
           </div>
         </div>
       )}
-
-      {isManager && <CommissionerTools data={data} onChanged={reload} />}
 
       <AdSlot placement="league-page-bottom" />
     </div>

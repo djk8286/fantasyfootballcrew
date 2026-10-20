@@ -30,8 +30,15 @@ import {
   CalendarClock,
   MessageSquare,
   MessageCircle,
+  Settings,
 } from "lucide-react";
-import { commissionerApi, leaguesApi, teamsApi, invitesApi, joinRequestsApi, getCurrentUserId } from "@/lib/api-client";
+import { commissionerApi, draftsApi, friendlyErrorMessage, leaguesApi, teamsApi, invitesApi, joinRequestsApi, getCurrentUserId } from "@/lib/api-client";
+import { CommissionersPanel, type Members } from "@/components/commissioner/CommissionersPanel";
+import { LeagueDetailsForm } from "@/components/commissioner/LeagueDetailsForm";
+import { TeamsAdmin } from "@/components/commissioner/TeamsAdmin";
+import type { AdminLeague, AdminTeam } from "@/components/commissioner/types";
+import { Button, buttonClasses } from "@/components/ui/Button";
+import { Card, CardHeader } from "@/components/ui/Card";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
 
 // Explicit "AI-generated" labeling on every real LLM output (digest,
@@ -92,7 +99,7 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-const TAB_IDS = ["adjustments", "trades", "draft-order", "coaches", "invites", "digest", "health", "insights", "schedule-insights", "messages", "chat"] as const;
+const TAB_IDS = ["league", "teams", "commissioners", "adjustments", "trades", "draft-order", "coaches", "invites", "digest", "health", "insights", "schedule-insights", "messages", "chat"] as const;
 type Tab = (typeof TAB_IDS)[number];
 
 interface ChatMessageItem {
@@ -201,221 +208,279 @@ interface JoinRequest {
 // first commissioner to use this panel after the calendar rolls over.
 const CURRENT_YEAR = new Date().getFullYear();
 
+interface HubSection {
+  id: Tab;
+  label: string;
+  icon: typeof Scale;
+  group: "League" | "Season" | "AI co-commissioner";
+}
+
+const SECTIONS: HubSection[] = [
+  { id: "league", label: "League settings", icon: Settings, group: "League" },
+  { id: "teams", label: "Teams and owners", icon: Users, group: "League" },
+  { id: "commissioners", label: "Commissioners", icon: Crown, group: "League" },
+  { id: "invites", label: "Invites", icon: Mail, group: "League" },
+  { id: "draft-order", label: "Draft", icon: ArrowUpDown, group: "League" },
+  { id: "adjustments", label: "Points adjustments", icon: Scale, group: "Season" },
+  { id: "trades", label: "Trade review", icon: Ban, group: "Season" },
+  { id: "coaches", label: "Coaches", icon: Shield, group: "Season" },
+  { id: "digest", label: "Digest", icon: Bot, group: "AI co-commissioner" },
+  { id: "health", label: "League health", icon: HeartPulse, group: "AI co-commissioner" },
+  { id: "insights", label: "Scoring insights", icon: BarChart3, group: "AI co-commissioner" },
+  { id: "schedule-insights", label: "Schedule insights", icon: CalendarClock, group: "AI co-commissioner" },
+  { id: "messages", label: "Messages", icon: MessageSquare, group: "AI co-commissioner" },
+  { id: "chat", label: "Chat", icon: MessageCircle, group: "AI co-commissioner" },
+];
+
+const SETTINGS_LINKS: [string, string, string][] = [
+  ["Scoring", "scoring", "Points per stat and bonuses."],
+  ["Roster slots", "roster-slots", "Starters, bench and IR."],
+  ["Playoffs", "playoff-settings", "Teams, weeks and seeding."],
+  ["Salary cap", "salary-cap-settings", "Cap, contracts and auctions."],
+  ["Best ball", "best-ball-settings", "Auto lineups and windows."],
+];
+
+type HubLeague = League & AdminLeague;
+
+async function fetchHub(leagueId: string) {
+  const [l, t, ai, m] = await Promise.all([
+    leaguesApi.get(leagueId) as Promise<HubLeague>,
+    teamsApi.getByLeague(leagueId) as Promise<AdminTeam[]>,
+    leaguesApi.getAiSettings(leagueId).catch(() => ({ enabled: false })) as Promise<{ enabled: boolean }>,
+    leaguesApi.getMembers(leagueId).catch(() => null) as Promise<Members | null>,
+  ]);
+  const byTeam = Object.fromEntries((m?.teams ?? []).map((x) => [x.team_id, x]));
+  const teams = t.map((team) => ({
+    ...team,
+    owner_username: byTeam[team.id]?.owner?.username ?? null,
+    co_owner_username: byTeam[team.id]?.co_owner?.username ?? null,
+  }));
+  return { league: l, teams, aiEnabled: ai.enabled, members: m };
+}
+
+function StartDraft({ league }: { league: HubLeague }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (league.draft_status !== "not_started") return null;
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3 rounded-card border border-gold/40 bg-gold/[0.07] p-4">
+      <p className="flex-1 text-sm text-ink-200">Set the order below, then start the draft.</p>
+      <Button
+        variant="primary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const d = (await draftsApi.create(league.id, 15)) as { id: string };
+            router.push(`/draft/${d.id}`);
+          } catch (e) {
+            setErr(friendlyErrorMessage(e, "Couldn't start the draft."));
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Starting" : "Start draft"}
+      </Button>
+      {err && <p className="w-full text-sm text-loss">{err}</p>}
+    </div>
+  );
+}
+
 export default function CommissionerPage() {
   const params = useParams();
-  const router = useRouter();
   const leagueId = params.id as string;
-
-  const [league, setLeague] = useState<League | null>(null);
-  const [teams, setTeams] = useState<Team[]>([]);
   const tabParam = useSearchParams().get("tab");
-  const [activeTab, setActiveTab] = useState<Tab>(TAB_IDS.includes(tabParam as Tab) ? (tabParam as Tab) : "adjustments");
+
+  const [data, setData] = useState<Awaited<ReturnType<typeof fetchHub>> | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>(TAB_IDS.includes(tabParam as Tab) ? (tabParam as Tab) : "league");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggling, setAiToggling] = useState(false);
 
-  // ── Load league data ──
   useEffect(() => {
-    Promise.all([
-      leaguesApi.get(leagueId) as Promise<League>,
-      teamsApi.getByLeague(leagueId) as Promise<Team[]>,
-      leaguesApi.getAiSettings(leagueId) as Promise<{ enabled: boolean }>,
-    ])
-      .then(([l, t, ai]) => {
-        setLeague(l);
-        setTeams(t);
-        setAiEnabled(ai.enabled);
-      })
-      .catch(() => setError("Failed to load league"))
+    fetchHub(leagueId)
+      .then(setData)
+      .catch(() => setError("Couldn't load the league."))
       .finally(() => setLoading(false));
   }, [leagueId]);
 
-  const teamMap = Object.fromEntries(teams.map((t) => [t.id, t.name]));
+  async function reload() {
+    const d = await fetchHub(leagueId).catch(() => null);
+    if (d) setData(d);
+  }
 
   const AI_TABS: Tab[] = ["digest", "health", "insights", "schedule-insights", "messages", "chat"];
 
-  const handleToggleAi = async () => {
-    setAiToggling(true);
-    const next = !aiEnabled;
-    try {
-      await leaguesApi.updateAiSettings(leagueId, { enabled: next });
-      setAiEnabled(next);
-      if (!next && AI_TABS.includes(activeTab)) {
-        setActiveTab("adjustments");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update AI Co-Commissioner setting");
-    }
-    setAiToggling(false);
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
-          <span className="text-surface-400">Loading commissioner panel...</span>
-        </div>
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+        <Loader2 className="h-6 w-6 animate-spin text-ink-400" aria-label="Loading" />
       </div>
     );
   }
 
-  if (!league) {
+  if (!data) {
     return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
-        <div className="text-center">
-          <p className="text-red-400 text-sm mb-4">{error || "Failed to load league"}</p>
-          <Link href="/leagues" className="text-gold-400 hover:text-gold-300 font-medium text-sm">Back to leagues</Link>
-        </div>
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+        <p className="text-sm text-loss">{error || "Couldn't load the league."}</p>
+        <Link href="/leagues" className="mt-2 inline-block text-sm text-gold hover:text-gold-hi">
+          Back to leagues
+        </Link>
       </div>
     );
   }
 
-  // Client-side mirror of the backend's require_commissioner check --
-  // every mutating/listing call on this page already 403s for anyone
-  // who isn't the commissioner or a co-commissioner, but without this
-  // gate a member who navigates here directly (bookmark, shared link,
-  // browser history) would still see the whole panel shell render
-  // before every fetch on it failed. This blocks that render instead.
+  const { league, teams, aiEnabled, members } = data;
+  // Mirrors the backend's require_commissioner check so a member who
+  // lands here by link sees a clear message instead of failing fetches.
   const viewerId = getCurrentUserId();
   const isLeagueManager = !!viewerId && (viewerId === league.commissioner_id || (league.co_commissioner_ids || []).includes(viewerId));
   if (!isLeagueManager) {
     return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center px-4">
-        <div className="text-center max-w-sm">
-          <Shield className="w-10 h-10 text-surface-600 mx-auto mb-4" />
-          <h1 className="text-white font-bold text-lg mb-2">Commissioner access required</h1>
-          <p className="text-surface-400 text-sm mb-6">
-            Only {league.name}&apos;s commissioner or co-commissioners can view this page.
-          </p>
-          <Link href={`/leagues/${leagueId}`} className="text-gold-400 hover:text-gold-300 font-medium text-sm">
-            Back to league
-          </Link>
-        </div>
+      <div className="mx-auto max-w-md px-4 py-16 text-center">
+        <Shield className="mx-auto mb-4 h-10 w-10 text-ink-400" aria-hidden />
+        <h1 className="mb-2 text-lg font-semibold text-ink-100">Commissioners only</h1>
+        <p className="mb-6 text-sm text-ink-400">Only the commissioner and co-commissioners of {league.name} can open this page.</p>
+        <Link href={`/leagues/${leagueId}`} className="text-sm font-medium text-gold hover:text-gold-hi">
+          Back to the league
+        </Link>
       </div>
     );
   }
 
+  const teamMap = Object.fromEntries(teams.map((t) => [t.id, t.name]));
+  const visible = SECTIONS.filter((s) => aiEnabled || !AI_TABS.includes(s.id));
+  const current = visible.some((s) => s.id === activeTab) ? activeTab : "league";
+  const groups = ["League", "Season", "AI co-commissioner"] as const;
+
+  async function toggleAi() {
+    setAiToggling(true);
+    try {
+      await leaguesApi.updateAiSettings(leagueId, { enabled: !aiEnabled });
+      setData((d) => (d ? { ...d, aiEnabled: !aiEnabled } : d));
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't change the AI setting."));
+    }
+    setAiToggling(false);
+  }
+
+  function choose(id: Tab) {
+    setActiveTab(id);
+    window.history.replaceState(null, "", `?tab=${id}`);
+  }
+
   return (
-    <div className="min-h-screen bg-surface-900">
-      {/* Header */}
-      <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex items-center gap-3 flex-wrap gap-y-2">
-            <Crown className="w-5 h-5 text-gold-400" />
-            <h1 className="text-lg font-bold text-white">Commissioner Settings</h1>
-            {league && <span className="text-surface-400 text-sm">{league.name}</span>}
-            <button
-              onClick={handleToggleAi}
-              disabled={aiToggling}
-              title={aiEnabled ? "Disable AI Co-Commissioner features for this league" : "Enable AI Co-Commissioner features for this league"}
-              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all disabled:opacity-50 bg-surface-800 border-surface-700 hover:border-surface-600"
-            >
-              <Bot className={`w-3.5 h-3.5 ${aiEnabled ? "text-purple-400" : "text-surface-500"}`} />
-              <span className={aiEnabled ? "text-surface-300" : "text-surface-500"}>AI Co-Commissioner</span>
-              <span
-                className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                  aiEnabled ? "bg-purple-500" : "bg-surface-600"
-                }`}
-              >
-                <span
-                  className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
-                    aiEnabled ? "translate-x-3.5" : "translate-x-0.5"
-                  }`}
-                />
-              </span>
-            </button>
-          </div>
+    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink-100">Commissioner</h1>
+          <p className="text-sm text-ink-400">{league.name}</p>
         </div>
+        <Link href={`/leagues/${leagueId}`} className={buttonClasses("ghost", "md")}>
+          <ChevronLeft className="h-4 w-4" aria-hidden /> League home
+        </Link>
       </div>
 
       {error && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3" role="alert">
-            <p className="text-red-400 text-sm">{error}</p>
-          </div>
-        </div>
+        <p role="alert" className="mb-4 rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
+          {error}
+        </p>
       )}
 
-      {/* Tab bar -- horizontally scrollable, not stretched-to-fit: with
-          11 tabs (grew from 5 over the course of this initiative),
-          flex-1-stretching every tab to equal width caused labels to
-          wrap to 2 lines and the whole strip to overflow unusably on
-          a phone screen (confirmed via a real mobile-viewport check --
-          only 3 of 11 tabs were reachable at all). Natural-width tabs
-          + overflow-x-auto is the standard mobile-safe tab-strip
-          pattern; on a wide desktop screen with room to spare, it just
-          reads as left-aligned instead of edge-to-edge, no functional
-          change there. */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <div role="tablist" aria-label="Commissioner sections" className="flex gap-1 bg-surface-800 rounded-xl p-1 border border-surface-700 overflow-x-auto">
-          {[
-            { id: "adjustments" as Tab, label: "Points Adjustments", icon: Scale },
-            { id: "trades" as Tab, label: "Trades", icon: Ban },
-            { id: "draft-order" as Tab, label: "Draft Order", icon: ArrowUpDown },
-            { id: "coaches" as Tab, label: "Coaches", icon: Users },
-            { id: "invites" as Tab, label: "Invites", icon: Mail },
-            { id: "digest" as Tab, label: "AI Digest", icon: Bot },
-            { id: "health" as Tab, label: "League Health", icon: HeartPulse },
-            { id: "insights" as Tab, label: "Scoring Insights", icon: BarChart3 },
-            { id: "schedule-insights" as Tab, label: "Schedule Insights", icon: CalendarClock },
-            { id: "messages" as Tab, label: "Messages", icon: MessageSquare },
-            { id: "chat" as Tab, label: "AI Chat", icon: MessageCircle },
-          ].filter(({ id }) => aiEnabled || !AI_TABS.includes(id)).map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              role="tab"
-              aria-selected={activeTab === id}
-              className={`shrink-0 whitespace-nowrap flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                activeTab === id
-                  ? "bg-surface-700 text-white shadow-sm"
-                  : "text-surface-400 hover:text-white"
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <div className="gap-6 lg:grid lg:grid-cols-[14rem_minmax(0,1fr)]">
+        {/* Left nav on desktop, a scrolling strip on mobile. */}
+        <nav aria-label="Commissioner sections" className="-mx-4 mb-4 overflow-x-auto px-4 lg:mx-0 lg:mb-0 lg:overflow-visible lg:px-0">
+          <div className="flex gap-1 lg:sticky lg:top-24 lg:flex-col lg:gap-4">
+            {groups.map((g) => {
+              const items = visible.filter((s) => s.group === g);
+              if (items.length === 0) return null;
+              return (
+                <div key={g} className="flex gap-1 lg:flex-col">
+                  <p className="hidden px-3 pb-1 text-label font-semibold uppercase text-ink-400 lg:block">{g}</p>
+                  {items.map(({ id, label, icon: Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => choose(id)}
+                      aria-current={current === id ? "page" : undefined}
+                      className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-control px-3 py-2 text-sm font-medium transition-colors ${
+                        current === id ? "bg-ink-800 text-ink-100" : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" aria-hidden />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </nav>
 
-      {/* Tab content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === "adjustments" && (
-          <PointsAdjustments leagueId={leagueId} teams={teams} teamMap={teamMap} />
-        )}
-        {activeTab === "trades" && (
-          <TradesPanel leagueId={leagueId} teamMap={teamMap} aiEnabled={aiEnabled} />
-        )}
-        {activeTab === "draft-order" && league && (
-          <DraftOrderPanel leagueId={leagueId} teams={teams} league={league} />
-        )}
-        {activeTab === "coaches" && (
-          <CoachesPanel teams={teams} />
-        )}
-        {activeTab === "invites" && (
-          <InvitesPanel leagueId={leagueId} />
-        )}
-        {activeTab === "digest" && (
-          <DigestPanel leagueId={leagueId} />
-        )}
-        {activeTab === "health" && (
-          <HealthPanel leagueId={leagueId} />
-        )}
-        {activeTab === "insights" && (
-          <InsightsPanel leagueId={leagueId} />
-        )}
-        {activeTab === "schedule-insights" && (
-          <ScheduleInsightsPanel leagueId={leagueId} />
-        )}
-        {activeTab === "messages" && (
-          <MessagesPanel leagueId={leagueId} />
-        )}
-        {activeTab === "chat" && (
-          <ChatPanel leagueId={leagueId} />
-        )}
+        <main className="min-w-0">
+          {current === "league" && (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader title="League details" />
+                <LeagueDetailsForm league={league} onSaved={reload} />
+              </Card>
+              <Card>
+                <CardHeader title="Rules" />
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {SETTINGS_LINKS.map(([label, path, hint]) => (
+                    <li key={path}>
+                      <Link href={`/leagues/${leagueId}/${path}`} className="block rounded-control border border-ink-700 px-3 py-2.5 hover:border-ink-600 hover:bg-ink-850">
+                        <span className="block text-sm font-medium text-ink-100">{label}</span>
+                        <span className="block text-xs text-ink-400">{hint}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+              <Card>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Bot className="h-5 w-5 text-ink-300" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-ink-100">AI co-commissioner</p>
+                    <p className="text-xs text-ink-400">Digests, health checks, insights, drafted messages and chat.</p>
+                  </div>
+                  <Button onClick={toggleAi} disabled={aiToggling} variant={aiEnabled ? "secondary" : "primary"}>
+                    {aiEnabled ? "Turn off" : "Turn on"}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
+          {current === "teams" && (
+            <Card>
+              <CardHeader title="Teams and owners" />
+              <TeamsAdmin league={league} teams={teams} onChanged={reload} />
+            </Card>
+          )}
+          {current === "commissioners" && (
+            <Card>
+              <CardHeader title="Commissioners" />
+              {members ? <CommissionersPanel leagueId={leagueId} members={members} onChanged={reload} /> : <p className="text-sm text-loss">Couldn&apos;t load members.</p>}
+            </Card>
+          )}
+          {current === "draft-order" && (
+            <>
+              <StartDraft league={league} />
+              <DraftOrderPanel leagueId={leagueId} teams={teams} league={league} />
+            </>
+          )}
+          {current === "adjustments" && <PointsAdjustments leagueId={leagueId} teams={teams} teamMap={teamMap} />}
+          {current === "trades" && <TradesPanel leagueId={leagueId} teamMap={teamMap} aiEnabled={aiEnabled} />}
+          {current === "coaches" && <CoachesPanel teams={teams} />}
+          {current === "invites" && <InvitesPanel leagueId={leagueId} />}
+          {current === "digest" && <DigestPanel leagueId={leagueId} />}
+          {current === "health" && <HealthPanel leagueId={leagueId} />}
+          {current === "insights" && <InsightsPanel leagueId={leagueId} />}
+          {current === "schedule-insights" && <ScheduleInsightsPanel leagueId={leagueId} />}
+          {current === "messages" && <MessagesPanel leagueId={leagueId} />}
+          {current === "chat" && <ChatPanel leagueId={leagueId} />}
+        </main>
       </div>
     </div>
   );

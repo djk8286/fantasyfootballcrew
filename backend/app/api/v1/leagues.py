@@ -1,3 +1,4 @@
+from typing import Optional
 import copy
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +31,10 @@ class ScoringConfigUpdate(BaseModel):
 
 class CommissionerUpdate(BaseModel):
     action: str  # "add_co_commish", "remove_co_commish", "transfer"
-    user_id: str
+    # Either a user id, or a username or email in `identifier`. The hub
+    # sends usernames so commissioners never have to find a raw id.
+    user_id: Optional[str] = None
+    identifier: Optional[str] = None
 
 
 @router.post("", response_model=LeagueRead, status_code=status.HTTP_201_CREATED)
@@ -629,10 +633,17 @@ async def manage_commissioners(
         raise HTTPException(status_code=403, detail="Only the league owner can manage commissioner rights")
 
     # Verify user exists
-    user_result = await db.execute(select(User).where(User.id == req.user_id))
-    user = user_result.scalar_one_or_none()
+    if req.user_id:
+        user_q = select(User).where(User.id == req.user_id)
+    elif req.identifier and req.identifier.strip():
+        ident = req.identifier.strip().lstrip("@")
+        user_q = select(User).where((func.lower(User.username) == ident.lower()) | (func.lower(User.email) == ident.lower()))
+    else:
+        raise HTTPException(status_code=400, detail="Give a username or email")
+    user = (await db.execute(user_q)).scalars().first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="No user with that username or email")
+    req.user_id = user.id
 
     # Ensure co_commissioner_ids is initialized
     if league.co_commissioner_ids is None:
