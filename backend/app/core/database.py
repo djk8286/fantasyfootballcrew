@@ -13,8 +13,27 @@ from app.core.config import settings
 # SQLAlchemy's own defaults -- they were never tuned at all before this,
 # and 5+10 isn't oversized for Railway's connection caps; pre_ping/
 # recycle were the real gap (Production Quality Hardening, Phase 3).
-engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True, pool_recycle=300)
+_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+
+# Pool sizing (2026-10-19): the 5+10 default ran dry when a burst of slow
+# /drafts/{id}/state polls each held a connection, and the 30s pool
+# timeout turned that into 30s hangs everywhere. The root fix is making
+# /state cheap (draft_board.py); this adds headroom (Railway Postgres
+# allows 100) and fails fast instead of hanging.
+_pool_kwargs = {} if _is_sqlite else {"pool_size": 10, "max_overflow": 10, "pool_timeout": 10}
+
+engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True, pool_recycle=300, **_pool_kwargs)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# A separate, small pool for the draft clock watchdog, so request load can
+# never starve it of connections again (2026-10-19: "[draft_timer] Check
+# iteration failed: QueuePool limit ... reached" -- CPU picks and expired
+# clocks stalled for minutes). SQLite (dev/tests) just shares the engine.
+background_engine = engine if _is_sqlite else create_async_engine(
+    settings.DATABASE_URL, echo=False, pool_pre_ping=True, pool_recycle=300,
+    pool_size=2, max_overflow=2, pool_timeout=10,
+)
+background_session = async_sessionmaker(background_engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
