@@ -3,7 +3,8 @@
 import { memo } from "react";
 import { Search, Plus, Loader2 } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
-import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
+import { POSITION_ORDER } from "@/components/ui/tokens";
 import { PickCountdownBadge } from "./PickCountdown";
 import { useVirtualList } from "@/lib/useVirtualList";
 
@@ -279,7 +280,7 @@ function PlayerPool({
                 <span className="text-surface-300 text-xs font-medium truncate">
                   {lastPick.player?.full_name}
                 </span>
-                <PositionBadge pos={lastPick.player?.position || ""} />
+                <PositionChip pos={lastPick.player?.position || ""} />
                 <span className="text-[10px] text-surface-500 truncate shrink-0">
                   → {lastPick.team.name}
                 </span>
@@ -449,7 +450,7 @@ function PlayerPool({
                           <span className="text-sm font-semibold text-white truncate">
                             {player.full_name}
                           </span>
-                          <PositionBadge pos={player.position} />
+                          <PositionChip pos={player.position} />
                         </div>
                         <div className="flex items-center gap-3 text-xs text-surface-500 mt-0.5">
                           <span>{player.team || "FA"}</span>
@@ -536,7 +537,7 @@ function PlayerPool({
                       <span className="text-sm font-medium text-white truncate">
                         {player.full_name}
                       </span>
-                      <PositionBadge pos={player.position} />
+                      <PositionChip pos={player.position} />
                     </div>
                     <span className="text-xs text-surface-500">
                       {player.team || "FA"}

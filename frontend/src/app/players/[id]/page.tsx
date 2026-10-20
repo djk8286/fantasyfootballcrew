@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowLeft, Newspaper, Users } from "lucide-react";
 import { playersApi, nflApi, isLoggedIn } from "@/lib/api-client";
 import { projectionTile } from "@/lib/projection-label";
-import PositionBadge from "@/components/PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 
 interface NewsItem {
   id: string;
@@ -135,7 +135,7 @@ export default function PlayerDetailPage() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-bold text-white">{name}</h1>
-              <PositionBadge pos={player.position} size="md" />
+              <PositionChip pos={player.position} />
               {injured && (
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/15 text-red-400 border border-red-500/30">
                   {player.injury_status}

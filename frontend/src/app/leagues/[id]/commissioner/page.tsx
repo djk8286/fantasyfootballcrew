@@ -9,7 +9,6 @@ import {
   Scale,
   ArrowUpDown,
   Plus,
-  X,
   CheckCircle2,
   XCircle,
   Shuffle,
@@ -524,8 +523,15 @@ function PointsAdjustments({
   }, [leagueId, filterWeek, filterTeam]);
 
   useEffect(() => {
-    loadAdjustments();
-  }, [loadAdjustments]);
+    let live = true;
+    commissionerApi.listAdjustments(leagueId, filterWeek, filterTeam || undefined)
+      .then((data) => live && setAdjustments(data as Adjustment[]))
+      .catch(() => {})
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId, filterWeek, filterTeam]);
 
   const handleAdd = async () => {
     if (!selTeam || !amount || !reason) return;
@@ -770,8 +776,15 @@ function TradesPanel({
   }, [leagueId, statusFilter]);
 
   useEffect(() => {
-    loadTrades();
-  }, [loadTrades]);
+    let live = true;
+    commissionerApi.listTrades(leagueId, statusFilter)
+      .then((data) => live && setTrades(data as TradeItem[]))
+      .catch(() => {})
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId, statusFilter]);
 
   const handleReview = async (tradeId: string, action: "approve" | "deny") => {
     setProcessing(tradeId);
@@ -1197,8 +1210,15 @@ function InvitesPanel({ leagueId }: { leagueId: string }) {
   }, [leagueId]);
 
   useEffect(() => {
-    loadInvites();
-  }, [loadInvites]);
+    let live = true;
+    invitesApi.list(leagueId)
+      .then((data) => live && setInvites(data as Invite[]))
+      .catch(() => {})
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   const handleSend = async () => {
     const emails = emailsInput
@@ -1365,8 +1385,15 @@ function JoinRequestsSection({ leagueId }: { leagueId: string }) {
   }, [leagueId]);
 
   useEffect(() => {
-    loadRequests();
-  }, [loadRequests]);
+    let live = true;
+    joinRequestsApi.list(leagueId)
+      .then((data) => live && setRequests(data as JoinRequest[]))
+      .catch(() => {})
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   const handleDecide = async (requestId: string, action: "approve" | "deny") => {
     setDeciding(requestId);
@@ -1504,8 +1531,15 @@ function DigestPanel({ leagueId }: { leagueId: string }) {
   }, [leagueId, week]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let live = true;
+    commissionerApi.getDigest(leagueId, week, CURRENT_YEAR)
+      .then((data) => live && setDigest(data as { content: string; created_at: string; tone?: string; length?: string }))
+      .catch(() => live && setDigest(null))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId, week]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -1627,7 +1661,7 @@ function HealthPanel({ leagueId }: { leagueId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const load = useCallback(() => {
+  function load() {
     setLoading(true);
     setError("");
     commissionerApi
@@ -1635,11 +1669,18 @@ function HealthPanel({ leagueId }: { leagueId: string }) {
       .then((data) => setHealth(data as LeagueHealth))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load league health"))
       .finally(() => setLoading(false));
-  }, [leagueId]);
+  }
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let live = true;
+    commissionerApi.getLeagueHealth(leagueId)
+      .then((data) => live && setHealth(data as LeagueHealth))
+      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : "Failed to load league health"))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   if (loading) {
     return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
@@ -1755,19 +1796,16 @@ function InsightsPanel({ leagueId }: { leagueId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError("");
-    commissionerApi
-      .getScoringInsights(leagueId)
-      .then((data) => setInsights(data as ScoringInsights))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load scoring insights"))
-      .finally(() => setLoading(false));
-  }, [leagueId]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let live = true;
+    commissionerApi.getScoringInsights(leagueId)
+      .then((data) => live && setInsights(data as ScoringInsights))
+      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : "Failed to load scoring insights"))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   if (loading) {
     return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
@@ -1841,19 +1879,16 @@ function ScheduleInsightsPanel({ leagueId }: { leagueId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError("");
-    commissionerApi
-      .getScheduleInsights(leagueId)
-      .then((data) => setSos(data as ScheduleInsights))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load schedule insights"))
-      .finally(() => setLoading(false));
-  }, [leagueId]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let live = true;
+    commissionerApi.getScheduleInsights(leagueId)
+      .then((data) => live && setSos(data as ScheduleInsights))
+      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : "Failed to load schedule insights"))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   if (loading) {
     return <div className="p-6 text-center text-surface-500 text-sm">Loading...</div>;
@@ -2070,19 +2105,16 @@ function ChatPanel({ leagueId }: { leagueId: string }) {
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError("");
-    commissionerApi
-      .getChatHistory(leagueId)
-      .then((data) => setMessages((data as { messages: ChatMessageItem[] }).messages))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load chat"))
-      .finally(() => setLoading(false));
-  }, [leagueId]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let live = true;
+    commissionerApi.getChatHistory(leagueId)
+      .then((data) => live && setMessages((data as { messages: ChatMessageItem[] }).messages))
+      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : "Failed to load chat"))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [leagueId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });

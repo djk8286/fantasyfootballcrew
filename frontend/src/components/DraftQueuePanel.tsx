@@ -2,7 +2,7 @@
 
 import { Zap, Plus, Loader2, ListChecks } from "lucide-react";
 import PlayerAvatar from "./PlayerAvatar";
-import PositionBadge from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 
 // Matches draft/[id]/page.tsx's Player interface structurally -- no index
 // signature, since that makes this type incompatible with the concrete
@@ -94,7 +94,7 @@ export default function DraftQueuePanel({
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-medium text-white truncate">{player.full_name}</span>
-                  <PositionBadge pos={player.position} />
+                  <PositionChip pos={player.position} />
                 </div>
                 <span className="text-[10px] text-surface-500">{player.team || "FA"}</span>
               </div>
