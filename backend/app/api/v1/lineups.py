@@ -20,6 +20,9 @@ from app.services.default_lineup import (
     is_inactive_status,
 )
 from app.services.standings_service import week_schedule_state
+from app.services.nfl_schedule_service import as_utc, game_started, game_teams, get_week_games
+from app.models.nfl_game import NFLGame
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/teams", tags=["lineups"])
 
@@ -50,8 +53,54 @@ async def _resolve_roster(team: Team, db: AsyncSession) -> list[Player]:
     return [players_by_id[pid] for pid in team.roster if pid in players_by_id]
 
 
-def _serialize_roster_player(player: Player, is_starter: bool, scoring_config: dict) -> dict:
-    stats, year = effective_season_stats(player)
+class WeekGames:
+    """The NFL week's games keyed by Player.team code. known is False when
+    no games are synced, and then nobody is on bye."""
+
+    def __init__(self, games: list[NFLGame], now: datetime):
+        self.known = bool(games)
+        self.now = now
+        self.by_team: dict[str, NFLGame] = {code: g for g in games for code in game_teams(g)}
+
+    def on_bye(self, nfl_team: str | None) -> bool:
+        return self.known and bool(nfl_team) and nfl_team not in self.by_team
+
+    def locked(self, nfl_team: str | None) -> bool:
+        game = self.by_team.get(nfl_team or "")
+        return bool(game) and game_started(game, self.now)
+
+    def info(self, nfl_team: str | None) -> dict | None:
+        game = self.by_team.get(nfl_team or "")
+        if not game:
+            return None
+        home, away = game_teams(game)
+        is_home = home == nfl_team
+        return {
+            "opponent": away if is_home else home,
+            "home": is_home,
+            "kickoff_at": as_utc(game.kickoff_at).isoformat(),
+            "status": game.status_state,
+            "detail": game.status_detail,
+            "locked": game_started(game, self.now),
+        }
+
+
+async def load_week_games(year: int, week: int, db: AsyncSession) -> WeekGames:
+    return WeekGames(await get_week_games(year, week, 2, db), datetime.now(timezone.utc))
+
+
+def _last_week_points(player: Player, week: int, year: int, scoring_config: dict) -> float | None:
+    """Points in week - 1 of this season, or None if he has no stat line for it."""
+    if week <= 1 or player.stats_year != year:
+        return None
+    stats = (player.week_stats or {}).get(str(week - 1))
+    return None if stats is None else calculate_player_score(stats, scoring_config, player.position)
+
+
+def _serialize_roster_player(
+    player: Player, is_starter: bool, scoring_config: dict, games: WeekGames, week: int, year: int,
+) -> dict:
+    stats, stats_year = effective_season_stats(player)
     return {
         "id": player.id,
         "full_name": f"{player.first_name} {player.last_name}",
@@ -61,7 +110,10 @@ def _serialize_roster_player(player: Player, is_starter: bool, scoring_config: d
         "bye_week": player.bye_week,
         "avatar_url": sleeper_avatar_url(player.sleeper_id),
         "season_points": calculate_player_score(stats, scoring_config, player.position),
-        "season_points_year": year,
+        "season_points_year": stats_year,
+        "last_week_points": _last_week_points(player, week, year, scoring_config),
+        "game": games.info(player.team),
+        "on_bye": games.on_bye(player.team),
         "is_starter": is_starter,
     }
 
@@ -109,6 +161,7 @@ async def get_lineup(
         has_lineup_set = lineup is not None
 
     roster = await _resolve_roster(team, db)
+    games = await load_week_games(year, week, db)
     default_starters: list[str] = []
     if not is_best_ball and not has_lineup_set:
         teams_playing, week_started = await week_schedule_state(year, week, db)
@@ -136,8 +189,9 @@ async def get_lineup(
         "best_ball": is_best_ball,
         "has_lineup_set": has_lineup_set,
         "default_starters": default_starters,
+        "schedule_known": games.known,
         "starters": sorted(starter_ids),
-        "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config) for p in roster],
+        "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config, games, week, year) for p in roster],
     }
 
 
