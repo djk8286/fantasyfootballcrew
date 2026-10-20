@@ -18,6 +18,32 @@ from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.nfl_game import NFLGame
 from app.services.auth_service import create_access_token
 from app.services.ai_service import AIService
+import app.api.v1.dashboard as dashboard_module
+
+
+@pytest.fixture(autouse=True)
+def _sleeper_unreachable(monkeypatch):
+    """No network in tests: by default the shared current week can't be
+    fetched, so the panels use their newest-data fallback."""
+    async def _fail():
+        raise RuntimeError("no network in tests")
+    monkeypatch.setattr(dashboard_module, "current_nfl_week", _fail)
+
+
+def _current_week(monkeypatch, week, season=2026):
+    async def _state():
+        return {"season": season, "week": week, "season_type": "regular"}
+    monkeypatch.setattr(dashboard_module, "current_nfl_week", _state)
+
+
+def _game(week, event_id):
+    return NFLGame(
+        espn_event_id=event_id, week=week, year=2026, season_type=2,
+        home_team="KC", home_team_name="Kansas City Chiefs", home_score=None,
+        away_team="BUF", away_team_name="Buffalo Bills", away_score=None,
+        status_state="pre", status_detail="", completed=False,
+        kickoff_at=datetime(2026, 9, 7, 20, 0, tzinfo=timezone.utc),
+    )
 
 
 async def _make_user_and_token(db_session_factory):
@@ -97,6 +123,31 @@ async def test_get_nfl_scores_returns_games_and_null_recap_before_generation(cli
     assert len(body["games"]) == 1
     assert body["games"][0]["home_team"] == "KC"
     assert body["recap"] is None
+
+
+@pytest.mark.asyncio
+async def test_panels_follow_the_shared_current_week(client, db_session_factory, monkeypatch):
+    """QA 2026-10-20: next week's games are synced early for lineups, so
+    NFL Scores showed Week 8 beside Top Performers Week 7."""
+    async with db_session_factory() as db:
+        db.add_all([_game(7, "w7"), _game(8, "w8")])
+        db.add(WeeklyTopPlayersSummary(week=7, year=2026, content="seven", top_players=[]))
+        db.add(WeeklyTopPlayersSummary(week=8, year=2026, content="eight", top_players=[]))
+        await db.commit()
+    _current_week(monkeypatch, 7)
+
+    assert (await client.get("/dashboard/nfl-scores")).json()["week"] == 7
+    assert (await client.get("/dashboard/top-performers")).json()["week"] == 7
+
+
+@pytest.mark.asyncio
+async def test_nfl_scores_falls_back_when_current_week_has_no_games(client, db_session_factory, monkeypatch):
+    async with db_session_factory() as db:
+        db.add(_game(6, "w6"))
+        await db.commit()
+    _current_week(monkeypatch, 7)
+
+    assert (await client.get("/dashboard/nfl-scores")).json()["week"] == 6
 
 
 # ─── Team Weekly Recap ────────────────────────────────────────────────

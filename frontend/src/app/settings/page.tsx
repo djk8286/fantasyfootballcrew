@@ -294,9 +294,6 @@ export default function SettingsPage() {
               <span>
                 Member since {new Date(me.created_at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
               </span>
-              <span className="ml-1 px-2 py-0.5 rounded-full bg-surface-700 text-surface-300 text-[10px] font-semibold uppercase tracking-wide">
-                {me.provider}
-              </span>
             </div>
 
             {profileError && (

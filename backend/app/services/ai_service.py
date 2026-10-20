@@ -157,7 +157,7 @@ You are an expert fantasy football analyst. Analyze the following lineup and mat
 
 **This League's Starting Lineup Slots (slot: count):**
 {roster_slots}
-Recommend starters for exactly these slots, no more and no fewer. FLEX takes RB/WR/TE, SUPERFLEX takes QB/RB/WR/TE, IDP_FLEX takes DL/LB/DB. Do not assume any other format. Players whose injury_status is Out, IR, PUP, Sus or NA should not be started when a healthy option exists.
+Recommend starters for exactly these slots, no more and no fewer. FLEX takes RB/WR/TE, SUPERFLEX takes QB/RB/WR/TE, IDP_FLEX takes DL/LB/DB. Do not assume any other format. Players whose injury_status is Out, IR, PUP, Sus or NA should not be started when a healthy option exists. A player with on_bye true has no game this week and scores 0: never start him.
 
 **Your Team Roster:**
 {roster}

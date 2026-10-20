@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historySummaryLabel, leagueLabel, switcherLabels } from "./league-label";
+import { historySummaryLabel, leagueLabel, rowLeagueLabels, switcherLabels } from "./league-label";
 
 const leagues = [
   { id: "aaaaaa1", name: "QA Test League", created_at: "2026-10-17T06:50:00Z" },
@@ -36,5 +36,18 @@ describe("switcherLabels", () => {
     const out = switcherLabels(a, [b]);
     expect(out.current).not.toBe(a.name);
     expect(out.others[0].label).not.toBe(b.name);
+  });
+});
+
+describe("rowLeagueLabels", () => {
+  const row = (l: (typeof leagues)[number], team: string) => ({ team, league_id: l.id, league_name: l.name, league_created_at: l.created_at });
+  it("adds the switcher's date suffix when two listed leagues share a name", () => {
+    const labels = rowLeagueLabels([row(leagues[0], "t1"), row(leagues[1], "t2")]);
+    expect(labels.get("aaaaaa1")).toBe(leagueLabel(leagues[0], leagues.slice(0, 2)));
+    expect(labels.get("aaaaaa1")).not.toBe(labels.get("bbbbbb2"));
+  });
+  it("counts a league listed twice once, so it keeps its plain name", () => {
+    const labels = rowLeagueLabels([row(leagues[0], "t1"), row(leagues[0], "t2")]);
+    expect(labels.get("aaaaaa1")).toBe("QA Test League");
   });
 });

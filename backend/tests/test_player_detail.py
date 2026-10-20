@@ -64,5 +64,15 @@ async def test_detail_rostered_by_only_viewers_leagues(client, db_session_factor
 
 
 @pytest.mark.asyncio
+async def test_detail_rostered_by_carries_league_created_at(client, db_session_factory):
+    """The page disambiguates same-named leagues by created date, like the
+    league switcher (QA 2026-10-20: "QA Test League" listed twice)."""
+    pid, token = await _setup(db_session_factory)
+    client.headers["Authorization"] = f"Bearer {token}"
+    d = (await client.get(f"/players/{pid}/detail")).json()
+    assert d["rostered_by"][0]["league_created_at"]
+
+
+@pytest.mark.asyncio
 async def test_detail_404(client):
     assert (await client.get("/players/nope/detail")).status_code == 404

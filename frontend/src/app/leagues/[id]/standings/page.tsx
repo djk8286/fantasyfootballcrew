@@ -805,7 +805,7 @@ export default function StandingsPage() {
                   </div>
                   <p className="text-surface-500 text-xs mt-1">
                     {weeklyData?.matchups?.length || 0} matchup
-                    {(weeklyData?.matchups?.length || 0) !== 1 ? "es" : ""} this week
+                    {(weeklyData?.matchups?.length || 0) !== 1 ? "s" : ""} this week
                   </p>
                 </div>
 

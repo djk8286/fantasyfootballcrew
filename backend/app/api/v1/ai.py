@@ -22,6 +22,7 @@ from app.services.ai_history_service import record_analysis, get_analysis_histor
 from app.services import ai_jobs, ai_cost_service
 from app.models.ai_usage_event import AIUsageEvent
 from app.services.scheduler import fetch_nfl_state
+from app.api.v1.lineups import load_week_games
 from app.services.default_lineup import league_roster_slots
 from app.services.scoring_engine import DEFAULT_ROSTER_SLOTS
 from app.services.team_comparison_service import build_team_trend
@@ -235,10 +236,27 @@ def league_starting_slots(league: League | None) -> dict[str, int]:
     return {k: int(v) for k, v in slots.items() if int(v or 0) > 0}
 
 
+async def _add_week_games(roster: dict, db: AsyncSession) -> None:
+    """Each player's bye and game this week, from the same WeekGames the
+    lineup page uses. Without it the model only saw injury_status and
+    started a TE on bye as merely "Questionable" (QA 2026-10-20)."""
+    if not roster:
+        return
+    try:
+        state = await fetch_nfl_state()
+        games = await load_week_games(int(state["season"]), int(state["week"]), db)
+    except Exception:
+        return
+    for p in roster.values():
+        p["on_bye"] = games.on_bye(p["team"])
+        p["game"] = games.info(p["team"])
+
+
 async def _lineup_prompt_inputs(team: Team, league: League | None, db: AsyncSession) -> dict:
     """Everything analyze_lineup needs, gathered from the DB up front so the
     (slow) LLM call itself can run without holding a request open."""
     roster = await _roster_summary(team, db)
+    await _add_week_games(roster, db)
     coaching_staff = await _coach_summary(team, db)
     salary_context = await _salary_summary(team, league, db)
     partner_context = await _partner_summary(team, league, db)

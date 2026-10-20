@@ -7,6 +7,7 @@ import { ArrowLeft, Newspaper, Users } from "lucide-react";
 import { playersApi, nflApi, isLoggedIn } from "@/lib/api-client";
 import { projectionTile } from "@/lib/projection-label";
 import { PositionChip } from "@/components/ui/Badge";
+import { rowLeagueLabels } from "@/lib/league-label";
 
 interface NewsItem {
   id: string;
@@ -21,6 +22,7 @@ interface RosteredBy {
   team_name: string;
   league_id: string;
   league_name: string;
+  league_created_at: string | null;
   is_mine: boolean;
 }
 
@@ -116,6 +118,7 @@ export default function PlayerDetailPage() {
   const maxWeekly = Math.max(1, ...player.weekly_points.map((w) => w.points));
   const injured = player.injury_status && player.injury_status !== "None";
   const stats = Object.entries(player.headline_stats || {}).filter(([, v]) => v != null);
+  const leagueLabels = rowLeagueLabels(player.rostered_by || []);
 
   return (
     <div className="min-h-screen bg-surface-900">
@@ -243,7 +246,7 @@ export default function PlayerDetailPage() {
                         {r.team_name}
                       </Link>
                       {r.is_mine && <span className="ml-1.5 text-[10px] font-bold text-gold-400 uppercase">Your team</span>}
-                      <div className="text-[11px] text-surface-500">{r.league_name}</div>
+                      <div className="text-[11px] text-surface-500">{leagueLabels.get(r.league_id)}</div>
                     </li>
                   ))}
                 </ul>

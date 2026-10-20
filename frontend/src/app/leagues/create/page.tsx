@@ -221,7 +221,12 @@ function CreateLeagueForm() {
                   <button
                     key={lt.value}
                     type="button"
-                    onClick={() => setForm((prev) => ({ ...prev, league_type: lt.value }))}
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      league_type: lt.value,
+                      // Dual-Squad teams come in pairs: round an odd count up.
+                      max_teams: lt.value === "dual_squad" ? prev.max_teams + (prev.max_teams % 2) : prev.max_teams,
+                    }))}
                     aria-pressed={form.league_type === lt.value}
                     className={`text-left p-4 rounded-xl border transition-all ${
                       form.league_type === lt.value
@@ -280,7 +285,8 @@ function CreateLeagueForm() {
                 name="max_teams"
                 min={4}
                 max={32}
-                step={2}
+                // Any count works (odd counts rotate a bye); Dual-Squad needs pairs.
+                step={form.league_type === "dual_squad" ? 2 : 1}
                 value={form.max_teams}
                 onChange={handleChange}
                 className="w-full accent-gold-400"

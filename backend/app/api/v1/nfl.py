@@ -33,6 +33,12 @@ STATE_CACHE_TTL = 60.0
 async def get_current_week():
     """{season, week, season_type} -- the live NFL week, straight from
     Sleeper, cached briefly. season_type is one of "pre"/"regular"/"post"."""
+    return await current_nfl_week()
+
+
+async def current_nfl_week() -> dict:
+    """The cached state behind GET /nfl/current-week, for server-side
+    callers that must agree with it (the dashboard panels)."""
     global _state_cache, _state_cache_at
     now = time.monotonic()
     if _state_cache is None or (now - _state_cache_at) > STATE_CACHE_TTL:

@@ -14,7 +14,7 @@ matter how many people load the dashboard.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.core.database import get_db
 from app.core.limiter import limiter
@@ -23,6 +23,7 @@ from app.models.nfl_game import NFLGame
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.api.deps import get_current_user
+from app.api.v1.nfl import current_nfl_week
 from app.services import top_performers_service, nfl_schedule_service
 from app.services.ai_service import AIService
 from app.core.config import settings
@@ -38,13 +39,33 @@ def _get_ai_service() -> AIService:
     return AIService(api_key=None)
 
 
+_ESPN_SEASON_TYPE = {"pre": 1, "regular": 2, "post": 3}
+
+
+async def _current_week_or_none() -> dict | None:
+    """The shared current week (GET /nfl/current-week), or None if
+    Sleeper can't be reached -- then the panels fall back to the newest
+    data they have."""
+    try:
+        return await current_nfl_week()
+    except Exception:
+        return None
+
+
 @router.get("/top-performers")
 async def get_top_performers(db: AsyncSession = Depends(get_db)):
-    """The most recently generated summary -- no week/year params:
+    """The newest summary up to the current week -- no week/year params:
     this is an ambient "what's current" panel, not something a viewer
     browses historically (unlike the per-league Digest)."""
+    query = select(WeeklyTopPlayersSummary)
+    current = await _current_week_or_none()
+    if current:
+        query = query.where(or_(
+            WeeklyTopPlayersSummary.year < current["season"],
+            and_(WeeklyTopPlayersSummary.year == current["season"], WeeklyTopPlayersSummary.week <= current["week"]),
+        ))
     result = await db.execute(
-        select(WeeklyTopPlayersSummary).order_by(
+        query.order_by(
             WeeklyTopPlayersSummary.year.desc(), WeeklyTopPlayersSummary.week.desc(),
         ).limit(1)
     )
@@ -77,11 +98,22 @@ async def generate_top_performers(
 
 @router.get("/nfl-scores")
 async def get_nfl_scores(db: AsyncSession = Depends(get_db)):
-    """Most recently synced week's games + that week's recap (if
-    generated yet -- games can exist before the recap does, e.g. right
-    after a sync but before the scheduler's recap-generation step)."""
-    latest_game = await db.execute(select(NFLGame).order_by(NFLGame.year.desc(), NFLGame.week.desc()).limit(1))
-    latest = latest_game.scalar_one_or_none()
+    """The current week's games (same week as GET /nfl/current-week) +
+    that week's recap (if generated yet -- games can exist before the
+    recap does). The scheduler also syncs NEXT week's games for lineups,
+    so "newest synced week" ran a week ahead (QA 2026-10-20: Week 8 next
+    to Top Performers Week 7); that's only the fallback now, when the
+    current week can't be fetched or has no games synced."""
+    newest = select(NFLGame).order_by(NFLGame.year.desc(), NFLGame.week.desc()).limit(1)
+    latest = None
+    current = await _current_week_or_none()
+    if current:
+        latest = (await db.execute(newest.where(
+            NFLGame.year == current["season"], NFLGame.week == current["week"],
+            NFLGame.season_type == _ESPN_SEASON_TYPE.get(current["season_type"], 2),
+        ))).scalar_one_or_none()
+    if not latest:
+        latest = (await db.execute(newest)).scalar_one_or_none()
     if not latest:
         raise HTTPException(status_code=404, detail="No NFL game data synced yet")
 
