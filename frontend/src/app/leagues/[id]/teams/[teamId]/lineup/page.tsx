@@ -1,22 +1,37 @@
 "use client";
 
-import PlayerLink from "@/components/PlayerLink";
-import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
 import Link from "next/link";
-import { lineupsApi, teamsApi, leaguesApi, nflApi, isCurrentUser, isLoggedIn } from "@/lib/api-client";
-import PositionBadge from "@/components/PositionBadge";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Lock, Sparkles, X } from "lucide-react";
+import PlayerLink from "@/components/PlayerLink";
+import { InjuryTag, PositionChip } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Num } from "@/components/ui/Num";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import { friendlyErrorMessage, isCurrentUser, isLoggedIn, leaguesApi, lineupsApi, nflApi, standingsApi, teamsApi } from "@/lib/api-client";
 import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Save,
-  RefreshCw,
-  Sparkles,
-  Plus,
-  Minus,
-} from "lucide-react";
+  applyMove,
+  benchIds,
+  issuesFor,
+  moveWarning,
+  playerWarning,
+  targetsFor,
+  type Issue,
+  type LineupPlayer,
+  type Pick,
+  type Slot,
+} from "@/lib/lineup";
+
+interface Game {
+  opponent: string;
+  home: boolean;
+  kickoff_at: string;
+  status: "pre" | "in" | "post";
+  detail: string;
+  locked: boolean;
+}
 
 interface RosterPlayer {
   id: string;
@@ -24,97 +39,166 @@ interface RosterPlayer {
   position: string;
   team: string;
   injury_status: string | null;
-  bye_week: number | null;
   avatar_url: string | null;
   season_points: number | null;
-  season_points_year: number | null;
-  is_starter: boolean;
+  last_week_points: number | null;
+  game: Game | null;
+  on_bye: boolean;
 }
 
 interface LineupResponse {
-  team_id: string;
-  week: number;
-  year: number;
-  roster_slots: Record<string, number>;
   best_ball: boolean;
   has_lineup_set: boolean;
-  // Who scores this week if no lineup is saved: the best eligible player
-  // for each roster slot (backend default_lineup.py). Empty when a
-  // lineup is saved or the league is best-ball.
-  default_starters?: string[];
-  starters: string[];
+  slots: Slot[];
   roster: RosterPlayer[];
+}
+
+interface ScheduleSide {
+  id: string;
+  name: string;
+  score: number | null;
+}
+
+interface Matchup {
+  me: ScheduleSide;
+  opp: ScheduleSide;
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
 const POSITION_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "DB"];
+const kickoffFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 
-function PlayerRow({
-  player,
-  onToggle,
-  toggleDisabled,
-  readOnly = false,
-}: {
-  player: RosterPlayer;
-  onToggle: (id: string) => void;
-  toggleDisabled: boolean;
-  readOnly?: boolean;
-}) {
+function errorText(err: unknown, fallback: string): string {
+  return friendlyErrorMessage(err, fallback);
+}
+
+async function fetchLineupPage(teamId: string, leagueId: string, wk: number, year: number) {
+  const [lineup, team, league, schedule] = await Promise.all([
+    lineupsApi.get(teamId, wk, year).catch(() => null) as Promise<LineupResponse | null>,
+    teamsApi.get(teamId).catch(() => null) as Promise<{ name?: string; owner_id?: string | null; co_owner_id?: string | null } | null>,
+    leaguesApi.get(leagueId).catch(() => null) as Promise<{ commissioner_id?: string | null; co_commissioner_ids?: string[] | null } | null>,
+    standingsApi.getSchedule(leagueId, year, Math.max(14, wk)).catch(() => null) as Promise<{
+      schedule?: { week: number; matchups: { team_a: ScheduleSide; team_b: ScheduleSide }[] }[];
+    } | null>,
+  ]);
+  const canEdit =
+    isLoggedIn() &&
+    (isCurrentUser(team?.owner_id) ||
+      isCurrentUser(team?.co_owner_id) ||
+      isCurrentUser(league?.commissioner_id) ||
+      (league?.co_commissioner_ids || []).some((cid) => isCurrentUser(cid)));
+  const m = schedule?.schedule?.find((w) => w.week === wk)?.matchups.find((x) => x.team_a.id === teamId || x.team_b.id === teamId);
+  const matchup: Matchup | null = m ? (m.team_a.id === teamId ? { me: m.team_a, opp: m.team_b } : { me: m.team_b, opp: m.team_a }) : null;
+  return { lineup, teamName: team?.name || "", canEdit, matchup };
+}
+
+function GameMeta({ player }: { player: RosterPlayer }) {
+  if (player.on_bye) return <span className="text-ink-400">Bye</span>;
+  const g = player.game;
+  if (!g) return <span className="text-ink-400">—</span>;
+  const when =
+    g.status === "in" ? <span className="text-live">Live {g.detail}</span>
+    : g.status === "post" ? <span className="text-ink-400">{g.detail || "Final"}</span>
+    : <span className="text-ink-400">{kickoffFormat.format(new Date(g.kickoff_at))}</span>;
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/40 transition-colors">
-      <div className="w-8 h-8 rounded-full bg-surface-700 flex-shrink-0 overflow-hidden border border-surface-600">
-        {player.avatar_url ? (
-          <img src={player.avatar_url} alt={player.full_name} className="w-full h-full object-cover" />
+    <span className="flex items-center gap-1.5">
+      <span className="text-ink-300">{g.home ? "vs" : "@"} {g.opponent}</span>
+      {when}
+      {g.locked && <Lock className="h-3 w-3 text-ink-400" aria-label="Locked" />}
+    </span>
+  );
+}
+
+type RowMode = "idle" | "picked" | "target" | "dim";
+
+function LineupRow({
+  label,
+  player,
+  mode,
+  issue,
+  warning,
+  canEdit,
+  onTap,
+}: {
+  label: string;
+  player: RosterPlayer | null;
+  mode: RowMode;
+  issue: Issue | undefined;
+  warning: string | null;
+  canEdit: boolean;
+  onTap: () => void;
+}) {
+  const locked = !!player?.game?.locked;
+  const tone = issue ? (issue.kind === "empty" ? "border-l-warn" : "border-l-loss") : "border-l-transparent";
+  return (
+    <div
+      className={`grid grid-cols-[3rem_1fr_auto] items-center gap-3 border-l-2 px-3 py-2 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_5.5rem] ${tone} ${
+        mode === "picked" ? "bg-gold/[0.07] ring-1 ring-inset ring-gold" : mode === "target" ? "bg-ink-850 ring-1 ring-inset ring-ink-400" : ""
+      } ${mode === "dim" ? "opacity-35" : ""}`}
+    >
+      <PositionChip pos={label} />
+      <div className="min-w-0">
+        {player ? (
+          <>
+            <div className="flex min-w-0 items-center gap-2">
+              <PlayerLink id={player.id} className="truncate text-sm font-medium text-ink-100">
+                {player.full_name}
+              </PlayerLink>
+              <span className="shrink-0 text-xs text-ink-400">
+                {player.position} · {player.team}
+              </span>
+              <InjuryTag status={player.injury_status} onBye={player.on_bye} />
+            </div>
+            <div className="mt-0.5 text-xs md:hidden">
+              <GameMeta player={player} />
+            </div>
+          </>
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <span className="text-xs text-surface-500 font-bold">{player.full_name.charAt(0)}</span>
-          </div>
+          <span className="text-sm text-ink-400">Empty</span>
+        )}
+        {issue && issue.kind !== "empty" && <p className="mt-0.5 text-xs text-loss">{issue.message}</p>}
+        {mode === "target" && warning && (
+          <p className="mt-0.5 flex items-center gap-1 text-xs text-loss">
+            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden /> {warning}
+          </p>
         )}
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <PlayerLink id={player.id} className="text-sm font-medium text-white truncate">{player.full_name}</PlayerLink>
-          <PositionBadge pos={player.position} />
-          {player.injury_status && (
-            <span className="text-[10px] font-semibold text-red-400">{player.injury_status}</span>
-          )}
-        </div>
-        <div className="text-[11px] text-surface-500">
-          {player.team || "FA"}
-          {player.bye_week ? ` · Bye ${player.bye_week}` : ""}
-          {player.season_points != null && (
-            <span className="text-gold-400/80 ml-2">
-              {Math.round(player.season_points * 10) / 10} pts
-              {player.season_points_year ? ` (${player.season_points_year})` : ""}
+      <div className="hidden text-xs md:block">{player && <GameMeta player={player} />}</div>
+      <Num value={player?.last_week_points} className="hidden text-right text-sm text-ink-300 md:block" />
+      <Num value={player?.season_points} className="hidden text-right text-sm text-ink-300 md:block" />
+      <div className="flex justify-end">
+        {canEdit &&
+          (locked ? (
+            <span className="flex h-8 items-center gap-1 px-2 text-xs text-ink-400">
+              <Lock className="h-3 w-3" aria-hidden /> Locked
             </span>
-          )}
-        </div>
-      </div>
-      {readOnly ? (
-        <span
-          className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 ${
-            player.is_starter ? "bg-gold-400/15 text-gold-400" : "bg-surface-700 text-surface-400"
-          }`}
-        >
-          {player.is_starter ? "Starting" : "Bench"}
-        </span>
-      ) : (
-        <button
-          onClick={() => onToggle(player.id)}
-          disabled={!player.is_starter && toggleDisabled}
-          className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-            player.is_starter
-              ? "bg-surface-700 hover:bg-red-500/20 hover:text-red-400 text-surface-300"
-              : "bg-gold-400 hover:bg-gold-300 text-surface-900"
-          }`}
-        >
-          {player.is_starter ? (
-            <><Minus className="w-3 h-3" /> Bench</>
+          ) : mode === "target" ? (
+            <Button variant="primary" size="sm" onClick={onTap}>
+              Swap
+            </Button>
+          ) : mode === "picked" ? (
+            <Button variant="ghost" size="sm" onClick={onTap}>
+              Cancel
+            </Button>
           ) : (
-            <><Plus className="w-3 h-3" /> Start</>
-          )}
-        </button>
-      )}
+            <Button size="sm" onClick={onTap} disabled={mode === "dim"}>
+              {player ? "Move" : "Fill"}
+            </Button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function TableHead({ title }: { title: string }) {
+  return (
+    <div className="grid grid-cols-[3rem_1fr_auto] gap-3 border-b border-ink-700 px-3 pb-2 text-label font-semibold uppercase text-ink-400 md:grid-cols-[3rem_1fr_11rem_4rem_4rem_5.5rem]">
+      <span>Slot</span>
+      <span>{title}</span>
+      <span className="hidden md:block">Game</span>
+      <span className="hidden text-right md:block">Last wk</span>
+      <span className="hidden text-right md:block">Season</span>
+      <span />
     </div>
   );
 }
@@ -123,341 +207,373 @@ export default function LineupPage() {
   const params = useParams();
   const leagueId = params.id as string;
   const teamId = params.teamId as string;
+  const year = CURRENT_YEAR;
 
-  const [week, setWeek] = useState(1);
-  const [year] = useState(CURRENT_YEAR);
-  const [data, setData] = useState<LineupResponse | null>(null);
-  const [teamName, setTeamName] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [optimizing, setOptimizing] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-  // Local starter-id set, decoupled from `data` so toggling is instant
-  // without waiting on a round-trip -- only synced back to the server on
-  // explicit Save.
-  const [starterIds, setStarterIds] = useState<Set<string>>(new Set());
-  // Only the team's owner/co-owner or the league's commissioner(s) may
-  // edit (mirrors require_team_or_league_access server-side). Everyone
-  // else -- including logged-out visitors -- gets a read-only view.
-  const [canEdit, setCanEdit] = useState(false);
-  const [weekReady, setWeekReady] = useState(false);
+  const [week, setWeek] = useState<number | null>(null);
   const [seasonNotStarted, setSeasonNotStarted] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [data, setData] = useState<LineupResponse | null>(null);
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [teamName, setTeamName] = useState("");
+  const [canEdit, setCanEdit] = useState(false);
+  const [matchup, setMatchup] = useState<Matchup | null>(null);
+  const [error, setError] = useState("");
+  const [pick, setPick] = useState<Pick | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{ message: string; undo: Slot[] | null } | null>(null);
 
-  // Default to the current NFL week (same source Standings uses) instead
-  // of always opening on Week 1.
-  // Respect the LEAGUE's state, not just the NFL calendar: a league whose
-  // draft hasn't finished hasn't played a game yet, so it opens on Week 1
-  // with a "season not started" note instead of the live NFL week (QA
-  // round 2: a brand-new league showed "Week 6").
   useEffect(() => {
-    Promise.all([
-      nflApi.getCurrentWeek().catch(() => null),
-      leaguesApi.get(leagueId).catch(() => null),
-    ])
-      .then(([s, l]) => {
-        const draftStatus = (l as { draft_status?: string } | null)?.draft_status;
-        if (draftStatus && draftStatus !== "completed") {
-          setSeasonNotStarted(true);
-          setWeek(1);
-        } else if (s?.week) {
-          setWeek(Math.min(18, Math.max(1, s.week)));
-        }
-      })
-      .finally(() => setWeekReady(true));
+    let live = true;
+    Promise.all([nflApi.getCurrentWeek().catch(() => null), leaguesApi.get(leagueId).catch(() => null)]).then(([s, l]) => {
+      if (!live) return;
+      const draftStatus = (l as { draft_status?: string } | null)?.draft_status;
+      const notStarted = !!draftStatus && draftStatus !== "completed";
+      setSeasonNotStarted(notStarted);
+      setWeek(notStarted || !s?.week ? 1 : Math.min(18, Math.max(1, s.week)));
+    });
+    return () => {
+      live = false;
+    };
   }, [leagueId]);
 
-  const load = useCallback(() => {
-    if (!weekReady) return;
-    setLoading(true);
-    setError("");
-    Promise.all([
-      lineupsApi.get(teamId, week, year).catch(() => null),
-      teamsApi.get(teamId).catch(() => null),
-      leaguesApi.get(leagueId).catch(() => null),
-    ])
-      .then(([lineupData, teamData, leagueData]) => {
-        const t = teamData as { owner_id?: string | null; co_owner_id?: string | null } | null;
-        const l = leagueData as { commissioner_id?: string | null; co_commissioner_ids?: string[] | null } | null;
-        setCanEdit(
-          isLoggedIn() &&
-            (isCurrentUser(t?.owner_id) ||
-              isCurrentUser(t?.co_owner_id) ||
-              isCurrentUser(l?.commissioner_id) ||
-              (l?.co_commissioner_ids || []).some((cid) => isCurrentUser(cid)))
-        );
-        if (!lineupData) {
-          setError("Failed to load lineup");
-          return;
-        }
-        const d = lineupData as LineupResponse;
-        setData(d);
-        setStarterIds(new Set(d.has_lineup_set ? d.starters : d.default_starters || []));
-        if (teamData) setTeamName((teamData as { name?: string }).name || "");
-      })
-      .finally(() => setLoading(false));
-  }, [teamId, leagueId, week, year, weekReady]);
+  useEffect(() => {
+    if (week === null) return;
+    let live = true;
+    fetchLineupPage(teamId, leagueId, week, year).then((r) => {
+      if (!live) return;
+      setCanEdit(r.canEdit);
+      setTeamName(r.teamName);
+      setMatchup(r.matchup);
+      setError(r.lineup ? "" : "Couldn't load this lineup. Try again in a moment.");
+      if (r.lineup) {
+        setData(r.lineup);
+        setSlots(r.lineup.slots);
+      }
+      setPick(null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [teamId, leagueId, week, year]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!pick) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPick(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pick]);
 
-  const totalSlots = data ? Object.values(data.roster_slots).reduce((a, b) => a + b, 0) : 0;
-  const toggle = (playerId: string) => {
-    setStarterIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(playerId)) {
-        next.delete(playerId);
-      } else {
-        if (next.size >= totalSlots) return prev; // full -- no-op, button is disabled anyway
-        next.add(playerId);
-      }
-      return next;
-    });
-    setSaved(false);
-  };
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
-  const INACTIVE = ["out", "ir", "pup", "sus", "suspended", "na"];
-  const handleSave = async () => {
-    const inactiveStarters = (data?.roster || []).filter(
-      (p) => starterIds.has(p.id) && p.injury_status && INACTIVE.includes(p.injury_status.toLowerCase())
-    );
-    if (
-      inactiveStarters.length > 0 &&
-      !window.confirm(
-        `${inactiveStarters.map((p) => `${p.full_name} (${p.injury_status})`).join(", ")} ${
-          inactiveStarters.length === 1 ? "is" : "are"
-        } listed as inactive and may score 0. Start anyway?`
-      )
-    ) {
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const res = (await lineupsApi.set(teamId, week, year, Array.from(starterIds))) as { warnings?: string[] };
-      if (res?.warnings?.length) setNotice(res.warnings.join(" "));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-      load();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to save lineup");
-    } finally {
-      setSaving(false);
-    }
-  };
+  const roster = useMemo(() => data?.roster ?? [], [data]);
+  const byId = useMemo(() => Object.fromEntries(roster.map((p) => [p.id, p])), [roster]);
+  const players = useMemo(
+    () =>
+      Object.fromEntries(
+        roster.map((p): [string, LineupPlayer] => [
+          p.id,
+          { id: p.id, name: p.full_name, position: p.position, injuryStatus: p.injury_status, locked: !!p.game?.locked, onBye: p.on_bye },
+        ]),
+      ),
+    [roster],
+  );
+  const bench = useMemo(
+    () =>
+      benchIds(slots, roster.map((p) => p.id)).sort(
+        (a, b) => POSITION_ORDER.indexOf(byId[a].position) - POSITION_ORDER.indexOf(byId[b].position),
+      ),
+    [slots, roster, byId],
+  );
+  const issues = useMemo(() => issuesFor(slots, players), [slots, players]);
+  const targets = pick ? targetsFor(slots, pick, players, bench) : null;
+  const editable = canEdit && !data?.best_ball;
+  const pickedPlayer =
+    pick?.kind === "bench" ? players[pick.playerId] : pick?.kind === "slot" ? players[slots[pick.index]?.player_id ?? ""] : undefined;
+  const pickedWarning = pick?.kind === "bench" && pickedPlayer ? playerWarning(pickedPlayer)?.message ?? null : null;
 
-  const handleOptimize = async () => {
-    setOptimizing(true);
-    setError("");
-    try {
-      setNotice("");
-      const result = await lineupsApi.optimize(teamId, week, year) as { starters: string[]; skipped_inactive?: string[] };
-      setStarterIds(new Set(result.starters));
-      if (result.starters.length === 0) {
-        setError("No eligible players to start -- draft or add players first.");
-      } else {
-        const skipped = result.skipped_inactive?.length ? ` Skipped inactive: ${result.skipped_inactive.join(", ")}.` : "";
-        setNotice(`Auto-filled and saved ${result.starters.length} starter${result.starters.length === 1 ? "" : "s"}.${skipped}`);
-        setData((d) => (d ? { ...d, has_lineup_set: true, starters: result.starters } : d));
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to auto-fill lineup");
-    } finally {
-      setOptimizing(false);
-    }
-  };
-
-  if (loading && !data) {
-    return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
-          <span className="text-surface-400">Loading lineup...</span>
-        </div>
-      </div>
-    );
+  function warningFor(row: Pick): string | null {
+    if (!pick || !targets) return null;
+    const isTarget = row.kind === "slot" ? targets.slots.has(row.index) : targets.bench.has(row.playerId);
+    return isTarget ? moveWarning(slots, pick, row, players) : null;
   }
 
-  const roster = data?.roster || [];
-  const starters = roster
-    .filter((p) => starterIds.has(p.id))
-    .sort((a, b) => POSITION_ORDER.indexOf(a.position) - POSITION_ORDER.indexOf(b.position));
-  const bench = roster
-    .filter((p) => !starterIds.has(p.id))
-    .sort((a, b) => POSITION_ORDER.indexOf(a.position) - POSITION_ORDER.indexOf(b.position));
-  const atCapacity = starterIds.size >= totalSlots;
+  async function save(next: Slot[], message: string, undo: Slot[] | null) {
+    if (week === null) return;
+    const prev = slots;
+    setSlots(next);
+    setPick(null);
+    setBusy(true);
+    try {
+      const res = (await lineupsApi.setSlots(teamId, week, year, next)) as { slots: Slot[]; warnings?: string[] };
+      setSlots(res.slots);
+      setData((d) => (d ? { ...d, has_lineup_set: true } : d));
+      setError("");
+      const added = (res.warnings ?? []).filter((w) => !issues.some((i) => i.message === w));
+      setToast({ message: added.length ? `${message}. ${added[0]}` : message, undo });
+    } catch (err) {
+      setSlots(prev);
+      setError(errorText(err, "Couldn't save that move."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function tap(row: Pick) {
+    if (busy) return;
+    if (!pick) {
+      setPick(row);
+      return;
+    }
+    const same = pick.kind === row.kind && (row.kind === "slot" ? pick.kind === "slot" && pick.index === row.index : pick.kind === "bench" && pick.playerId === row.playerId);
+    if (same) {
+      setPick(null);
+      return;
+    }
+    const legal = row.kind === "slot" ? targets?.slots.has(row.index) : targets?.bench.has(row.playerId);
+    if (!legal) {
+      setPick(row);
+      return;
+    }
+    save(applyMove(slots, pick, row), "Lineup saved", slots);
+  }
+
+  async function autoFill() {
+    if (week === null) return;
+    setBusy(true);
+    setPick(null);
+    const prev = slots;
+    try {
+      const res = (await lineupsApi.optimize(teamId, week, year)) as { slots: Slot[]; skipped_inactive?: string[] };
+      setSlots(res.slots);
+      setData((d) => (d ? { ...d, has_lineup_set: true } : d));
+      setError("");
+      const skipped = res.skipped_inactive?.length ? ` Skipped ${res.skipped_inactive.join(", ")}.` : "";
+      setToast({ message: `Auto-filled your best lineup.${skipped}`, undo: prev });
+    } catch (err) {
+      setError(errorText(err, "Auto-fill didn't work. Try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function modeFor(row: Pick): RowMode {
+    if (!pick || !targets) return "idle";
+    const isPicked = pick.kind === row.kind && (row.kind === "slot" ? pick.kind === "slot" && pick.index === row.index : pick.kind === "bench" && pick.playerId === row.playerId);
+    if (isPicked) return "picked";
+    const legal = row.kind === "slot" ? targets.slots.has(row.index) : targets.bench.has(row.playerId);
+    return legal ? "target" : "dim";
+  }
+
+  const pickedName =
+    pick?.kind === "bench" ? byId[pick.playerId]?.full_name : pick?.kind === "slot" ? byId[slots[pick.index]?.player_id ?? ""]?.full_name : null;
+  const pickedSlot = pick?.kind === "slot" ? slots[pick.index]?.slot : null;
 
   return (
-    <div className="min-h-screen bg-surface-900">
-      <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <Link
-                href={`/leagues/${leagueId}/teams/${teamId}`}
-                aria-label="Back to team"
-                className="text-surface-400 hover:text-white transition-colors shrink-0"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
-              <div className="min-w-0">
-                <h1 className="text-lg font-bold text-white truncate">Set Lineup</h1>
-                {teamName && <span className="text-surface-400 text-xs truncate">{teamName}</span>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setWeek((w) => Math.max(1, w - 1))}
-                disabled={week <= 1}
-                title="Previous week"
-                aria-label="Previous week"
-                className="p-1.5 rounded-lg text-surface-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-sm font-semibold text-white w-16 text-center">Week {week}</span>
-              <button
-                onClick={() => setWeek((w) => Math.min(18, w + 1))}
-                disabled={week >= 18}
-                title="Next week"
-                aria-label="Next week"
-                className="p-1.5 rounded-lg text-surface-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-label font-semibold uppercase text-ink-400">Lineup</p>
+          <h1 className="truncate text-2xl font-semibold text-ink-100 md:text-title">{teamName || " "}</h1>
         </div>
-      </div>
-
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm" role="alert">
-            {error}
-          </div>
-        )}
-
-        {notice && (
-          <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm" role="status">
-            {notice}
-          </div>
-        )}
-        {seasonNotStarted && (
-          <div className="mb-4 p-3 bg-surface-800 border border-surface-700 rounded-xl text-surface-300 text-sm">
-            Season not started -- this league&apos;s draft isn&apos;t complete yet. Lineups below are for Week 1.
-          </div>
-        )}
-
-        {data?.best_ball ? (
-          <div className="mb-4 p-3 bg-gold-400/10 border border-gold-400/30 rounded-xl text-gold-300 text-sm">
-            This league uses Best-Ball auto-lineups -- your highest-scoring eligible starters are
-            selected automatically from real per-week results, no lineup management needed.
-          </div>
-        ) : (
-          data && !data.has_lineup_set && (
-            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 text-sm">
-              No lineup saved for week {week}. Until you save one, this team scores the default lineup
-              shown below: the best available player for each slot, skipping byes and players ruled out.
-              Change it and save to make it yours.
-            </div>
-          )
-        )}
-
-        {!canEdit && data && (
-          <div className="mb-4 p-3 bg-surface-800 border border-surface-700 rounded-xl text-surface-300 text-sm">
-            {isLoggedIn() ? (
-              "You're viewing this lineup read-only -- only the team's owner or the commissioner can change it."
-            ) : (
-              <>
-                Viewing read-only.{" "}
-                <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="text-gold-400 hover:text-gold-300 font-semibold">
-                  Log in
-                </Link>{" "}
-                to manage your team.
-              </>
-            )}
-          </div>
-        )}
-
-        {canEdit && !data?.best_ball && (
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-surface-400">
-                Starters: <span className={`font-bold ${atCapacity ? "text-gold-400" : "text-white"}`}>{starterIds.size}</span> / {totalSlots}
-              </span>
-              <button
-                onClick={handleOptimize}
-                disabled={optimizing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface-800 border border-surface-700 text-surface-300 hover:text-gold-400 hover:border-gold-400/40 transition-all disabled:opacity-50"
-              >
-                {optimizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                Auto-Fill Best Lineup
-              </button>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-control border border-ink-700 bg-ink-900">
             <button
-              onClick={handleSave}
-              disabled={saving}
-              className={`inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-bold transition-all ${
-                saved
-                  ? "bg-green-500 text-white"
-                  : "bg-gold-400 hover:bg-gold-300 text-surface-900 disabled:opacity-50"
-              }`}
+              type="button"
+              aria-label="Previous week"
+              onClick={() => setWeek((w) => (w ? Math.max(1, w - 1) : w))}
+              disabled={!week || week <= 1}
+              className="flex h-8 w-8 items-center justify-center text-ink-300 hover:text-ink-100 disabled:opacity-30"
             >
-              {saving ? (
-                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
-              ) : saved ? (
-                <><RefreshCw className="w-3.5 h-3.5" /> Saved!</>
-              ) : (
-                <><Save className="w-3.5 h-3.5" /> Save Lineup</>
-              )}
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="num w-16 text-center text-sm text-ink-100">{week ? `Week ${week}` : "—"}</span>
+            <button
+              type="button"
+              aria-label="Next week"
+              onClick={() => setWeek((w) => (w ? Math.min(18, w + 1) : w))}
+              disabled={!week || week >= 18}
+              className="flex h-8 w-8 items-center justify-center text-ink-300 hover:text-ink-100 disabled:opacity-30"
+            >
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-        )}
-        {(data?.best_ball || !canEdit) && (
-          <div className="flex items-center justify-end mb-4">
-            <span className="text-sm text-surface-400">
-              Starters: <span className="font-bold text-gold-400">{starterIds.size}</span> / {totalSlots}
-            </span>
-          </div>
-        )}
+          {editable && (
+            <Button size="sm" onClick={autoFill} disabled={busy}>
+              <Sparkles className="h-3.5 w-3.5" aria-hidden /> Auto-fill
+            </Button>
+          )}
+        </div>
+      </header>
 
-        <div className="space-y-4">
-          <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
-              <h3 className="text-white font-bold text-sm">Starting ({starters.length})</h3>
+      {matchup && (
+        <Card className="mb-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-gold">{matchup.me.name}</p>
+              <Num value={matchup.me.score} digits={2} size="lg" className="text-ink-100" />
             </div>
-            {starters.length === 0 ? (
-              <div className="p-6 text-center text-surface-500 text-sm">
-                No starters set. Add players from your bench below, or auto-fill.
-              </div>
-            ) : (
-              <div className="divide-y divide-surface-700/50">
-                {starters.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: true }} onToggle={toggle} toggleDisabled={false} readOnly={!!data?.best_ball || !canEdit} />
-                ))}
-              </div>
-            )}
+            <span className="text-xs text-ink-400">vs</span>
+            <div className="min-w-0 text-right">
+              <p className="truncate text-sm font-medium text-ink-300">{matchup.opp.name}</p>
+              <Num value={matchup.opp.score} digits={2} size="lg" className="text-ink-300" />
+            </div>
           </div>
+          <p className="mt-2 text-xs text-ink-400">Each player locks at his own game&apos;s kickoff.</p>
+        </Card>
+      )}
 
-          <div className="bg-surface-800/60 border border-surface-700 rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 bg-surface-800 border-b border-surface-700">
-              <h3 className="text-white font-bold text-sm">Bench ({bench.length})</h3>
-            </div>
-            {bench.length === 0 ? (
-              <div className="p-6 text-center text-surface-500 text-sm">Everyone&apos;s starting.</div>
-            ) : (
-              <div className="divide-y divide-surface-700/50">
-                {bench.map((p) => (
-                  <PlayerRow key={p.id} player={{ ...p, is_starter: false }} onToggle={toggle} toggleDisabled={atCapacity} readOnly={!!data?.best_ball || !canEdit} />
+      {error && (
+        <div role="alert" className="mb-4 rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
+          {error}
+        </div>
+      )}
+      {seasonNotStarted && (
+        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          This league&apos;s draft isn&apos;t done yet, so this is the Week 1 lineup.
+        </p>
+      )}
+      {data?.best_ball && (
+        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          Best ball league. Your highest-scoring legal lineup is picked for you after each week&apos;s games.
+        </p>
+      )}
+      {data && !data.best_ball && !data.has_lineup_set && (
+        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          No lineup saved for Week {week} yet. The default lineup below scores unless you change it, and any change saves it as
+          yours.
+        </p>
+      )}
+      {data && !canEdit && (
+        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          {isLoggedIn() ? (
+            "Only this team's owner or the commissioner can change this lineup."
+          ) : (
+            <>
+              <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="font-semibold text-gold">
+                Log in
+              </Link>{" "}
+              to manage your team.
+            </>
+          )}
+        </p>
+      )}
+
+      {editable && issues.length > 0 && (
+        <Card className="mb-4 border-loss/40">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-loss" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink-100">
+                {issues.length === 1 ? "1 problem is costing you points" : `${issues.length} problems are costing you points`}
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {issues.map((i) => (
+                  <li key={`${i.kind}-${i.slotIndex}`} className="flex items-center justify-between gap-3 text-sm text-ink-300">
+                    <span>{i.message}</span>
+                    {!players[i.playerId ?? ""]?.locked && (
+                      <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "slot", index: i.slotIndex })}>
+                        Fix
+                      </Button>
+                    )}
+                  </li>
                 ))}
-              </div>
+              </ul>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {pick && targets && (
+        <div className="sticky top-16 z-30 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-gold/40 bg-ink-900 px-4 py-2.5">
+          <p className="text-sm text-ink-100">
+            {pickedName ? `Pick where ${pickedName} goes.` : `Pick a player for ${pickedSlot}.`}
+            {pickedWarning && <span className="text-loss"> {pickedWarning}</span>}
+            {targets.slots.size + targets.bench.size === 0 && <span className="text-ink-400"> No legal moves.</span>}
+          </p>
+          <div className="flex gap-2">
+            {targets.toBench && (
+              <Button size="sm" onClick={() => pick && save(applyMove(slots, pick, "bench"), "Moved to bench", slots)}>
+                Move to bench
+              </Button>
             )}
+            <Button size="sm" variant="ghost" onClick={() => setPick(null)}>
+              Cancel
+            </Button>
           </div>
         </div>
-      </div>
+      )}
+
+      {!data && !error ? (
+        <Card>
+          <SkeletonRows rows={9} />
+        </Card>
+      ) : (
+        data && (
+          <div className="space-y-4">
+            <Card className="px-0 lg:px-0">
+              <TableHead title="Starters" />
+              <div className="divide-y divide-ink-700">
+                {slots.map((s, i) => (
+                  <LineupRow
+                    key={`${s.slot}-${i}`}
+                    label={s.slot}
+                    player={s.player_id ? byId[s.player_id] ?? null : null}
+                    mode={modeFor({ kind: "slot", index: i })}
+                    issue={issues.find((x) => x.slotIndex === i)}
+                    warning={warningFor({ kind: "slot", index: i })}
+                    canEdit={editable}
+                    onTap={() => tap({ kind: "slot", index: i })}
+                  />
+                ))}
+              </div>
+            </Card>
+            <Card className="px-0 lg:px-0">
+              <TableHead title={`Bench (${bench.length})`} />
+              {bench.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-ink-400">Nobody on the bench.</p>
+              ) : (
+                <div className="divide-y divide-ink-700">
+                  {bench.map((id) => (
+                    <LineupRow
+                      key={id}
+                      label="BN"
+                      player={byId[id]}
+                      mode={modeFor({ kind: "bench", playerId: id })}
+                      issue={undefined}
+                      warning={warningFor({ kind: "bench", playerId: id })}
+                      canEdit={editable}
+                      onTap={() => tap({ kind: "bench", playerId: id })}
+                    />
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        )
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-x-4 bottom-20 z-50 mx-auto flex max-w-md items-center justify-between gap-3 rounded-card border border-ink-600 bg-ink-850 px-4 py-3 text-sm text-ink-100 shadow-xl md:bottom-6"
+        >
+          <span>{toast.message}</span>
+          <div className="flex items-center gap-1">
+            {toast.undo && (
+              <Button size="sm" variant="ghost" onClick={() => toast.undo && save(toast.undo, "Undone", null)}>
+                Undo
+              </Button>
+            )}
+            <button type="button" aria-label="Dismiss" onClick={() => setToast(null)} className="p-1 text-ink-400 hover:text-ink-100">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

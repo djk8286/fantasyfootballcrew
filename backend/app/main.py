@@ -8,7 +8,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, background_engine
 from app.core.limiter import limiter
 from app.core.csrf import CSRFOriginMiddleware
 from app.core.sentry import init_sentry
@@ -63,6 +63,8 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await engine.dispose()
+    if background_engine is not engine:
+        await background_engine.dispose()
 
 
 _docs_enabled = settings.ENVIRONMENT != "production"

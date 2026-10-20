@@ -31,6 +31,11 @@ class Lineup(Base):
     # (Team.roster, League.draft_order, ...): without it, in-place
     # .append()/.remove() is invisible to SQLAlchemy's change tracking.
     starters: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True, default=list)
+    # [{"slot": "RB", "player_id": "..." | None}, ...] in league slot order
+    # (services/lineup_slots.py). starters is kept equal to its filled
+    # slots, so scoring reads one list. Null on rows saved before slots
+    # existed; readers place those starters into slots on the fly.
+    slots: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (

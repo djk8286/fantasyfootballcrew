@@ -101,3 +101,19 @@ async def test_sync_week_scoreboard_upserts_by_espn_event_id(db_session_factory,
         assert len(rows) == 1  # upserted, not duplicated
         assert rows[0].completed is True
         assert rows[0].away_score == 27
+
+
+def test_parse_event_stores_sleeper_team_codes():
+    """Player.team is Sleeper's code, so Washington is stored as WAS, not ESPN's WSH."""
+    event = {
+        "id": "2",
+        "date": "2026-10-18T17:00Z",
+        "status": {"type": {"state": "pre", "completed": False, "shortDetail": "Sun 1:00 PM"}},
+        "competitions": [{"competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "WSH", "displayName": "Washington Commanders"}},
+            {"homeAway": "away", "team": {"abbreviation": "DAL", "displayName": "Dallas Cowboys"}},
+        ]}],
+    }
+    parsed = _parse_event(event)
+    assert parsed["home_team"] == "WAS"
+    assert parsed["away_team"] == "DAL"

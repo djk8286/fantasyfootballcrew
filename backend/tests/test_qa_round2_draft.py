@@ -38,6 +38,7 @@ async def test_watchdog_completes_cpu_draft_without_client(db_session_factory, m
     import app.services.scheduler as sched
     from app.core.config import settings
     monkeypatch.setattr(sched, "async_session", db_session_factory)
+    monkeypatch.setattr(sched, "draft_session", db_session_factory)
     monkeypatch.setattr(settings, "CPU_PICK_DELAY_S", 0.0)
     user = await _seed(db_session_factory)
     async with db_session_factory() as db:
@@ -67,6 +68,7 @@ async def test_watchdog_respects_cpu_delay(db_session_factory, monkeypatch):
     import app.services.scheduler as sched
     from app.core.config import settings
     monkeypatch.setattr(sched, "async_session", db_session_factory)
+    monkeypatch.setattr(sched, "draft_session", db_session_factory)
     monkeypatch.setattr(settings, "CPU_PICK_DELAY_S", 30.0)
     user = await _seed(db_session_factory)
     async with db_session_factory() as db:
@@ -81,6 +83,7 @@ async def test_pause_blocks_picks_and_resume_restores(client, db_session_factory
     import app.services.scheduler as sched
     from app.core.config import settings
     monkeypatch.setattr(sched, "async_session", db_session_factory)
+    monkeypatch.setattr(sched, "draft_session", db_session_factory)
     monkeypatch.setattr(settings, "CPU_PICK_DELAY_S", 0.0)
     user = await _seed(db_session_factory)
     token = create_access_token({"sub": user.id, "email": user.email})

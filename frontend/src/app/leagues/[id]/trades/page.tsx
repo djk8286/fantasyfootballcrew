@@ -5,7 +5,7 @@ import Toast, { useToast } from "@/components/Toast";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, ArrowLeftRight, Send } from "lucide-react";
+import { ArrowLeftRight, Send } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
 
@@ -180,9 +180,6 @@ export default function TradesPage() {
       <Toast message={toast} onDone={clearToast} />
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
-          <Link href={`/leagues/${leagueId}`} className="text-surface-400 hover:text-white transition-colors">
-            <ChevronLeft className="w-5 h-5" />
-          </Link>
           <h1 className="text-lg font-semibold text-white">{league?.name} — Trades</h1>
           <ManagementWindowIndicator leagueId={leagueId} />
         </div>
