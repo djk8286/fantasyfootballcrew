@@ -546,14 +546,20 @@ export const draftsApi = {
     }),
   start: (draftId: string) =>
     apiRequest(`/api/v1/drafts/${draftId}/start`, { method: "POST" }),
-  makePick: (draftId: string, teamId: string, playerId: string) =>
-    apiRequest(`/api/v1/drafts/${draftId}/pick`, {
-      method: "POST",
-      body: { team_id: teamId, player_id: playerId },
-    }),
+  // pickNumber (optional): the overall pick this is for -- the server
+  // rejects it if that pick was already made, so a double-click can never
+  // spill onto the next pick (e.g. your own back-to-back snake-turn pick).
+  makePick: (draftId: string, teamId: string, playerId: string, pickNumber?: number) =>
+    apiRequest<{ id: string; round: number; pick_number: number; player: string | null; position: string | null }>(
+      `/api/v1/drafts/${draftId}/pick`,
+      {
+        method: "POST",
+        body: { team_id: teamId, player_id: playerId, ...(pickNumber ? { pick_number: pickNumber } : {}) },
+      },
+    ),
   getState: (draftId: string) => apiRequest(`/api/v1/drafts/${draftId}/state`),
   runMock: (draftId: string, skipTeamIds?: string[]) =>
-    apiRequest(`/api/v1/drafts/${draftId}/mock`, {
+    apiRequest<{ message: string; total_picks: number; status: string }>(`/api/v1/drafts/${draftId}/mock`, {
       method: "POST",
       body: { skip_team_ids: skipTeamIds || [] },
     }),
@@ -567,6 +573,17 @@ export const draftsApi = {
     apiRequest(`/api/v1/drafts/${draftId}/timer`, {
       method: "PATCH",
       body: { timer_seconds: timerSeconds },
+    }),
+  // Server-persisted Autopick toggle (2026-10-19): ON = the server picks
+  // for this team as soon as it's on the clock, tab open or not.
+  getAutopick: (draftId: string, teamId: string) =>
+    apiRequest<{ team_id: string; enabled: boolean }>(
+      `/api/v1/drafts/${draftId}/autopick?team_id=${encodeURIComponent(teamId)}`,
+    ),
+  setAutopick: (draftId: string, teamId: string, enabled: boolean) =>
+    apiRequest<{ team_id: string; enabled: boolean }>(`/api/v1/drafts/${draftId}/autopick`, {
+      method: "PUT",
+      body: { team_id: teamId, enabled },
     }),
   // Server-persisted pick queue (2026-09-09) -- survives a page refresh,
   // unlike the old purely-client-state version. See app/api/v1/drafts.py.
