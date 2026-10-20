@@ -1,15 +1,18 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.services.draft_manager import (
     create_draft,
     start_draft,
     make_pick,
-    get_draft_state,
+    get_draft_state_encoded,
     run_mock_draft,
+    current_pick_slot,
+    get_autopick,
+    set_autopick,
     get_next_pick_for_team,
     get_team_queue,
     add_to_queue,
@@ -20,6 +23,7 @@ from app.models.draft import Draft, DraftPick, DraftRunStatus
 from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
+from app.models.player import Player
 from app.schemas.draft import DraftCreate, DraftRead, DraftPickCreate, DraftPickRead, DraftState, MockDraftQuickstart
 from app.api.deps import (
     get_current_user,
@@ -43,6 +47,11 @@ class MockDraftRequest(BaseModel):
 class QueueMutation(BaseModel):
     team_id: str
     player_id: str
+
+
+class AutopickUpdate(BaseModel):
+    team_id: str
+    enabled: bool
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -174,15 +183,24 @@ async def api_make_pick(
 ):
     """Make a draft pick. Restricted to the picking team's own owner/
     co-owner (or the commissioner) for a real team; any league participant
-    for a CPU team -- see _require_pick_access."""
+    for a CPU team -- see _require_pick_access. Pass pick_number to make a
+    retried/double-clicked request idempotent (it can't spill onto the
+    next pick)."""
     _, league = await _get_draft_and_league_or_404(draft_id, db)
     await _require_pick_access(pick_data.team_id, league, current_user, db)
     try:
-        pick = await make_pick(db, draft_id, pick_data.team_id, pick_data.player_id)
+        pick = await make_pick(
+            db, draft_id, pick_data.team_id, pick_data.player_id, expected_pick_number=pick_data.pick_number,
+        )
+        player = await db.get(Player, pick.player_id)
         return {
             "id": pick.id,
             "round": pick.round,
             "pick_number": pick.pick_number,
+            "team_id": pick.team_id,
+            "player_id": pick.player_id,
+            "player": f"{player.first_name} {player.last_name}" if player else None,
+            "position": player.position if player else None,
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -201,13 +219,24 @@ async def api_get_draft_by_league(league_id: str, db: AsyncSession = Depends(get
 
 
 @router.get("/{draft_id}/state")
-async def api_draft_state(draft_id: str, db: AsyncSession = Depends(get_db)):
-    """Get the full state of a draft including board and picks."""
+async def api_draft_state(draft_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Get the full state of a draft including board and picks.
+
+    Served from draft_manager.get_draft_state_encoded's shared cache: one
+    build per state change no matter how many viewers poll, pre-encoded
+    and pre-gzipped, with an ETag so an unchanged poll is a bodyless 304
+    (2026-10-19 slowdown: every poll used to rebuild ~10 MB of JSON)."""
     try:
-        state = await get_draft_state(db, draft_id)
-        return state
+        enc = await get_draft_state_encoded(db, draft_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    headers = {"ETag": enc.etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if request.headers.get("if-none-match") == enc.etag:
+        return Response(status_code=304, headers=headers)
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        return Response(content=enc.gzipped, media_type="application/json",
+                        headers={**headers, "Content-Encoding": "gzip"})
+    return Response(content=enc.body, media_type="application/json", headers=headers)
 
 
 @router.post("/{draft_id}/mock")
@@ -229,9 +258,13 @@ async def api_run_mock(
     require_commissioner(league, current_user)
     try:
         picks = await run_mock_draft(db, draft_id, skip_team_ids=req.skip_team_ids)
+        draft = (await db.execute(
+            select(Draft).where(Draft.id == draft_id).execution_options(populate_existing=True)
+        )).scalar_one()
         return {
             "message": f"Mock draft complete with {len(picks)} picks",
             "total_picks": len(picks),
+            "status": draft.status.value,
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -247,41 +280,68 @@ async def api_auto_pick(
 ):
     """Auto-pick for whoever is currently on the clock. Same access rule
     as a manual pick (_require_pick_access, checked against whichever team
-    current_team_id turns out to be) -- covers both a team owner
-    auto-picking for themselves when their own timer runs out, and any
-    league participant nudging a CPU team forward."""
+    is on the clock). Looks the team up straight from the draft row -- it
+    used to build the entire draft state (the full player board) just to
+    find that out, which made this take 8-25 s under load."""
+    draft, league = await _get_draft_and_league_or_404(draft_id, db)
+    if draft.status != DraftRunStatus.IN_PROGRESS:
+        raise HTTPException(status_code=400, detail="Draft is not in progress")
+    num_teams = int(await db.scalar(select(func.count(Team.id)).where(Team.league_id == draft.league_id)) or 0)
+    pick_number, team_id = current_pick_slot(draft, num_teams)
+    if not team_id:
+        raise HTTPException(status_code=400, detail="No team is on the clock")
+    await _require_pick_access(team_id, league, current_user, db)
     try:
-        # Get current draft state to find who's picking
-        state = await get_draft_state(db, draft_id)
-        if not state["current_team_id"]:
-            raise HTTPException(status_code=400, detail="No team is on the clock")
-        if state["draft"]["status"] != "in_progress":
-            raise HTTPException(status_code=400, detail="Draft is not in progress")
-
-        _, league = await _get_draft_and_league_or_404(draft_id, db)
-        await _require_pick_access(state["current_team_id"], league, current_user, db)
-
         # Queue-first, AI-ranking-fallback -- see get_next_pick_for_team's
-        # docstring. Same function the timer-expiry watchdog uses, so a
-        # timed-out human's own queue is respected identically whether
-        # THEY triggered this (tab open, timer hit zero client-side) or
-        # nobody did (watchdog forced it because no tab was even open).
-        player = await get_next_pick_for_team(db, draft_id, state["current_team_id"])
+        # docstring. Same function the draft watchdog uses.
+        player = await get_next_pick_for_team(
+            db, draft_id, team_id, current_round=draft.current_round, total_rounds=draft.total_rounds,
+        )
         if not player:
             raise HTTPException(status_code=400, detail="No available players to pick")
-
-        # Make the pick
-        pick = await make_pick(db, draft_id, state["current_team_id"], player.id)
+        pick = await make_pick(db, draft_id, team_id, player.id, expected_pick_number=pick_number)
         return {
             "id": pick.id,
             "round": pick.round,
             "pick_number": pick.pick_number,
             "player": f"{player.first_name} {player.last_name}",
             "position": player.position,
-            "team_id": state["current_team_id"],
+            "team_id": team_id,
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{draft_id}/autopick")
+async def api_get_autopick(
+    draft_id: str,
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """This team's server-persisted Autopick setting for this draft."""
+    _, league = await _get_draft_and_league_or_404(draft_id, db)
+    await _require_queue_access(team_id, league, current_user, db)
+    return {"team_id": team_id, "enabled": await get_autopick(db, draft_id, team_id)}
+
+
+@router.put("/{draft_id}/autopick")
+@limiter.limit("120/hour")
+async def api_set_autopick(
+    request: Request,
+    draft_id: str,
+    data: AutopickUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turn Autopick on/off for one team in this draft. Persisted, so it
+    survives reloads and works with no tab open: ON = the server picks for
+    this team as soon as it's on the clock (queue first). OFF = it waits
+    for the pick clock -- and still autopicks when the clock runs out."""
+    _, league = await _get_draft_and_league_or_404(draft_id, db)
+    await _require_queue_access(data.team_id, league, current_user, db)
+    enabled = await set_autopick(db, draft_id, data.team_id, data.enabled, current_user.id)
+    return {"team_id": data.team_id, "enabled": enabled}
 
 
 @router.patch("/{draft_id}/timer")
