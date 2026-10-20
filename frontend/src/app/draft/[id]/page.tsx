@@ -25,7 +25,7 @@ import {
   Info,
 } from "lucide-react";
 
-import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
+import { POSITION_ORDER } from "@/components/ui/tokens";
 import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
 import TeamBadge from "@/components/TeamBadge";
 import DraftHeader from "@/components/DraftHeader";

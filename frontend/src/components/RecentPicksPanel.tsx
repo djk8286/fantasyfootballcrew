@@ -2,7 +2,7 @@
 
 import { Radio } from "lucide-react";
 import PlayerAvatar from "./PlayerAvatar";
-import PositionBadge from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 
 // Matches draft/[id]/page.tsx's DraftPickPlayer. Doesn't carry
 // first_name/last_name/avatar_url (PlayerAvatar's own HoverPlayer type
@@ -71,7 +71,7 @@ export default function RecentPicksPanel({ picks, myTeamId, onPlayerHover }: Rec
                     <span className="text-xs font-medium text-white truncate">
                       {p.player?.full_name || "—"}
                     </span>
-                    {p.player && <PositionBadge pos={p.player.position} />}
+                    {p.player && <PositionChip pos={p.player.position} />}
                   </div>
                   <span className={`text-[10px] truncate block ${isMine ? "text-gold-400" : "text-surface-500"}`}>
                     {isMine ? "Your Team" : p.team.name}

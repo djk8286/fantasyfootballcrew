@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import TeamBadge from "./TeamBadge";
-import PositionBadge from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 
 interface BoardViewTeam {
   id: string;
@@ -209,9 +209,7 @@ export default function BoardView({
                                   >
                                     {pick.player.full_name}
                                   </span>
-                                  <PositionBadge
-                                    pos={pick.player.position}
-                                  />
+                                  <PositionChip pos={pick.player.position} />
                                 </div>
                               </div>
                             ) : isCurrentPick && !isCompleted ? (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import PositionBadge from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 
 // Local type that matches the shape used in the draft page
 interface HoverPlayer {
@@ -183,7 +183,7 @@ function PlayerCardOverlay({
           <div className="h-px bg-surface-700/60 mb-2" />
           {/* Position + Ranks row */}
           <div className="flex items-center gap-2 flex-wrap mb-2">
-            <PositionBadge pos={player.position} size="md" />
+            <PositionChip pos={player.position} />
             {player.pos_rank && player.pos_rank > 0 && (
               <span className="text-[10px] text-surface-400 font-semibold">
                 {player.position}
@@ -261,7 +261,7 @@ function PlayerCardOverlay({
                   <span className="text-[9px] text-surface-600 uppercase">Eligible</span>
                   <div className="flex gap-1">
                     {player.fantasy_positions.map((pos: string) => (
-                      <PositionBadge key={pos} pos={pos} />
+                      <PositionChip key={pos} pos={pos} />
                     ))}
                   </div>
                 </div>

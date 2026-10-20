@@ -3,7 +3,8 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Search, Plus, Loader2, Zap, ListChecks, X, TrendingUp, Grid3X3, Users, Star } from "lucide-react";
 import PlayerAvatar, { STAT_LABELS } from "./PlayerAvatar";
-import PositionBadge, { POSITION_ORDER } from "./PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
+import { POSITION_ORDER } from "@/components/ui/tokens";
 import TeamCircle from "./DraftTeamCircle";
 import TeamRosterCard from "./TeamRosterCard";
 import { PickCountdownText } from "./PickCountdown";
@@ -337,7 +338,7 @@ function MobileDraftRoom({
           <div className="flex items-center gap-1.5 px-4 mt-2 text-[11px] text-surface-400 truncate">
             <span className="text-surface-600 uppercase tracking-wider font-semibold shrink-0">Last:</span>
             <span className="text-surface-200 font-medium truncate">{lastPick.player.full_name}</span>
-            <PositionBadge pos={lastPick.player.position} />
+            <PositionChip pos={lastPick.player.position} />
             <span className="text-surface-500 truncate">→ {lastPick.team.name}</span>
           </div>
         )}
@@ -361,7 +362,7 @@ function MobileDraftRoom({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-white truncate">{projected.player.full_name}</span>
-                  <PositionBadge pos={projected.player.position} />
+                  <PositionChip pos={projected.player.position} />
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-surface-400 mt-0.5">
                   <span>{projected.player.team || "FA"}</span>
@@ -530,7 +531,7 @@ function MobileDraftRoom({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-white truncate">{player.full_name}</span>
-                      <PositionBadge pos={player.position} />
+                      <PositionChip pos={player.position} />
                     </div>
                     <div className="flex items-center gap-2 text-[11px] text-surface-500 mt-0.5">
                       <span>{player.team || "FA"}</span>
@@ -649,7 +650,7 @@ function MobileDraftRoom({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-white truncate">{player.full_name}</span>
-                        <PositionBadge pos={player.position} />
+                        <PositionChip pos={player.position} />
                       </div>
                       <span className="text-xs text-surface-500">{player.team || "FA"}</span>
                     </div>

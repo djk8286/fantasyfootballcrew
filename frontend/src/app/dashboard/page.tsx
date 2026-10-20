@@ -7,7 +7,7 @@ import Link from "next/link";
 import { leaguesApi, playersApi, dashboardApi, standingsApi, nflApi, isLoggedIn } from "@/lib/api-client";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles, Flame, Radio, Bot } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
-import PositionBadge from "@/components/PositionBadge";
+import { PositionChip } from "@/components/ui/Badge";
 import RankBadge from "@/components/ui/RankBadge";
 import AdSlot from "@/components/AdSlot";
 
@@ -344,7 +344,7 @@ function TopProspectsWidget() {
                   <span className="text-sm font-medium text-white truncate">
                     {p.first_name} {p.last_name}
                   </span>
-                  <PositionBadge pos={p.position} />
+                  <PositionChip pos={p.position} />
                 </div>
                 <span className="text-surface-500 text-xs">{p.team || "FA"}</span>
                 {p.headline_stats && Object.keys(p.headline_stats).length > 0 && (
