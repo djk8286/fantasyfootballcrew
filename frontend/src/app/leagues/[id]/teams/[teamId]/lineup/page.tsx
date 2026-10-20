@@ -7,7 +7,6 @@ import Link from "next/link";
 import { lineupsApi, teamsApi, leaguesApi, nflApi, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import PositionBadge from "@/components/PositionBadge";
 import {
-  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -296,13 +295,6 @@ export default function LineupPage() {
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <Link
-                href={`/leagues/${leagueId}/teams/${teamId}`}
-                aria-label="Back to team"
-                className="text-surface-400 hover:text-white transition-colors shrink-0"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
               <div className="min-w-0">
                 <h1 className="text-lg font-bold text-white truncate">Set Lineup</h1>
                 {teamName && <span className="text-surface-400 text-xs truncate">{teamName}</span>}

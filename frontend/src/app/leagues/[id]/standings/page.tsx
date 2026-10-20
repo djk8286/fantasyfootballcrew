@@ -9,7 +9,6 @@ import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges"
 import RankBadge from "@/components/ui/RankBadge";
 import GameStatusBadge from "@/components/GameStatusBadge";
 import {
-  ChevronRight,
   Trophy,
   Users,
   Loader2,
@@ -631,17 +630,6 @@ export default function StandingsPage() {
 
   return (
     <div className="min-h-screen bg-surface-900">
-      {/* Back link */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <Link
-          href={`/leagues/${leagueId}`}
-          className="inline-flex items-center gap-1 text-surface-400 hover:text-gold-400 transition-colors text-sm"
-        >
-          <ChevronRight className="w-4 h-4 rotate-180" />
-          Back to {league?.name || "League"}
-        </Link>
-      </div>
-
       {/* Header */}
       <section className="relative overflow-hidden border-b border-surface-700">
         <div className="absolute inset-0 bg-gradient-to-b from-surface-850 via-surface-900 to-surface-900" />

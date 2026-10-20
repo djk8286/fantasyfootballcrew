@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { leaguesApi } from "@/lib/api-client";
 import { conferenceFullLabel } from "@/components/LeagueBadges";
-import { ArrowLeft, Trophy, Crown } from "lucide-react";
+import { Trophy, Crown } from "lucide-react";
 
 interface TeamRef {
   id: string;
@@ -137,9 +137,6 @@ export default function PlayoffsPage() {
     <div className="min-h-screen bg-surface-900">
       <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
-          <Link href={`/leagues/${id}`} className="text-surface-400 hover:text-white transition-colors shrink-0">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
           <h1 className="text-lg font-bold text-white flex items-center gap-2">
             <Trophy className="w-4 h-4 text-gold-400" />
             Playoffs
