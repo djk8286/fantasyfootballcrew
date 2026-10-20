@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyMove, benchIds, issuesFor, moveWarning, targetsFor, type LineupPlayer, type Slot } from "./lineup";
+import { applyMove, benchIds, issuesFor, moveWarning, projectedTotal, targetsFor, type LineupPlayer, type Slot } from "./lineup";
 
 const P = (id: string, position: string, extra: Partial<LineupPlayer> = {}): LineupPlayer => ({
   id, name: id.toUpperCase(), position, injuryStatus: null, locked: false, onBye: false, ...extra,
@@ -113,5 +113,26 @@ describe("moveWarning", () => {
   it("doesn't repeat a warning that was already there", () => {
     const withOut = slots.map((s, i) => (i === 3 ? { ...s, player_id: "wr2" } : s));
     expect(moveWarning(withOut, { kind: "bench", playerId: "qb2" }, { kind: "slot", index: 0 }, players)).toBeNull();
+  });
+});
+
+describe("projectedTotal", () => {
+  const two: Slot[] = [
+    { slot: "QB", player_id: "qb1" },
+    { slot: "RB", player_id: "rb1" },
+    { slot: "WR", player_id: null },
+  ];
+
+  it("adds up the starters and counts an unprojected starter as 0", () => {
+    expect(projectedTotal(two, { qb1: 21.4, rb1: null, wr1: 30 }, true)).toBe(21.4);
+  });
+
+  it("follows a swap", () => {
+    const swapped = applyMove(two, { kind: "bench", playerId: "rb2" }, { kind: "slot", index: 1 });
+    expect(projectedTotal(swapped, { qb1: 21.4, rb2: 9.15 }, true)).toBe(30.55);
+  });
+
+  it("is null when the week has no projections", () => {
+    expect(projectedTotal(two, {}, false)).toBeNull();
   });
 });

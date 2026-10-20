@@ -515,6 +515,8 @@ async def _sync_projections_once() -> None:
 
     Raises on failure (so run_job can record it) -- see _sync_projections_safely
     for the never-raises wrapper every call site uses."""
+    if not settings.SLEEPER_PROJECTIONS_ENABLED:
+        return
     state = await fetch_nfl_state()
     season = int(state["season"])
     week = int(state["week"])
@@ -522,6 +524,14 @@ async def _sync_projections_once() -> None:
     async with async_session() as db:
         count = await nfl_projections_service.sync_week_projections(db, season, week, season_type)
     print(f"[scheduler] Synced week {week}, {season} ({season_type}) projections for {count} players")
+    # Sleeper's state week flips early in the week, but managers set next
+    # week's lineup before that, so store the following week too.
+    if season_type == "regular" and week < 18:
+        async with async_session() as db:
+            count = await nfl_projections_service.sync_week_projections(
+                db, season, week + 1, season_type, update_players=False,
+            )
+        print(f"[scheduler] Synced week {week + 1}, {season} projections for {count} players")
 
 
 async def _sync_projections_safely() -> None:
