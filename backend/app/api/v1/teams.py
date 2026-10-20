@@ -8,6 +8,7 @@ from app.models.league import League, LeagueType
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import get_current_user, require_team_or_league_access, user_can_join_league, require_commissioner
+from app.services.standings_service import get_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
 from app.services.team_news_service import get_team_news, generate_and_save_team_news
@@ -537,11 +538,25 @@ async def bulk_add_cpu_teams(
     }
 
 
+async def _with_live_records(teams: list[Team], league_id: str, db: AsyncSession) -> list[TeamRead]:
+    """Team.wins/points_for are never written, so the record comes from
+    standings. The rows themselves are left untouched."""
+    rows = {r["team_id"]: r for r in await get_standings(league_id, db)} if teams else {}
+    out = []
+    for t in teams:
+        read = TeamRead.model_validate(t)
+        row = rows.get(t.id)
+        if row:
+            read = read.model_copy(update={k: row[k] for k in ("wins", "losses", "ties", "points_for", "points_against")})
+        out.append(read)
+    return out
+
+
 @router.get("/league/{league_id}", response_model=list[TeamRead])
 async def get_league_teams(league_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Team).where(Team.league_id == league_id))
     teams = result.scalars().all()
-    return teams
+    return await _with_live_records(list(teams), league_id, db)
 
 
 @router.get("/{team_id}", response_model=TeamRead)
@@ -550,7 +565,7 @@ async def get_team(team_id: str, db: AsyncSession = Depends(get_db)):
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    return team
+    return (await _with_live_records([team], team.league_id, db))[0]
 
 
 @router.get("/{team_id}/cap")
