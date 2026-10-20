@@ -18,6 +18,17 @@ export interface PollOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   isCancelled?: () => boolean;
+  /** Consecutive transient failures tolerated before giving up. */
+  maxTransientFailures?: number;
+}
+
+/** A poll failure worth retrying: network errors, 429 and 5xx. Under load
+ * a single slow/failed status check used to end polling with an error
+ * while the job finished server-side and only showed up under Recent. */
+export function isTransientPollError(err: unknown): boolean {
+  if (err instanceof TypeError) return true; // fetch network failure
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" && (status === 0 || status === 408 || status === 429 || status >= 500);
 }
 
 /** Poll `fetchStatus` until the job is done/error or `timeoutMs` passes.
@@ -28,14 +39,41 @@ export async function pollJob(fetchStatus: () => Promise<JobStatus>, opts: PollO
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = opts.now ?? (() => Date.now());
   const deadline = now() + timeoutMs;
+  const maxTransient = opts.maxTransientFailures ?? 5;
+  let failures = 0;
   for (;;) {
     if (opts.isCancelled?.()) return null;
-    const s = await fetchStatus();
+    let s: JobStatus;
+    try {
+      s = await fetchStatus();
+      failures = 0;
+    } catch (err) {
+      if (!isTransientPollError(err) || ++failures > maxTransient || now() + intervalMs > deadline) throw err;
+      await sleep(intervalMs);
+      continue;
+    }
     if (s.status === "done") return s.analysis ?? "";
     if (s.status === "error") throw new Error(s.error || "The analysis failed. Please try again.");
     if (now() + intervalMs > deadline) throw new JobTimeoutError();
     await sleep(intervalMs);
   }
+}
+
+// One poller per job id, shared by every caller: the page's submit and its
+// navigate-back restore can't run two loops for the same job, and a
+// remount picks up the poll already in flight instead of starting over.
+const inflight = new Map<string, Promise<string | null>>();
+
+export function pollJobShared(
+  jobId: string,
+  fetchStatus: () => Promise<JobStatus>,
+  opts: Omit<PollOptions, "isCancelled"> = {},
+): Promise<string | null> {
+  const existing = inflight.get(jobId);
+  if (existing) return existing;
+  const p = pollJob(fetchStatus, opts).finally(() => inflight.delete(jobId));
+  inflight.set(jobId, p);
+  return p;
 }
 
 // A pending lineup job survives navigating away and back (sessionStorage).

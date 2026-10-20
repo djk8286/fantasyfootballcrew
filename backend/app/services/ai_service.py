@@ -155,6 +155,10 @@ MESSAGE_TYPE_INSTRUCTIONS: Dict[str, str] = {
 LINEUP_ANALYSIS_PROMPT = """
 You are an expert fantasy football analyst. Analyze the following lineup and matchups:
 
+**This League's Starting Lineup Slots (slot: count):**
+{roster_slots}
+Recommend starters for exactly these slots, no more and no fewer. FLEX takes RB/WR/TE, SUPERFLEX takes QB/RB/WR/TE, IDP_FLEX takes DL/LB/DB. Do not assume any other format. Players whose injury_status is Out, IR, PUP, Sus or NA should not be started when a healthy option exists.
+
 **Your Team Roster:**
 {roster}
 
@@ -748,9 +752,12 @@ class AIService:
         coaching_staff: Optional[list] = None,
         salary_context: Optional[dict] = None,
         partner_context: Optional[dict] = None,
+        roster_slots: Optional[Dict[str, int]] = None,
     ) -> str:
-        """Analyze and optimize a user's lineup."""
+        """Analyze and optimize a user's lineup. roster_slots is the
+        league's configured starting slots."""
         prompt = LINEUP_ANALYSIS_PROMPT.format(
+            roster_slots=json.dumps(roster_slots or {}, indent=2),
             roster=json.dumps(roster, indent=2),
             opponent_roster=json.dumps(opponent_roster, indent=2),
             player_matchups=json.dumps(matchups, indent=2),

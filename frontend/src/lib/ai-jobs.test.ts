@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pollJob, JobTimeoutError, savePendingJob, loadPendingJob, clearPendingJob, type JobStatus } from "./ai-jobs";
+import { pollJob, pollJobShared, JobTimeoutError, savePendingJob, loadPendingJob, clearPendingJob, type JobStatus } from "./ai-jobs";
 
 function fakeClock() {
   let t = 0;
@@ -55,5 +55,53 @@ describe("pending job persistence", () => {
     savePendingJob({ jobId: "j2", leagueId: "l", teamId: "t", startedAt: 0 }, s);
     clearPendingJob(s);
     expect(loadPendingJob(s, 1)).toBeNull();
+  });
+});
+
+describe("pollJob transient failures", () => {
+  const err = (status: number) => Object.assign(new Error(`HTTP ${status}`), { status });
+
+  it("keeps polling through 5xx/429/network errors and still returns the result", async () => {
+    const seq: (JobStatus | Error)[] = [
+      { job_id: "j", status: "pending" }, err(502), new TypeError("Failed to fetch"), err(429),
+      { job_id: "j", status: "done", analysis: "Start Bijan." },
+    ];
+    const c = fakeClock();
+    const fetch = async () => { const x = seq.shift()!; if (x instanceof Error) throw x; return x; };
+    await expect(pollJob(fetch, c)).resolves.toBe("Start Bijan.");
+  });
+
+  it("does not retry a 404 (expired) or 403", async () => {
+    for (const status of [404, 403]) {
+      let calls = 0;
+      const c = fakeClock();
+      await expect(pollJob(async () => { calls++; throw err(status); }, c)).rejects.toMatchObject({ status });
+      expect(calls).toBe(1);
+    }
+  });
+
+  it("gives up after too many consecutive transient failures", async () => {
+    let calls = 0;
+    const c = fakeClock();
+    await expect(pollJob(async () => { calls++; throw err(503); }, { ...c, maxTransientFailures: 3 })).rejects.toMatchObject({ status: 503 });
+    expect(calls).toBe(4);
+  });
+});
+
+describe("pollJobShared", () => {
+  it("runs one poller per job id for concurrent callers", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const fetch = async (): Promise<JobStatus> => { calls++; await gate; return { job_id: "s", status: "done", analysis: "ok" }; };
+    const a = pollJobShared("s", fetch);
+    const b = pollJobShared("s", fetch);
+    expect(b).toBe(a);
+    release();
+    await expect(Promise.all([a, b])).resolves.toEqual(["ok", "ok"]);
+    expect(calls).toBe(1);
+    // Settled jobs are forgotten, so a new run with a new id polls again.
+    await expect(pollJobShared("s", fetch)).resolves.toBe("ok");
+    expect(calls).toBe(2);
   });
 });

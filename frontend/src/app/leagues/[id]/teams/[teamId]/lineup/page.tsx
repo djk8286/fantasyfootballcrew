@@ -23,6 +23,7 @@ import {
   type Pick,
   type Slot,
 } from "@/lib/lineup";
+import { initialWeek, withWeekParam } from "@/lib/current-week";
 
 interface Game {
   opponent: string;
@@ -207,8 +208,7 @@ export default function LineupPage() {
   const params = useParams();
   const leagueId = params.id as string;
   const teamId = params.teamId as string;
-  const year = CURRENT_YEAR;
-
+  const [year, setYear] = useState(CURRENT_YEAR);
   const [week, setWeek] = useState<number | null>(null);
   const [seasonNotStarted, setSeasonNotStarted] = useState(false);
   const [data, setData] = useState<LineupResponse | null>(null);
@@ -228,12 +228,23 @@ export default function LineupPage() {
       const draftStatus = (l as { draft_status?: string } | null)?.draft_status;
       const notStarted = !!draftStatus && draftStatus !== "completed";
       setSeasonNotStarted(notStarted);
-      setWeek(notStarted || !s?.week ? 1 : Math.min(18, Math.max(1, s.week)));
+      if (s?.season) setYear(s.season);
+      setWeek(
+        initialWeek({ param: new URLSearchParams(window.location.search).get("week"), state: s, draftComplete: !notStarted }),
+      );
     });
     return () => {
       live = false;
     };
   }, [leagueId]);
+
+  // Keep the shown week in the URL (?week=) so a reload or a shared link
+  // opens the same week instead of snapping back to the live one.
+  useEffect(() => {
+    if (week === null) return;
+    const next = withWeekParam(window.location.search, week);
+    if (next !== window.location.search) window.history.replaceState(window.history.state, "", next);
+  }, [week]);
 
   useEffect(() => {
     if (week === null) return;

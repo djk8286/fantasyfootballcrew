@@ -15,6 +15,9 @@ inferred, same discipline scheduler.py already applies to Sleeper
 stats syncing -- a preseason Week 1 and a regular-season Week 1 must
 never collide under the same (week, year) key.
 """
+import asyncio
+import time
+
 import httpx
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,6 +114,11 @@ async def sync_week_scoreboard(year: int, week: int, season_type: int, db: Async
     same real games, so the response is the source of truth, the
     request params are just "which week to fetch")."""
     data = await fetch_week_scoreboard(year, week, season_type)
+    return await store_week_scoreboard(data, year, week, season_type, db)
+
+
+async def store_week_scoreboard(data: dict, year: int, week: int, season_type: int, db: AsyncSession) -> int:
+    """Upsert one ESPN scoreboard response (see sync_week_scoreboard)."""
     resolved_year = data.get("season", {}).get("year", year)
     resolved_week = data.get("week", {}).get("number", week)
     resolved_season_type = data.get("season", {}).get("type", season_type)
@@ -138,6 +146,44 @@ async def sync_week_scoreboard(year: int, week: int, season_type: int, db: Async
 
     await db.commit()
     return synced
+
+
+# (year, week, season_type) -> monotonic time of the last on-demand fetch,
+# so a week ESPN has nothing for isn't refetched on every page load.
+_ensure_attempts: dict[tuple[int, int, int], float] = {}
+ENSURE_RETRY_S = 600.0
+# Tests turn this off (conftest) so no test reaches ESPN.
+ON_DEMAND_SYNC = True
+
+
+async def ensure_week_games(year: int, week: int, season_type: int, db: AsyncSession) -> list[NFLGame]:
+    """get_week_games, syncing the week from ESPN first if nothing is stored.
+
+    The scheduler only syncs the live week (and the next one), so a lineup
+    opened for any other week used to find no games: every GAME cell showed
+    "-" and nobody counted as on bye. A failed or empty fetch is retried at
+    most every ENSURE_RETRY_S; errors are swallowed (the page still works,
+    just without game info)."""
+    games = await get_week_games(year, week, season_type, db)
+    if games or not ON_DEMAND_SYNC or not (1 <= week <= 18):
+        return games
+    key = (year, week, season_type)
+    now = time.monotonic()
+    last = _ensure_attempts.get(key)
+    if last is not None and now - last < ENSURE_RETRY_S:
+        return games
+    _ensure_attempts[key] = now
+    try:
+        data = await asyncio.wait_for(fetch_week_scoreboard(year, week, season_type), timeout=20)
+    except Exception as e:  # network/ESPN failure: show the page without games
+        print(f"[nfl_schedule] on-demand fetch of {year} week {week} failed: {e}")
+        return games
+    resolved = data.get("week", {}).get("number", week)
+    if resolved != week:
+        # ESPN answered with a different week; store nothing under the wrong number.
+        return games
+    await store_week_scoreboard(data, year, week, season_type, db)
+    return await get_week_games(year, week, season_type, db)
 
 
 async def get_week_games(year: int, week: int, season_type: int, db: AsyncSession) -> list[NFLGame]:

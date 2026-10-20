@@ -22,6 +22,8 @@ from app.services.ai_history_service import record_analysis, get_analysis_histor
 from app.services import ai_jobs, ai_cost_service
 from app.models.ai_usage_event import AIUsageEvent
 from app.services.scheduler import fetch_nfl_state
+from app.services.default_lineup import league_roster_slots
+from app.services.scoring_engine import DEFAULT_ROSTER_SLOTS
 from app.services.team_comparison_service import build_team_trend
 from app.services.player_comparison_service import build_player_profile
 from app.api.deps import get_current_user, require_league_participant
@@ -90,7 +92,10 @@ async def _roster_summary(team: Team, db: AsyncSession) -> dict:
     result = await db.execute(select(Player).where(Player.id.in_(team.roster)))
     players = result.scalars().all()
     return {
-        p.id: {"name": f"{p.first_name} {p.last_name}", "position": p.position, "team": p.team}
+        p.id: {
+            "name": f"{p.first_name} {p.last_name}", "position": p.position, "team": p.team,
+            "injury_status": p.injury_status,
+        }
         for p in players
     }
 
@@ -222,6 +227,14 @@ async def _load_owned_team(body: "LineupAnalysisRequest", db: AsyncSession, curr
     return team, league_result.scalar_one_or_none()
 
 
+def league_starting_slots(league: League | None) -> dict[str, int]:
+    """The league's configured starting slots (zero-count slots dropped),
+    in lineup order. Without these the model assumed a generic format
+    (QA 2026-10-19: "the recommendation assumes a common format")."""
+    slots = league_roster_slots(league) if league else dict(DEFAULT_ROSTER_SLOTS)
+    return {k: int(v) for k, v in slots.items() if int(v or 0) > 0}
+
+
 async def _lineup_prompt_inputs(team: Team, league: League | None, db: AsyncSession) -> dict:
     """Everything analyze_lineup needs, gathered from the DB up front so the
     (slow) LLM call itself can run without holding a request open."""
@@ -234,6 +247,7 @@ async def _lineup_prompt_inputs(team: Team, league: League | None, db: AsyncSess
     opponent_roster, matchups = await _current_matchup_context(team, league, db)
     return dict(
         roster=roster, opponent_roster=opponent_roster, matchups=matchups,
+        roster_slots=league_starting_slots(league),
         scoring=(league.scoring_config if league else None) or {},
         coaching_staff=coaching_staff, salary_context=salary_context,
         partner_context=partner_context,

@@ -1,6 +1,8 @@
 // Always same-origin: /api/* is proxied to the backend by src/proxy.ts,
 // so the HttpOnly auth cookies are first-party. (NEXT_PUBLIC_API_URL is no
 // longer used for API calls; it only feeds the CSP in next.config.ts.)
+import { getCurrentNflState } from "./current-week";
+
 const API_BASE_URL = "";
 
 interface ApiOptions {
@@ -699,8 +701,16 @@ export const standingsApi = {
 // single source every page uses to decide which week's scores to show
 // by default.
 export const nflApi = {
-  getCurrentWeek: () =>
-    apiRequest<{ season: number; week: number; season_type: string }>("/api/v1/nfl/current-week"),
+  // Shared and cached (src/lib/current-week.ts): every page asking for the
+  // current week gets the same answer from one request. Rejects on failure
+  // like before, so existing .catch(() => null) callers are unchanged.
+  getCurrentWeek: async () => {
+    const s = await getCurrentNflState(() =>
+      apiRequest<{ season: number; week: number; season_type: string }>("/api/v1/nfl/current-week"),
+    );
+    if (!s) throw new Error("Couldn't load the current NFL week");
+    return s as { season: number; week: number; season_type: string };
+  },
 };
 
 // AI

@@ -21,6 +21,7 @@ import {
 import { getCurrentUserId, isLoggedIn, leaguesApi, nflApi, teamsApi } from "@/lib/api-client";
 import { activeTabId, findMyTeamId, leagueTabs, type LeagueTabId } from "@/lib/league-nav";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { switcherLabels } from "@/lib/league-label";
 
 const ICONS: Record<LeagueTabId, LucideIcon> = {
   home: Home,
@@ -36,6 +37,7 @@ const ICONS: Record<LeagueTabId, LucideIcon> = {
 interface ShellLeague {
   id: string;
   name: string;
+  created_at?: string | null;
   commissioner_id?: string;
   co_commissioner_ids?: string[] | null;
 }
@@ -43,7 +45,7 @@ interface ShellLeague {
 interface ShellData {
   league: ShellLeague | null;
   myTeamId: string | null;
-  myLeagues: { id: string; name: string }[];
+  myLeagues: { id: string; name: string; created_at?: string | null }[];
   week: { week: number; season_type: string } | null;
 }
 
@@ -61,7 +63,7 @@ async function loadShell(leagueId: string): Promise<ShellData> {
   const [league, teams, myLeagues, week] = await Promise.all([
     leaguesApi.get(leagueId).catch(() => null) as Promise<ShellLeague | null>,
     (teamsApi.getByLeague(leagueId) as Promise<{ id: string; owner_id?: string | null; co_owner_id?: string | null }[]>).catch(() => []),
-    isLoggedIn() ? (leaguesApi.list({ mine: true }) as Promise<{ id: string; name: string }[]>).catch(() => []) : Promise.resolve([]),
+    isLoggedIn() ? (leaguesApi.list({ mine: true }) as Promise<ShellData["myLeagues"]>).catch(() => []) : Promise.resolve([]),
     nflApi.getCurrentWeek().catch(() => null),
   ]);
   return {
@@ -116,7 +118,8 @@ export default function LeagueShell({ leagueId, children }: { leagueId: string; 
   const userId = getCurrentUserId();
   const isManager =
     !!userId && !!data?.league && (data.league.commissioner_id === userId || (data.league.co_commissioner_ids || []).includes(userId));
-  const otherLeagues = (data?.myLeagues ?? []).filter((l) => l.id !== leagueId);
+  const labels = data?.league ? switcherLabels(data.league, data.myLeagues) : null;
+  const otherLeagues = labels?.others ?? [];
   const secondary = tabs.filter((t) => !t.primary);
   const moreActive = secondary.some((t) => t.id === active);
   const week = weekLabel(data?.week ?? null);
@@ -136,12 +139,12 @@ export default function LeagueShell({ leagueId, children }: { leagueId: string; 
                     aria-haspopup="menu"
                     className="flex min-w-0 items-center gap-1.5 rounded-control px-1 py-1 text-sm font-semibold text-ink-100 hover:bg-ink-800"
                   >
-                    <span className="truncate">{data.league.name}</span>
+                    <span className="truncate">{labels?.current ?? data.league.name}</span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" aria-hidden />
                   </button>
                 ) : (
                   <Link href={`/leagues/${leagueId}`} className="block truncate px-1 text-sm font-semibold text-ink-100">
-                    {data.league.name}
+                    {labels?.current ?? data.league.name}
                   </Link>
                 )
               ) : (
@@ -151,7 +154,7 @@ export default function LeagueShell({ leagueId, children }: { leagueId: string; 
                 <div role="menu" className="absolute left-0 top-full z-50 mt-1 w-64 rounded-card border border-ink-700 bg-ink-900 p-1 shadow-xl">
                   <div className="flex items-center gap-2 rounded-control px-3 py-2 text-sm text-ink-100">
                     <Check className="h-4 w-4 text-ink-400" aria-hidden />
-                    <span className="truncate">{data.league.name}</span>
+                    <span className="truncate">{labels?.current ?? data.league.name}</span>
                   </div>
                   {otherLeagues.map((l) => (
                     <Link
@@ -160,7 +163,7 @@ export default function LeagueShell({ leagueId, children }: { leagueId: string; 
                       href={`/leagues/${l.id}`}
                       className="block truncate rounded-control py-2 pl-9 pr-3 text-sm text-ink-300 hover:bg-ink-800 hover:text-ink-100"
                     >
-                      {l.name}
+                      {l.label}
                     </Link>
                   ))}
                 </div>

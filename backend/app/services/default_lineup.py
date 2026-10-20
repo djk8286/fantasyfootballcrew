@@ -12,8 +12,9 @@ at the week being scored:
 1. Players whose NFL team has no game that week (bye) are skipped, when
    that week's NFL schedule is known.
 2. Players ruled out (Out, IR, PUP, suspended, NA) are skipped when the
-   caller asks for it, which calculate_week does only before the week's
-   first kickoff. A historical recompute can't know a player's status
+   caller asks for it, which calculate_week and the lineup page do for
+   any week not yet final (a default already frozen at kickoff is kept
+   as is). A recompute of a finished week can't know a player's status
    back then, so it doesn't filter on injury.
 3. The rest are ranked by fantasy points from this season's weeks
    strictly before the scored week (the same season stats the lineup

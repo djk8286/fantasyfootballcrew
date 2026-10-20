@@ -259,20 +259,32 @@ def _effective_matchups(league: Optional[League], teams: List[Team], week: int) 
     return matchups
 
 
-async def week_schedule_state(year: int, week: int, db: AsyncSession) -> Tuple[Optional[set], bool]:
-    """(teams_playing, week_started) for a regular-season NFL week.
+async def week_schedule_state(year: int, week: int, db: AsyncSession, with_final: bool = False):
+    """(teams_playing, week_started) for a regular-season NFL week, plus
+    week_final when with_final is set.
 
     teams_playing is None when no games are synced for the week, so
     nobody is treated as on bye. week_started is True once any game has
     kicked off, or when the schedule isn't known at all (then a default
-    lineup is frozen the first time it's computed)."""
+    lineup is frozen the first time it's computed). week_final is True
+    only when the schedule is known and every game is completed.
+
+    A default lineup built fresh (nothing frozen yet) skips ruled-out
+    players unless week_final: injury statuses are current, so they're
+    right for any week still being played, including one that started
+    before the team existed (a league drafted mid-week used to start Out
+    players because "started" turned the filter off). Only a recompute
+    of a finished week, where today's status says nothing about back
+    then, leaves it off."""
     games = await get_week_games(year, week, 2, db)
     if not games:
-        return None, True
+        return (None, True, False) if with_final else (None, True)
     teams_playing = {code for g in games for code in game_teams(g)}
     now = datetime.now(timezone.utc)
     started = any(game_started(g, now) for g in games)
-    return teams_playing, started
+    if not with_final:
+        return teams_playing, started
+    return teams_playing, started, all(g.completed for g in games)
 
 
 async def calculate_week(
@@ -370,7 +382,7 @@ async def calculate_week(
         )
     )
     existing_by_team = {ws.team_id: ws for ws in existing_result.scalars().all()}
-    teams_playing, week_started = (None, True) if is_best_ball else await week_schedule_state(year, week, db)
+    teams_playing, week_started, week_final = (None, True, False) if is_best_ball else await week_schedule_state(year, week, db, with_final=True)
     roster_slots_cfg = league_roster_slots(league)
 
     # Batch load player data ONCE for the whole league -- position,
@@ -453,7 +465,7 @@ async def calculate_week(
                 default_starter_ids = choose_default_starters(
                     candidates, roster_slots_cfg, scoring_config,
                     teams_playing=teams_playing,
-                    exclude_inactive=not week_started,
+                    exclude_inactive=not week_final,
                 )
             roster_ids = default_starter_ids
             if team.is_cpu and week_started:

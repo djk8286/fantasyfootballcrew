@@ -31,7 +31,7 @@ from app.services.lineup_slots import (
     starters_of,
     validate_slots,
 )
-from app.services.nfl_schedule_service import as_utc, game_started, game_teams, get_week_games
+from app.services.nfl_schedule_service import as_utc, ensure_week_games, game_started, game_teams
 from app.models.nfl_game import NFLGame
 from datetime import datetime, timezone
 
@@ -97,7 +97,7 @@ class WeekGames:
 
 
 async def load_week_games(year: int, week: int, db: AsyncSession) -> WeekGames:
-    return WeekGames(await get_week_games(year, week, 2, db), datetime.now(timezone.utc))
+    return WeekGames(await ensure_week_games(year, week, 2, db), datetime.now(timezone.utc))
 
 
 def _last_week_points(player: Player, week: int, year: int, scoring_config: dict) -> float | None:
@@ -178,7 +178,7 @@ async def _current_lineup(
             slots, unplaced = place_starters(starters, positions, roster_slots)
         return CurrentLineup(True, starters, slots, unplaced, [])
 
-    teams_playing, week_started = await week_schedule_state(year, week, db)
+    teams_playing, week_started, week_final = await week_schedule_state(year, week, db, with_final=True)
     ws = (await db.execute(select(WeeklyScore).where(
         WeeklyScore.team_id == team.id, WeeklyScore.week == week, WeeklyScore.year == year,
     ))).scalar_one_or_none()
@@ -190,7 +190,7 @@ async def _current_lineup(
         default_starters = choose_default_starters(
             [candidate_from_player(p, week, year) for p in roster],
             roster_slots, league.scoring_config or {},
-            teams_playing=teams_playing, exclude_inactive=not week_started,
+            teams_playing=teams_playing, exclude_inactive=not week_final,
         )
     slots, unplaced = place_starters(default_starters, positions, roster_slots)
     return CurrentLineup(False, default_starters, slots, unplaced, default_starters)
