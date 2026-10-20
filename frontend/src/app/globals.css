@@ -39,6 +39,56 @@
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Redesign tokens (plans/redesign.md section 3). The gold-* and
+     surface-* scales above stay until every page has moved over. Gold is
+     reserved for the primary action and for "you". */
+  --color-ink-950: #08090b;
+  --color-ink-900: #0e1014;
+  --color-ink-850: #13161b;
+  --color-ink-800: #191d24;
+  --color-ink-700: #242934;
+  --color-ink-600: #323846;
+  --color-ink-400: #8b93a3;
+  --color-ink-300: #aeb5c2;
+  --color-ink-100: #e7e9ee;
+
+  --color-gold: #d4af37;
+  --color-gold-hi: #e6c55a;
+
+  --color-win: #34d399;
+  --color-loss: #f87171;
+  --color-warn: #fbbf24;
+  --color-live: #fb7185;
+
+  --color-pos-qb: #f87171;
+  --color-pos-rb: #34d399;
+  --color-pos-wr: #60a5fa;
+  --color-pos-te: #fb923c;
+  --color-pos-flex: #a1a1aa;
+  --color-pos-k: #c084fc;
+  --color-pos-def: #94a3b8;
+  --color-pos-idp: #2dd4bf;
+
+  --text-label: 11px;
+  --text-label--line-height: 16px;
+  --text-label--letter-spacing: 0.08em;
+  --text-row: 15px;
+  --text-row--line-height: 20px;
+  --text-title: 28px;
+  --text-title--line-height: 34px;
+  --text-score: 32px;
+  --text-score--line-height: 36px;
+
+  --radius-card: 12px;
+  --radius-control: 6px;
+  --radius-chip: 4px;
+}
+
+/* Every score, total and record renders through this so columns line up. */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Base styles */

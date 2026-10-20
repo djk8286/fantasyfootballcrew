@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "dev:all": "concurrently --kill-others -n api,web \"npm:dev:api\" \"npm:dev\"",
-    "dev:api": "node scripts/dev-api.mjs"
+    "dev:api": "node scripts/dev-api.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.70.0",
@@ -27,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }
