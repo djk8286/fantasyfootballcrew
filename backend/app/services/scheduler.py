@@ -38,14 +38,14 @@ import json
 from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
-from app.core.database import async_session
+from app.core.database import async_session, background_session as draft_session
 from app.services.sleeper_sync import sync_players_to_db, sync_weekly_stats, fetch_weekly_stats, rebuild_season_stats_from_weeks, SLEEPER_API
 from app.services.standings_service import calculate_week, notify_matchup_results, repair_default_lineup_scores
 from app.services.playoff_service import process_league_playoffs
 from app.services.guillotine_service import process_league_guillotine
 from app.services.best_ball_service import get_best_ball_settings, is_window_open
 from app.services.waiver_service import process_league_waivers
-from app.services.draft_manager import get_draft_state, get_next_pick_for_team, make_pick
+from app.services.draft_manager import advance_draft_if_due
 from app.models.league import League, DraftStatus, LeagueType
 from app.models.draft import Draft, DraftRunStatus
 from app.core.config import settings
@@ -543,65 +543,42 @@ async def _sync_current_week_scoreboard_once(season: int, week: int) -> None:
 
 
 DRAFT_TIMER_CHECK_INTERVAL = 1  # (was 5) also drives CPU picks now -- seconds -- tight enough that a timer expiring mid-draft doesn't visibly stall
+# Hard cap on one draft's pick attempt, so one stuck draft can't hold up
+# the watchdog loop for every other draft.
+DRAFT_PICK_ATTEMPT_TIMEOUT_S = 20
 
 
 async def _process_expired_draft_picks_once() -> None:
     """Server-authoritative draft advancement -- runs whether or not any
-    browser tab is open:
-      - CPU (or ownerless) team on the clock: picks once
-        settings.CPU_PICK_DELAY_S has elapsed (QA round 2 -- these used to
-        wait for a browser tab to fire /auto-pick, which was rate-limited
-        and polled every 5s, so CPU picks took ~20s each and stalled
-        entirely with no tab open);
-      - human team whose pick timer expired: forces an auto-pick (queue
-        first, then AI ranking) exactly as before.
-    Paused drafts are skipped. Each pick goes through make_pick's
-    CAS-protected path, so racing a human pick or another worker just
-    loses cleanly. One draft's failure can't block the others."""
-    async with async_session() as db:
+    browser tab is open. The rules (CPU delay, autopick, pick-clock expiry,
+    pause) and the double-pick guarantees live in
+    draft_manager.advance_draft_if_due; this just finds in-progress drafts
+    and gives each one its own session (on the dedicated background pool,
+    see database.background_session), so one draft's failure -- or a busy
+    request pool -- can't block the others."""
+    async with draft_session() as db:
         result = await db.execute(
-            select(Draft).where(
+            select(Draft.id).where(
                 Draft.status == DraftRunStatus.IN_PROGRESS,
                 Draft.is_paused == False,  # noqa: E712
                 Draft.current_pick_started_at.isnot(None),
             )
         )
-        drafts = result.scalars().all()
+        draft_ids = [row[0] for row in result.all()]
 
-        now = datetime.now(timezone.utc)
-        forced = 0
-        for draft in drafts:
-            started_at = draft.current_pick_started_at
-            if started_at.tzinfo is None:
-                started_at = started_at.replace(tzinfo=timezone.utc)
-            elapsed = (now - started_at).total_seconds()
-            if elapsed < settings.CPU_PICK_DELAY_S:
-                continue
-            try:
-                # Cheap current-team lookup straight from the draft row (same
-                # formula make_pick uses) -- not get_draft_state, whose
-                # full-pool ranking is too heavy to run every second.
-                order = json.loads(draft.team_order or "[]")
-                num_teams = len(order) // max(1, draft.total_rounds)
-                idx = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
-                if num_teams == 0 or idx >= len(order):
-                    continue
-                team_id = order[idx]
-                team = await db.get(Team, team_id)
-                is_cpu_turn = team is not None and (team.is_cpu or not team.owner_id)
-                timer_expired = draft.timer_seconds > 0 and elapsed >= draft.timer_seconds
-                if not (is_cpu_turn or timer_expired):
-                    continue
-                player = await get_next_pick_for_team(db, draft.id, team_id)
-                if not player:
-                    continue
-                await make_pick(db, draft.id, team_id, player.id)
+    forced = 0
+    for draft_id in draft_ids:
+        try:
+            async with draft_session() as db:
+                pick = await asyncio.wait_for(advance_draft_if_due(db, draft_id), DRAFT_PICK_ATTEMPT_TIMEOUT_S)
+            if pick is not None:
                 forced += 1
-            except ValueError:
-                # Lost race / draft finished or paused meanwhile -- fine.
-                pass
-            except Exception as e:
-                print(f"[draft_timer] auto-pick failed for draft {draft.id}: {e}")
+        except ValueError:
+            # Lost race (a human or another worker picked first) / draft
+            # finished or paused meanwhile -- nothing changed, fine.
+            pass
+        except Exception as e:
+            print(f"[draft_timer] auto-pick failed for draft {draft_id}: {type(e).__name__}: {e}")
 
     if forced:
         print(f"[draft_timer] Made {forced} server-side auto-pick(s)")
