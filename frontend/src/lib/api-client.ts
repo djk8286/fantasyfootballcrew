@@ -498,10 +498,10 @@ export const notificationsApi = {
 export const lineupsApi = {
   get: (teamId: string, week: number, year: number) =>
     apiRequest(`/api/v1/teams/${teamId}/lineup?week=${week}&year=${year}`),
-  set: (teamId: string, week: number, year: number, starters: string[]) =>
+  setSlots: (teamId: string, week: number, year: number, slots: { slot: string; player_id: string | null }[]) =>
     apiRequest(`/api/v1/teams/${teamId}/lineup?week=${week}&year=${year}`, {
       method: "PUT",
-      body: { starters },
+      body: { slots },
     }),
   optimize: (teamId: string, week: number, year: number) =>
     apiRequest(`/api/v1/teams/${teamId}/lineup/optimize?week=${week}&year=${year}`, {
