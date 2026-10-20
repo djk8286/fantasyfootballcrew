@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { draftsApi } from "@/lib/api-client";
+import { draftsApi, getCurrentUserId } from "@/lib/api-client";
+import Toast, { useToast } from "@/components/Toast";
 import {
   Trophy,
   Users,
@@ -170,7 +171,12 @@ export default function DraftPage() {
 
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [loading, setLoading] = useState(true);
+  // Action errors (pick/sim/pause failures). Kept separate from loadError
+  // so the background poll can't wipe them a second after they appear --
+  // which is why a failed "Auto-Pick All" used to look like it did nothing.
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const { toast, showToast, clearToast } = useToast();
   const [actionLoading, setActionLoading] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [positionFilter, setPositionFilter] = useState("ALL");
@@ -255,27 +261,43 @@ export default function DraftPage() {
   const [showQueue, setShowQueue] = useState(false);
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
 
-  // Mobile draft room's "auto-pick for me" toggle -- session-only (not
-  // persisted), off by default. When on, treats the user's own team like
-  // a CPU team the instant it's their turn: picks the top of their queue
-  // if they have one queued, otherwise defers to the same backend
-  // auto-pick the CPU teams already use.
+  // Autopick toggle -- server-persisted per team and draft (2026-10-19;
+  // it used to be tab state that reset to Off on every reload). The
+  // server's draft watchdog does the picking: ON = pick as soon as you're
+  // on the clock (queue first); OFF = wait for your clock, which the
+  // server enforces too -- an expired clock is autopicked either way.
   const [autoPickForMe, setAutoPickForMe] = useState(false);
 
-  // Load claimed team from localStorage on mount (backend claimed_teams is read on each fetchState)
+  const clearedTeamRef = useRef(false);
+  // Which team is "mine": this browser's saved choice for the league if
+  // it's a team in this draft, otherwise the team the signed-in user
+  // actually owns or co-owns. The ownership fallback is what carries the
+  // team into the live room even when nothing was saved locally.
   useEffect(() => {
     if (!draft) return;
+    let localTeamId: string | null = null;
     try {
       const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
-      const localTeamId = stored[draft.draft.league_id];
-      if (localTeamId) {
-        setMyTeamId(localTeamId);
-      }
+      localTeamId = stored[draft.draft.league_id] || null;
     } catch {}
-  }, [draft?.draft?.league_id]);
+    if (localTeamId && draft.teams[localTeamId]) {
+      setMyTeamId((prev) => prev ?? localTeamId);
+      return;
+    }
+    if (clearedTeamRef.current) return; // the user explicitly un-claimed
+    const me = getCurrentUserId();
+    if (!me) return;
+    const owned = Object.entries(draft.teams).find(([, t]) => t.owner_id === me || t.co_owner_id === me);
+    if (owned) setMyTeamId((prev) => prev ?? owned[0]);
+  }, [draft?.draft?.league_id, draft?.teams]);
 
+  // Selecting a team always selects it -- it no longer toggles off when
+  // you click your already-highlighted team (QA 2026-10-19: picking your
+  // own pre-selected team on Draft Ready silently un-claimed it, so the
+  // live room asked you to claim a team again). Clearing is explicit.
   const claimTeam = (teamId: string) => {
     if (!draft?.draft?.league_id) return;
+    clearedTeamRef.current = false;
     const userTeams = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
     userTeams[draft.draft.league_id] = teamId;
     localStorage.setItem("ffc_user_teams", JSON.stringify(userTeams));
@@ -284,6 +306,7 @@ export default function DraftPage() {
 
   const unclaimTeam = () => {
     if (!draft?.draft?.league_id) return;
+    clearedTeamRef.current = true;
     const userTeams = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
     delete userTeams[draft.draft.league_id];
     localStorage.setItem("ffc_user_teams", JSON.stringify(userTeams));
@@ -327,13 +350,20 @@ export default function DraftPage() {
     try {
       const state = await draftsApi.getState(id);
       setDraft(state as DraftState);
-      setError("");
+      setLoadError("");
     } catch {
-      setError("Draft not found. Create a draft from your league page.");
+      setLoadError("Draft not found. Create a draft from your league page.");
     } finally {
       setLoading(false);
     }
   }, [id]);
+
+  // Auto-dismiss action errors after a while (they're also dismissable).
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(""), 8000);
+    return () => clearTimeout(t);
+  }, [error]);
 
   useEffect(() => {
     fetchState();
@@ -377,7 +407,8 @@ export default function DraftPage() {
       if (draft?.current_team_id && myTeamIds.has(draft.current_team_id)) {
         setError("You're on the clock — make your pick first.");
       } else {
-        await draftsApi.runMock(id, skipIds.length > 0 ? skipIds : undefined);
+        const res = await draftsApi.runMock(id, skipIds.length > 0 ? skipIds : undefined);
+        if (res?.total_picks) showToast(`Simmed ${res.total_picks} pick${res.total_picks === 1 ? "" : "s"}`);
       }
       await fetchState();
     } catch (err: unknown) {
@@ -390,7 +421,12 @@ export default function DraftPage() {
     if (!window.confirm("Auto-draft every remaining pick, including your own?")) return;
     setActionLoading("mock-all");
     try {
-      await draftsApi.runMock(id);
+      const res = await draftsApi.runMock(id);
+      showToast(
+        res?.status === "completed"
+          ? `Auto-drafted ${res.total_picks} pick${res.total_picks === 1 ? "" : "s"} — draft complete`
+          : `Auto-drafted ${res?.total_picks ?? 0} pick${res?.total_picks === 1 ? "" : "s"}`,
+      );
       await fetchState();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Auto-pick failed");
@@ -414,19 +450,29 @@ export default function DraftPage() {
   // stays a stable reference across renders that don't actually need a
   // new one -- part of what lets PlayerPool/MobileDraftRoom's React.memo
   // actually skip re-rendering the player list on unrelated state changes.
+  // Confirms the moment the server accepts the pick (toast), then refreshes
+  // the board in the background -- the spinner used to wait for a full
+  // state refetch on top of the pick (7-10 s under load, no feedback).
+  const draftRef = useRef<DraftState | null>(null);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
   const handleMakePick = useCallback(async (playerId: string) => {
+    const draft = draftRef.current;
     if (!draft?.current_team_id) return;
+    const pickNumber = (draft.draft.current_round - 1) * draft.draft.num_teams + draft.draft.current_pick;
     setActionLoading("pick");
     try {
-      await draftsApi.makePick(id, draft.current_team_id, playerId);
+      const res = await draftsApi.makePick(id, draft.current_team_id, playerId, pickNumber);
+      const name = res?.player || draft.available_players.find((p) => p.id === playerId)?.full_name || "Player";
+      showToast(`Drafted ${name} (pick ${res?.pick_number ?? pickNumber})`);
       // Remove from queue if queued
       setQueue(prev => prev.filter(p => p.id !== playerId));
-      await fetchState();
+      void fetchState();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to make pick");
+      void fetchState();
     }
     setActionLoading("");
-  }, [draft?.current_team_id, id, fetchState]);
+  }, [id, fetchState, showToast]);
 
   // No more page-level ticking timer state here -- see PickCountdown.tsx.
   // The deadline is just draft.draft.current_pick_started_at, which is
@@ -449,14 +495,31 @@ export default function DraftPage() {
     return ids;
   }, [myTeamId, draft?.teams]);
 
+  // Polling (2026-10-19): one request at a time. The old setInterval
+  // fired every 1.2 s whether or not the previous poll had come back, so
+  // once the server slowed down, polls stacked up behind each other and
+  // made it slower still -- part of the 2-minute slowdown QA hit. Now the
+  // next poll is only scheduled after the last one finishes, and hidden
+  // tabs poll slowly.
+  const draftStatus = draft?.draft.status;
+  const cpuOnClock = !!draft?.current_team_id && !myTeamIds.has(draft.current_team_id);
   useEffect(() => {
-    if (!draft || draft.draft.status !== "in_progress") return;
-    // Poll fast while CPUs are on the clock (server picks every ~1s);
-    // relax while a human is deciding.
-    const cpuOnClock = !!draft.current_team_id && !myTeamIds.has(draft.current_team_id);
-    const interval = setInterval(fetchState, cpuOnClock ? 1200 : 4000);
-    return () => clearInterval(interval);
-  }, [draft?.draft.status, draft?.current_team_id, myTeamIds, fetchState]);
+    if (draftStatus !== "in_progress") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      if (cancelled) return;
+      await fetchState();
+      if (cancelled) return;
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      timer = setTimeout(tick, hidden ? 10000 : cpuOnClock ? 1500 : 3000);
+    };
+    timer = setTimeout(tick, cpuOnClock ? 1500 : 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [draftStatus, cpuOnClock, fetchState]);
 
   const isUserOnClock = (): boolean => {
     if (!draft || !draft.current_team_id) return false;
@@ -469,29 +532,17 @@ export default function DraftPage() {
   // client-fired /auto-pick (600ms after each 5s poll, rate-limited) is what
   // made CPU picks take ~20s each.
 
-  // Auto-pick when the user's own timer expires. Previously driven by
-  // watching the page-level ticking `timeLeft` state cross to 0 (removed
-  // -- see PickCountdown.tsx for why that state doesn't live here
-  // anymore) -- a single setTimeout scheduled for the exact deadline does
-  // the same job without needing a 500ms tick anywhere on this page. Only
-  // reschedules when a new pick actually starts or turn ownership
-  // changes, not on every poll (current_pick_started_at/timer_seconds
-  // are stable across polls of the same in-progress pick).
+  // The server enforces every pick clock now (draft watchdog,
+  // draft_manager.advance_draft_if_due) -- autopick or not, tab open or
+  // not. The client just refreshes right after the deadline so the pick
+  // shows up promptly instead of waiting for the next poll.
   useEffect(() => {
     if (!draft || !isUserOnClock()) return;
     const startedAt = draft.draft.current_pick_started_at;
     const timer = draft.draft.timer_seconds;
     if (!startedAt || !timer || timer <= 0) return;
-
-    const doAutoPick = () => {
-      draftsApi.autoPick(id).then(() => fetchState()).catch(() => {});
-    };
     const msLeft = new Date(startedAt).getTime() + timer * 1000 - Date.now();
-    if (msLeft <= 0) {
-      doAutoPick();
-      return;
-    }
-    const t = setTimeout(doAutoPick, msLeft);
+    const t = setTimeout(() => { void fetchState(); }, Math.max(0, msLeft) + 1500);
     return () => clearTimeout(t);
   }, [draft?.draft.current_pick_started_at, draft?.draft.timer_seconds, draft?.current_team_id, myTeamId, id, fetchState]);
 
@@ -516,34 +567,38 @@ export default function DraftPage() {
     return () => { clearTimeout(timeout); cpuingRef.current = false; setCpuingPick(false); };
   }, [draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, myTeamId, queue.length]);
 
-  // "Auto-pick for me" toggle (mobile draft room): when on, treat the
-  // user's own turn like a CPU team's -- pick immediately rather than
-  // waiting for the timer to run out. The queue-auto-pick effect above
-  // isn't gated behind this toggle (having something queued already
-  // means "draft this for me" on its own), so this only covers the
-  // empty-queue case -- deferring to the same backend auto-pick the CPU
-  // teams use.
+  // Load this team's saved Autopick setting whenever the managed team
+  // changes (survives reloads -- QA 2026-10-19 BUG M).
+  const myTeamIsCpu = !!(myTeamId && draft?.teams?.[myTeamId] && !draft.teams[myTeamId].owner_id);
   useEffect(() => {
-    if (!autoPickForMe || !draft || !isUserOnClock() || cpuingRef.current) return;
-    const draftedIds = new Set(draft.picks.filter(p => p.player).map(p => p.player!.id));
-    const hasQueuedAvailable = queue.some(p => !draftedIds.has(p.id));
-    if (hasQueuedAvailable) return; // the queue effect above will handle it
+    if (!myTeamId || myTeamIsCpu) {
+      setAutoPickForMe(false);
+      return;
+    }
+    let cancelled = false;
+    draftsApi.getAutopick(id, myTeamId)
+      .then((res) => { if (!cancelled) setAutoPickForMe(!!res.enabled); })
+      .catch(() => { if (!cancelled) setAutoPickForMe(false); });
+    return () => { cancelled = true; };
+  }, [id, myTeamId, myTeamIsCpu]);
 
-    cpuingRef.current = true;
-    setCpuingPick(true);
-    const timeout = setTimeout(async () => {
-      try {
-        await draftsApi.autoPick(id);
-        await fetchState();
-      } catch {
-        // draft may be complete
-      } finally {
-        cpuingRef.current = false;
-        setCpuingPick(false);
-      }
-    }, 800);
-    return () => { clearTimeout(timeout); cpuingRef.current = false; setCpuingPick(false); };
-  }, [autoPickForMe, draft?.current_team_id, draft?.draft?.status, draft?.draft?.current_pick, myTeamId, queue.length]);
+  const toggleAutoPickForMe = useCallback(() => {
+    if (!myTeamId) {
+      setError("Select your team first to use Autopick.");
+      return;
+    }
+    const next = !autoPickForMe;
+    setAutoPickForMe(next);
+    draftsApi.setAutopick(id, myTeamId, next)
+      .then((res) => {
+        setAutoPickForMe(!!res.enabled);
+        showToast(res.enabled ? "Autopick on — the server will pick for you" : "Autopick off");
+      })
+      .catch((err: unknown) => {
+        setAutoPickForMe(!next);
+        setError(err instanceof Error ? err.message : "Couldn't change Autopick");
+      });
+  }, [autoPickForMe, id, myTeamId, showToast]);
 
   const handleSetTimer = async (seconds: number) => {
     try {
@@ -594,7 +649,7 @@ export default function DraftPage() {
     );
   }
 
-  if (error && !draft) {
+  if (loadError && !draft) {
     return (
       <div className="min-h-screen bg-surface-900 flex items-center justify-center">
         <div className="text-center max-w-md">
@@ -602,7 +657,7 @@ export default function DraftPage() {
             <Swords className="w-8 h-8 text-gold-400/60" />
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">Draft Room</h2>
-          <p className="text-surface-400 text-sm mb-4">{error}</p>
+          <p className="text-surface-400 text-sm mb-4">{loadError}</p>
           <Link href="/dashboard" className="text-gold-400 hover:text-gold-300 text-sm font-medium">
             Back to Dashboard
           </Link>
@@ -641,7 +696,8 @@ export default function DraftPage() {
                     return (
                       <button
                         key={teamId}
-                        onClick={() => isMine ? unclaimTeam() : claimTeam(teamId)}
+                        onClick={() => claimTeam(teamId)}
+                        aria-pressed={isMine}
                         className={`px-4 py-3 rounded-xl text-sm font-semibold border transition-all ${
                           isMine
                             ? "bg-gold-400/20 border-gold-400/40 text-gold-400 ring-1 ring-gold-400/30"
@@ -657,6 +713,18 @@ export default function DraftPage() {
                   })}
                 </div>
               </div>
+            )}
+            {myTeamId && (
+              <button
+                type="button"
+                onClick={unclaimTeam}
+                className="-mt-5 mb-6 text-xs text-surface-500 hover:text-surface-300 underline"
+              >
+                Clear my team selection
+              </button>
+            )}
+            {error && (
+              <p role="alert" className="mb-4 text-sm text-red-400">{error}</p>
             )}
             <div className="flex gap-4">
               <button
@@ -684,6 +752,7 @@ export default function DraftPage() {
             </div>
           </div>
         </div>
+        <Toast message={toast} onDone={clearToast} />
       </div>
     );
   }
@@ -875,7 +944,7 @@ export default function DraftPage() {
             pickStartedAt={draft?.draft.current_pick_started_at || null}
             timerSeconds={draftInfo.timer_seconds}
             autoPickForMe={autoPickForMe}
-            onToggleAutoPickForMe={() => setAutoPickForMe((prev) => !prev)}
+            onToggleAutoPickForMe={toggleAutoPickForMe}
             onPlayerHover={handlePlayerHover}
             onShowBoard={() => setViewMode("board")}
           />
@@ -889,7 +958,7 @@ export default function DraftPage() {
                 onMakePick={handleMakePick}
                 onToggleQueue={toggleQueue}
                 autoPickForMe={autoPickForMe}
-                onToggleAutoPickForMe={() => setAutoPickForMe((prev) => !prev)}
+                onToggleAutoPickForMe={toggleAutoPickForMe}
                 onPlayerHover={handlePlayerHover}
               />
               <TeamRosters
@@ -1014,6 +1083,7 @@ export default function DraftPage() {
 
       {/* Fixed hover card overlay — escapes all containers */}
       <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
+      <Toast message={toast} onDone={clearToast} />
     </div>
   );
 }

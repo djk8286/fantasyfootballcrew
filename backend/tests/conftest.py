@@ -307,3 +307,13 @@ class _LazySession:
 
     async def __aexit__(self, *exc):
         return await self._session.__aexit__(*exc)
+
+
+@pytest.fixture(autouse=True)
+def _clear_draft_board_caches():
+    """draft_board caches the player catalog and encoded draft state per
+    process; every test gets a fresh database, so start each one clean."""
+    from app.services import draft_board
+    draft_board.clear_caches()
+    yield
+    draft_board.clear_caches()
