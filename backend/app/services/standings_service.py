@@ -27,7 +27,7 @@ from app.services.default_lineup import (
     choose_default_starters,
     league_roster_slots,
 )
-from app.services.nfl_schedule_service import get_week_games
+from app.services.nfl_schedule_service import game_started, game_teams, get_week_games
 
 
 async def _weekly_adjustment_totals(team_ids: List[str], week: int, year: int, db: AsyncSession) -> Dict[str, float]:
@@ -259,10 +259,6 @@ def _effective_matchups(league: Optional[League], teams: List[Team], week: int) 
     return matchups
 
 
-def _as_utc(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
 async def week_schedule_state(year: int, week: int, db: AsyncSession) -> Tuple[Optional[set], bool]:
     """(teams_playing, week_started) for a regular-season NFL week.
 
@@ -273,11 +269,9 @@ async def week_schedule_state(year: int, week: int, db: AsyncSession) -> Tuple[O
     games = await get_week_games(year, week, 2, db)
     if not games:
         return None, True
-    teams_playing = {g.home_team for g in games} | {g.away_team for g in games}
+    teams_playing = {code for g in games for code in game_teams(g)}
     now = datetime.now(timezone.utc)
-    started = any(
-        g.completed or g.status_state != "pre" or _as_utc(g.kickoff_at) <= now for g in games
-    )
+    started = any(game_started(g, now) for g in games)
     return teams_playing, started
 
 

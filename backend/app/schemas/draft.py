@@ -36,6 +36,10 @@ class DraftRead(BaseModel):
 class DraftPickCreate(BaseModel):
     team_id: str
     player_id: str
+    # Optional idempotency guard: the 1-based overall pick this request is
+    # for. A retry/double-click after it was made is rejected instead of
+    # landing on the next pick (which can be the same team's, at a snake turn).
+    pick_number: Optional[int] = None
 
 
 class DraftPickRead(BaseModel):

@@ -23,6 +23,29 @@ from app.models.nfl_game import NFLGame
 
 ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
 
+# ESPN abbreviations that differ from Sleeper's. Player.team comes from
+# Sleeper, so Sleeper's codes are the ones every comparison uses.
+_ESPN_TO_SLEEPER = {"WSH": "WAS"}
+
+
+def nfl_team_code(abbr: str) -> str:
+    return _ESPN_TO_SLEEPER.get(abbr, abbr)
+
+
+def as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def game_started(game: NFLGame, now: datetime) -> bool:
+    """Kicked off (or past its kickoff time): players in it are locked."""
+    return game.completed or game.status_state != "pre" or as_utc(game.kickoff_at) <= now
+
+
+def game_teams(game: NFLGame) -> tuple[str, str]:
+    """(home, away) in Player.team codes. Rows synced before codes were
+    normalized at parse time still hold ESPN's, so readers go through this."""
+    return nfl_team_code(game.home_team), nfl_team_code(game.away_team)
+
 
 async def fetch_week_scoreboard(year: int, week: int, season_type: int) -> dict:
     """Raw ESPN scoreboard response for one (year, week, season_type).
@@ -67,10 +90,10 @@ def _parse_event(event: dict) -> dict | None:
 
     return {
         "espn_event_id": str(event["id"]),
-        "home_team": home["team"].get("abbreviation", "??"),
+        "home_team": nfl_team_code(home["team"].get("abbreviation", "??")),
         "home_team_name": home["team"].get("displayName", "Unknown"),
         "home_score": _score(home),
-        "away_team": away["team"].get("abbreviation", "??"),
+        "away_team": nfl_team_code(away["team"].get("abbreviation", "??")),
         "away_team_name": away["team"].get("displayName", "Unknown"),
         "away_score": _score(away),
         "status_state": status.get("state", "pre"),

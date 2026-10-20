@@ -2,6 +2,7 @@
 Draft Manager — the core business logic for snake and mock drafts.
 Handles draft creation, pick making, snake order generation, and mock AI picks.
 """
+import asyncio
 import copy
 import json
 import random
@@ -17,10 +18,12 @@ from app.models.team import Team
 from app.models.player import Player
 from app.models.league import League, DraftStatus, LeagueType, DraftType
 from app.models.draft_queue_entry import DraftQueueEntry
+from app.models.draft_autopick import DraftAutopick
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.models.contract import Contract
 from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_salary_cap_settings, compute_pick_slot_salary
+from app.services import draft_board
 
 
 # Positions the scoring engine (DEFAULT_SCORING) actually has point values
@@ -40,21 +43,9 @@ from app.services.salary_cap_service import DEFAULT_SALARY_CAP_SETTINGS, get_sal
 # Humans can draft them manually.
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF", "DB", "DL", "LB"}
 
-# Cache for get_draft_state's rank computation (2026-09-09 incident):
-# build_rank_by_id is synchronous CPU-bound Python (sorts the whole
-# available+picked player pool, computing a real fallback score for
-# every player with no search_rank) that was running on EVERY poll of
-# an endpoint every connected draft-room client hits every few seconds
-# -- blocking the single-threaded event loop long enough, under real
-# concurrent draft traffic, to back up every other request on the
-# process. rank_by_id only actually depends on the drafted-player SET
-# and scoring_config, and picks only ever grow one at a time for a
-# given draft (no un-drafting), so the pick COUNT is a valid, free
-# version key: the same count for a draft can only ever mean the same
-# set. In-memory/per-process only -- same tradeoff scheduler.py's
-# _last_seen_week etc. already accept; a redeploy mid-draft just
-# recomputes once more on the next poll, not a correctness issue.
-_rank_cache: dict[str, tuple[int, dict[str, int]]] = {}
+# (2026-09-09's per-draft _rank_cache lived here. Superseded on
+# 2026-10-19 by draft_board.PlayerCatalog, which caches the whole board --
+# ranks, points, display fields -- not just ranks. See draft_board.py.)
 
 # Standard starting-lineup slots and realistic bench caps, used by
 # get_ai_mock_pick's need scoring below. A human drafter reliably fills
@@ -262,9 +253,13 @@ async def make_pick(
     draft_id: str,
     team_id: str,
     player_id: str,
+    expected_pick_number: Optional[int] = None,
 ) -> DraftPick:
     """
     Make a draft pick. Verifies:
+    - (optional) it's still pick `expected_pick_number` -- makes a retried
+      or double-submitted request idempotent: it can never land on the
+      NEXT pick, even when that's the same team's (snake turn)
     - Draft is in progress
     - It's the team's turn
     - Player hasn't been drafted yet
@@ -275,7 +270,12 @@ async def make_pick(
     # Postgres (production), a no-op on SQLite (local dev, which has no
     # per-row lock) -- see the compare-and-swap note below for why locking
     # alone isn't the actual correctness guarantee here.
-    result = await db.execute(select(Draft).where(Draft.id == draft_id).with_for_update())
+    # populate_existing: always the locked row's CURRENT values, never a
+    # stale copy already in this session's identity map (e.g. a loop that
+    # read the draft before a concurrent pick landed).
+    result = await db.execute(
+        select(Draft).where(Draft.id == draft_id).with_for_update().execution_options(populate_existing=True)
+    )
     draft = result.scalar_one_or_none()
     if not draft:
         raise ValueError("Draft not found")
@@ -299,6 +299,9 @@ async def make_pick(
 
     if pick_index >= len(team_order):
         raise ValueError("Draft is already complete")
+
+    if expected_pick_number is not None and expected_pick_number != pick_index + 1:
+        raise ValueError(f"Pick {expected_pick_number} has already been made.")
 
     expected_team_id = team_order[pick_index]
     if team_id != expected_team_id:
@@ -500,118 +503,82 @@ def _headline_and_raw_stats_fields(player: Player | None) -> dict:
     }
 
 
-async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
-    """Get full draft state including all picks and current team."""
+async def _load_state_inputs(db: AsyncSession, draft_id: str):
+    """Everything /state depends on, via small queries only -- no Player
+    rows (those come from the cached catalog, see draft_board.py)."""
     result = await db.execute(select(Draft).where(Draft.id == draft_id))
     draft = result.scalar_one_or_none()
     if not draft:
         raise ValueError("Draft not found")
-
     league_result = await db.execute(select(League).where(League.id == draft.league_id))
     league = league_result.scalar_one_or_none()
-    scoring_config = (league.scoring_config or {}) if league else {}
-
-    team_order = json.loads(draft.team_order)
-    
-    # Get number of teams
     result = await db.execute(select(Team).where(Team.league_id == draft.league_id))
     teams = list(result.scalars().all())
-    num_teams = len(teams)
-    
-    # Get all picks made so far
     result = await db.execute(
-        select(DraftPick).where(DraftPick.draft_id == draft_id).order_by(DraftPick.pick_number)
+        select(DraftPick.id, DraftPick.round, DraftPick.pick_number, DraftPick.team_id, DraftPick.player_id)
+        .where(DraftPick.draft_id == draft_id)
+        .order_by(DraftPick.pick_number)
     )
-    picks = result.scalars().all()
+    picks = [tuple(r) for r in result.all()]
+    return draft, league, teams, picks
 
-    # Get drafted player IDs
-    drafted_ids = [p.player_id for p in picks]
 
-    # Get current pick index
+def _started_at_iso(draft: Draft) -> Optional[str]:
+    started = draft.current_pick_started_at
+    if not started:
+        return None
+    return started.isoformat() if started.tzinfo else started.isoformat() + "+00:00"
+
+
+def _state_key(draft: Draft, league: Optional[League], teams: list, picks: list, catalog) -> tuple:
+    teams_sig = tuple(sorted((t.id, t.name, t.owner_id, t.co_owner_id, t.partner_team_id) for t in teams))
+    return (
+        draft.id, draft.status.value, draft.current_round, draft.current_pick, bool(draft.is_paused),
+        draft.timer_seconds, _started_at_iso(draft), draft.total_rounds, draft.draft_type, draft.team_order,
+        len(picks), picks[-1][0] if picks else None, teams_sig,
+        bool(league.is_mock) if league else False,
+        draft_board.catalog_token(catalog),
+    )
+
+
+async def _build_state(db: AsyncSession, draft: Draft, league: Optional[League], teams: list, picks: list, catalog) -> dict:
+    team_order = json.loads(draft.team_order)
+    num_teams = len(teams)
     pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
     current_team_id = team_order[pick_index] if pick_index < len(team_order) else None
 
-    # Get available players (not drafted) — sort by fantasy relevance and rank.
-    # Scoped to positions the scoring engine actually scores (FANTASY_POSITIONS,
-    # module level) -- without this, ~65% of the synced player pool (CB/DE/DT/
-    # OL/G/OT/etc., none of which DEFAULT_SCORING has any keys for) was loaded,
-    # ranked, and shipped in this response for no reason, on an endpoint the
-    # frontend polls every 5 seconds during a live draft.
-    from sqlalchemy import case
-    pos_priority = case(
-        {v: i for i, v in enumerate(["RB", "WR", "QB", "TE", "K", "DEF"])},
-        value=Player.position,
-        else_=99
-    )
-    available_query = (
-        select(Player)
-        .where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
-        .order_by(pos_priority, Player.last_name)
-        .limit(10000)
-    )
-    result = await db.execute(available_query)
-    available_players = result.scalars().all()
+    drafted_ids = {p[4] for p in picks}
 
-    # Build pick details with player info. Batch-fetch every player/team
-    # referenced by these picks in 2 queries total instead of 2 queries PER
-    # pick (an N+1 that grew every round -- 40+ sequential round trips by
-    # round 10 of a 12-team draft, on an endpoint polled every 5s). Fetched
-    # here (before ranking) so the drafted players can be included in the
-    # same rank computation as the still-available pool below -- otherwise
-    # a drafted player's displayed rank_score would come from a different,
-    # inconsistent basis than everyone still on the board.
-    pick_player_ids = {p.player_id for p in picks}
-    pick_team_ids = {p.team_id for p in picks}
-    picked_players_by_id: dict[str, Player] = {}
-    if pick_player_ids:
-        result = await db.execute(select(Player).where(Player.id.in_(pick_player_ids)))
-        picked_players_by_id = {pl.id: pl for pl in result.scalars().all()}
-    picked_teams_by_id: dict[str, Team] = {t.id: t for t in teams if t.id in pick_team_ids}
+    # Available players: the pre-sorted catalog minus anyone drafted, with
+    # pos_rank (RB1, RB2, ...) counted among what's still on the board --
+    # identical ordering and fields to the old per-poll rebuild, minus the
+    # raw `stats` blob (never read by the draft room; ~70% of the payload).
+    available: list[dict] = []
+    pos_counts: dict[str, int] = {}
+    for entry in catalog.entries:
+        if entry["id"] in drafted_ids:
+            continue
+        n = pos_counts.get(entry["position"], 0) + 1
+        pos_counts[entry["position"]] = n
+        available.append(draft_board.public_entry(entry, n))
 
-    # Real, data-driven rank for every player this response touches --
-    # both still-available and already-drafted (see build_rank_by_id for
-    # why the old static name list this replaced was stale and wrong).
-    # Computed over the combined pool so a drafted player's shown rank
-    # sits on the exact same scale as everyone still on the board, rather
-    # than each being ranked against a different subset. Cached by pick
-    # count -- see _rank_cache's module-level comment for why that's a
-    # valid, free version key; this is the actual fix for the
-    # 2026-09-09 incident, not just polling less often.
-    cached = _rank_cache.get(draft_id)
-    if cached and cached[0] == len(picks):
-        rank_by_id = cached[1]
-    else:
-        rank_by_id = build_rank_by_id(
-            list(available_players) + list(picked_players_by_id.values()), scoring_config
-        )
-        _rank_cache[draft_id] = (len(picks), rank_by_id)
+    # Drafted players outside the catalog (e.g. a position no longer
+    # draftable) -- rare; fetched directly.
+    missing = [p[4] for p in picks if p[4] not in catalog.index]
+    missing_players: dict[str, Player] = {}
+    if missing:
+        result = await db.execute(select(Player).where(Player.id.in_(missing)))
+        missing_players = {pl.id: pl for pl in result.scalars().all()}
+    scoring_config = (league.scoring_config or {}) if league else {}
 
-    # Sort by rank, then position priority.
-    pos_order = ["RB", "WR", "QB", "TE", "K", "DEF", "DB", "DL", "LB"]
-    def sort_key(p: Player) -> tuple:
-        rank = get_rank_score(p, rank_by_id)
-        pos_idx = pos_order.index(p.position) if p.position in pos_order else 99
-        return (rank, pos_idx, p.last_name or "")
-
-    available_players = sorted(available_players, key=sort_key)
-
-    # Compute position ranks: RB1, RB2, ... WR1, WR2, ...
-    pos_ranks: dict[str, int] = {}
-    pos_rank_map: dict[str, int] = {}
-    for p in available_players:
-        pos = p.position
-        pos_ranks[pos] = pos_ranks.get(pos, 0) + 1
-        pos_rank_map[p.id] = pos_ranks[pos]
-
+    teams_by_id = {t.id: t for t in teams}
     picks_with_players = []
-    for p in picks:
-        player = picked_players_by_id.get(p.player_id)
-        team = picked_teams_by_id.get(p.team_id)
-        picks_with_players.append({
-            "id": p.id,
-            "round": p.round,
-            "pick_number": p.pick_number,
-            "player": {
+    for pick_id, rnd, pick_number, team_id, player_id in picks:
+        if player_id in catalog.index:
+            player_view = draft_board.pick_player_view(catalog.entries[catalog.index[player_id]])
+        else:
+            player = missing_players.get(player_id)
+            player_view = {
                 "id": player.id if player else None,
                 "full_name": f"{player.first_name} {player.last_name}" if player else "Unknown",
                 "position": player.position if player else "N/A",
@@ -622,15 +589,18 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
                 "injury_status": player.injury_status if player else None,
                 "fantasy_positions": player.fantasy_positions if player else None,
                 "avatar_url": sleeper_avatar_url(player.sleeper_id) if player else None,
-                "rank_score": get_rank_score(player, rank_by_id) if player else 0,
-                "pos_rank": pos_rank_map.get(player.id, 0) if player else 0,
-                **_headline_and_raw_stats_fields(player),
+                "rank_score": len(catalog.rank_by_id) + 1 if player else 0,
+                "pos_rank": 0,
+                "headline_stats": _headline_and_raw_stats_fields(player)["headline_stats"],
                 **_season_points_fields(player, scoring_config),
-            },
-            "team": {
-                "id": team.id if team else None,
-                "name": team.name if team else "Unknown",
-            },
+            }
+        team = teams_by_id.get(team_id)
+        picks_with_players.append({
+            "id": pick_id,
+            "round": rnd,
+            "pick_number": pick_number,
+            "player": player_view,
+            "team": {"id": team.id if team else None, "name": team.name if team else "Unknown"},
         })
 
     return {
@@ -646,14 +616,11 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
             "total_picks": num_teams * draft.total_rounds,
             "timer_seconds": draft.timer_seconds,
             "is_paused": bool(draft.is_paused),
-            "current_pick_started_at": (
-                draft.current_pick_started_at.isoformat() if draft.current_pick_started_at.tzinfo
-                else draft.current_pick_started_at.isoformat() + "+00:00"
-            ) if draft.current_pick_started_at else None,
+            "current_pick_started_at": _started_at_iso(draft),
         },
         "picks": picks_with_players,
         "current_team_id": current_team_id,
-        "current_team_name": next((t.name for t in teams if t.id == current_team_id), None),
+        "current_team_name": teams_by_id[current_team_id].name if current_team_id in teams_by_id else None,
         # owner_id/co_owner_id included so the draft room can show a
         # 2-Man team's whose-turn-within-the-team indicator -- either
         # owner already can submit a pick for this team_id (see
@@ -662,31 +629,49 @@ async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
         "teams": {t.id: {"name": t.name, "owner_id": t.owner_id, "co_owner_id": t.co_owner_id, "partner_team_id": t.partner_team_id} for t in teams},
         "team_order": team_order,
         "claimed_teams": {t.id: t.owner_id for t in teams if t.owner_id is not None},
-        "available_players": [
-            {
-                "id": p.id,
-                "full_name": f"{p.first_name} {p.last_name}",
-                "first_name": p.first_name,
-                "last_name": p.last_name,
-                "position": p.position,
-                "team": p.team or "FA",
-                "age": p.age,
-                "number": p.number,
-                "avatar_url": sleeper_avatar_url(p.sleeper_id),
-                "sleeper_id": p.sleeper_id,
-                "bye_week": p.bye_week,
-                "injury_status": p.injury_status,
-                "fantasy_positions": p.fantasy_positions,
-                "rank_score": get_rank_score(p, rank_by_id),
-                "pos_rank": pos_rank_map.get(p.id, 0),
-                **_headline_and_raw_stats_fields(p),
-                **_season_points_fields(p, scoring_config),
-                **_projected_points_field(p, scoring_config),
-            }
-            for p in available_players
-        ],
+        "available_players": available,
         "is_mock": league.is_mock if league else False,
     }
+
+
+async def get_draft_state(db: AsyncSession, draft_id: str) -> dict:
+    """Get full draft state including all picks and current team.
+
+    Player data comes from the cached PlayerCatalog (draft_board.py) --
+    see that module's docstring for the 2026-10-19 incident this fixes.
+    The HTTP route uses get_draft_state_encoded instead, which also
+    caches the encoded body across viewers."""
+    draft, league, teams, picks = await _load_state_inputs(db, draft_id)
+    scoring_config = (league.scoring_config or {}) if league else {}
+    catalog = await draft_board.get_catalog(db, scoring_config, FANTASY_POSITIONS)
+    return await _build_state(db, draft, league, teams, picks, catalog)
+
+
+async def get_draft_state_encoded(db: AsyncSession, draft_id: str) -> "draft_board.EncodedState":
+    """get_draft_state, built at most once per state change per process and
+    shared by every viewer (single-flight per draft). Releases the DB
+    connection before waiting on another request's build, so a burst of
+    polls can't drain the pool the way it did on 2026-10-19."""
+    draft, league, teams, picks = await _load_state_inputs(db, draft_id)
+    scoring_config = (league.scoring_config or {}) if league else {}
+    catalog = await draft_board.get_catalog(db, scoring_config, FANTASY_POSITIONS)
+    key = _state_key(draft, league, teams, picks, catalog)
+    hit = draft_board.cached_state(draft_id, key)
+    if hit:
+        return hit
+    missing_needed = any(p[4] not in catalog.index for p in picks)
+    if not missing_needed:
+        # Nothing left to read -- give the connection back before queueing
+        # behind another request's build. Expunge first: a rollback would
+        # otherwise expire the already-loaded rows we still use below.
+        db.expunge_all()
+        await db.rollback()
+    async with draft_board.state_lock(draft_id):
+        hit = draft_board.cached_state(draft_id, key)
+        if hit:
+            return hit
+        state = await _build_state(db, draft, league, teams, picks, catalog)
+        return await draft_board.store_state(draft_id, key, state)
 
 
 IDP_POSITIONS = {"DB", "DL", "LB"}
@@ -870,6 +855,94 @@ async def get_next_pick_for_team(
     )
 
 
+def _cpu_pos_rank(current_round: int) -> dict[str, int]:
+    """Position priority by round (lower = better)."""
+    if current_round <= 2:
+        # Early: elite RBs, WRs, top QBs
+        return {"RB": 0, "WR": 1, "TE": 2, "QB": 3, "DEF": 10, "K": 10}
+    elif current_round <= 5:
+        return {"RB": 0, "WR": 0, "QB": 1, "TE": 2, "DEF": 10, "K": 10}
+    elif current_round <= 8:
+        return {"RB": 0, "WR": 0, "TE": 1, "QB": 1, "DEF": 8, "K": 10}
+    elif current_round <= 12:
+        return {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 5, "K": 8}
+    return {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 0, "K": 0}
+
+
+def _choose_cpu_candidate(
+    candidates: list[tuple],
+    total_ranked: int,
+    team_positions: dict[str, int],
+    current_round: int,
+    total_rounds: int,
+):
+    """The CPU drafting brain, over lightweight records:
+    (key, position, raw_team, age, rank) where rank is 1-based among the
+    AVAILABLE pool. Returns the chosen record's key, or None.
+
+    Scoring (lower = better):
+    - tier_score: continuous rank across 0-400 (2026-09-09 fix -- the old
+      discrete 5-tier buckets made a #50 and a #490 player tie, which is
+      why Auto-Fill picked "random, not even good" players).
+    - pos_bonus: position priority by round (_cpu_pos_rank) * 10.
+    - need_penalty: none while still short a starter at the position;
+      escalating past starters; +300 at the realistic cap
+      (CPU_POSITION_CAPS). Endgame override: once picks left <= unfilled
+      starter slots, -1000 for those positions so a team always ends up
+      with a K/DEF (0 kickers were drafted across 36 sampled CPU teams
+      before this rule).
+    - small free-agent and age adjustments.
+    Then a little realistic randomness among close contenders (within 40
+    points of the best on the 0-400 scale)."""
+    pos_rank = _cpu_pos_rank(current_round)
+    rounds_left = total_rounds - current_round + 1
+    unfilled_starters = {p for p, need in CPU_STARTER_SLOTS.items() if team_positions.get(p, 0) < need}
+    must_fill_now = len(unfilled_starters) >= rounds_left
+
+    scored = []
+    denom = max(total_ranked - 1, 1)
+    for key, pos, raw_team, age, rank in candidates:
+        if pos not in pos_rank:
+            continue
+        tier_score = ((rank - 1) / denom) * 400
+        pos_bonus = pos_rank.get(pos, 99) * 10
+        have = team_positions.get(pos, 0)
+        starter_need = CPU_STARTER_SLOTS.get(pos, 0)
+        if have < starter_need:
+            need_penalty = 0
+        else:
+            need_penalty = 20 * (have - starter_need + 1)
+            if have >= CPU_POSITION_CAPS.get(pos, 99):
+                need_penalty += 300
+        if must_fill_now and pos in unfilled_starters:
+            need_penalty -= 1000
+        fa_penalty = 30 if (not raw_team or raw_team in ("FA", "---")) else 0
+        age = age or 25
+        age_score = -5 if 24 <= age <= 28 else (20 if age > 35 else 0)
+        scored.append((tier_score + pos_bonus + need_penalty + fa_penalty + age_score, key))
+
+    if not scored:
+        return None
+    scored.sort(key=lambda x: x[0])
+    best_score = scored[0][0]
+    top_tier_count = 3 if current_round <= 5 else 5
+    top_tier = [k for sc, k in scored if sc <= best_score + 40]
+    candidates_out = top_tier[:max(top_tier_count * 2, 6)]
+    return random.choice(candidates_out)
+
+
+async def _team_position_counts(db: AsyncSession, draft_id: str, team_id: str) -> dict[str, int]:
+    result = await db.execute(
+        select(Player.position)
+        .join(DraftPick, DraftPick.player_id == Player.id)
+        .where(DraftPick.draft_id == draft_id, DraftPick.team_id == team_id)
+    )
+    counts: dict[str, int] = {}
+    for (pos,) in result.all():
+        counts[pos] = counts.get(pos, 0) + 1
+    return counts
+
+
 async def get_ai_mock_pick(
     db: AsyncSession,
     draft_id: str,
@@ -878,18 +951,16 @@ async def get_ai_mock_pick(
     total_rounds: Optional[int] = None,
     available_players: Optional[list[Player]] = None,
 ) -> Optional[Player]:
-    """
-    AI-powered mock draft pick with smart tier-based ranking.
-    Uses known NFL player tiers, position scarcity, and team needs.
+    """CPU draft pick: rank-based tiers, position priority by round, and
+    roster needs (see _choose_cpu_candidate).
 
-    current_round/total_rounds/available_players: pass these when the
-    caller (run_mock_draft) already has them in hand -- avoids
-    re-fetching the Draft row and the full undrafted-eligible-position
-    player pool (up to ~9,400 rows in production) on every single pick
-    of what can be a 180-pick mock draft. All default to None
-    (self-fetch, unchanged), which is what the standalone
-    POST /drafts/{id}/auto-pick endpoint (one pick at a time, no loop
-    state to reuse) still gets.
+    available_players: optional explicit pool of Player rows (ranked among
+    themselves, as before). Omitted -- the watchdog/auto-pick/mock paths --
+    it uses the cached PlayerCatalog under DEFAULT_SCORING instead of
+    loading and ranking the whole undrafted pool on every pick (~1 s per
+    pick on a prod-sized pool, the CPU-pick half of the 2026-10-19
+    slowdown). Standard DEFAULT_SCORING either way: a CPU-pick relative
+    ranking signal, not any one league's custom rules.
     """
     if current_round is None or total_rounds is None:
         result = await db.execute(select(Draft).where(Draft.id == draft_id))
@@ -899,260 +970,190 @@ async def get_ai_mock_pick(
         current_round = draft.current_round
         total_rounds = draft.total_rounds
 
-    if available_players is None:
-        # Get already drafted player IDs
-        result = await db.execute(
-            select(DraftPick.player_id).where(DraftPick.draft_id == draft_id)
-        )
-        drafted_ids = {row[0] for row in result.all()}
-        # Filtered to FANTASY_POSITIONS at the query level -- the scoring
-        # loop below already skipped anything outside pos_rank's keys, so
-        # this is a pure efficiency change (less loaded from the DB and
-        # iterated in Python), not a behavior change.
-        result = await db.execute(
-            select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
-        )
-        available = result.scalars().all()
-    else:
-        available = available_players
+    team_positions = await _team_position_counts(db, draft_id, team_id)
 
-    # Get the team's existing picks this draft
-    result = await db.execute(
-        select(DraftPick).where(
-            DraftPick.draft_id == draft_id,
-            DraftPick.team_id == team_id,
-        )
-    )
-    team_picks = result.scalars().all()
-    team_positions = {}
-    if team_picks:
-        # Batch-fetch instead of one query per pick this team has made.
-        team_pick_player_ids = {p.player_id for p in team_picks}
-        presult = await db.execute(select(Player).where(Player.id.in_(team_pick_player_ids)))
-        for player in presult.scalars().all():
-            team_positions[player.position] = team_positions.get(player.position, 0) + 1
+    if available_players is not None:
+        rank_by_id = build_rank_by_id(available_players, DEFAULT_SCORING)
+        by_id = {p.id: p for p in available_players}
+        candidates = [
+            (p.id, p.position, p.team, p.age, get_rank_score(p, rank_by_id)) for p in available_players
+        ]
+        chosen = _choose_cpu_candidate(candidates, len(rank_by_id), team_positions, current_round, total_rounds)
+        return by_id.get(chosen) if chosen else None
 
-    # Real, data-driven percentile tier for every available player (see
-    # build_rank_by_id/get_percentile_tier) -- replaces the old static
-    # name-list tier lookup. Standard DEFAULT_SCORING is used here (not a
-    # specific league's scoring_config) since this is purely a CPU-pick
-    # relative-ranking signal, same "standard, not any one league's custom
-    # rules" convention top_performers_service.py already established.
-    rank_by_id = build_rank_by_id(available, DEFAULT_SCORING)
-    total_ranked = len(rank_by_id)
-
-    # Position priority by round
-    if current_round <= 2:
-        # Early: elite RBs, WRs, top QBs
-        pos_rank = {"RB": 0, "WR": 1, "TE": 2, "QB": 3, "DEF": 10, "K": 10}
-    elif current_round <= 5:
-        pos_rank = {"RB": 0, "WR": 0, "QB": 1, "TE": 2, "DEF": 10, "K": 10}
-    elif current_round <= 8:
-        pos_rank = {"RB": 0, "WR": 0, "TE": 1, "QB": 1, "DEF": 8, "K": 10}
-    elif current_round <= 12:
-        pos_rank = {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 5, "K": 8}
-    else:
-        pos_rank = {"RB": 0, "WR": 0, "TE": 0, "QB": 0, "DEF": 0, "K": 0}
-
-    # Endgame rule: once there are exactly as many (or fewer) picks left as
-    # there are still-unfilled starter positions, a human stops weighing
-    # tier/talent for those slots entirely and just fills them -- there's
-    # no more time not to. Without this, K in particular never got
-    # drafted at all under the old static tier list (which had no real
-    # tier data for kickers, so every one defaulted to tier 5, the worst
-    # possible tier_score) -- pos_rank alone only ever brought K to
-    # *parity* with the rest of the board in the final rounds, which
-    # wasn't enough to outweigh a tier gap against a deep bench of ranked
-    # skill players -- confirmed empirically: 0 kickers drafted across 36
-    # sampled CPU teams in full 12-team/15-round mock drafts before this
-    # rule was added. Kept even now that kickers get a real data-driven
-    # tier (build_rank_by_id scores every position, including K) as a
-    # general safety net for any position running low on picks left.
-    rounds_left = total_rounds - current_round + 1
-    unfilled_starters = {p for p, need in CPU_STARTER_SLOTS.items() if team_positions.get(p, 0) < need}
-    must_fill_now = len(unfilled_starters) >= rounds_left
-
-    # Score each available player
-    scored_players = []
-    for player in available:
-        pos = player.position
-        if pos not in pos_rank:
+    catalog = await draft_board.get_catalog(db, DEFAULT_SCORING, FANTASY_POSITIONS)
+    drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
+    drafted_ids = {row[0] for row in drafted_result.all()}
+    # cpu_records are already in DEFAULT_SCORING rank order, so position in
+    # the filtered list IS the rank among available players -- the same
+    # number build_rank_by_id(available) used to produce.
+    candidates = []
+    for rec in catalog.cpu_records:
+        if rec[0] in drafted_ids:
             continue
-
-        # Continuous rank-based score (2026-09-09 fix), NOT the old
-        # discrete 5-tier bucket (get_percentile_tier) -- that gave every
-        # player in the same tier the EXACT SAME tier_score regardless of
-        # true rank within it, and tiers 3/4 alone each span 30% of the
-        # entire ranked pool. Combined with the ~40-point randomization
-        # window below, that meant a player ranked #50 and one ranked
-        # #490 could tie on tier_score and become equally likely picks --
-        # confirmed as the real cause of "Auto-Fill picks random, not
-        # even good, players": the AI wasn't actually broken, it was
-        # choosing uniformly across enormous same-tier bands. This scales
-        # real rank linearly across the same 0-400 range the old bucket
-        # score used, so every other constant below (pos_bonus's *10,
-        # need_penalty's 20/300, the endgame override's -1000) still
-        # means the same relative thing without needing to be retuned.
-        rank = get_rank_score(player, rank_by_id)
-        tier_score = ((rank - 1) / max(total_ranked - 1, 1)) * 400
-
-        # Position priority bonus (lower = better)
-        pos_bonus = pos_rank.get(pos, 99) * 10
-
-        # Need score — roster-construction-aware, not just "prefer positions
-        # not yet filled". Still short a starter at this position (e.g. 0
-        # RBs drafted, needs 2): no penalty at all, same urgency as an
-        # empty-roster pick, so it can outrank a stacked-position luxury
-        # pick even from a much better tier. Starters filled: each pick
-        # past that gets progressively pricier (bench depth shouldn't crowd
-        # out a team's actual remaining needs). At/past the realistic cap
-        # (CPU_POSITION_CAPS): steep additional penalty -- discouraged, not
-        # hard-blocked, in case capped-out positions are genuinely all
-        # that's left on the board.
-        have = team_positions.get(pos, 0)
-        starter_need = CPU_STARTER_SLOTS.get(pos, 0)
-        if have < starter_need:
-            need_penalty = 0
-        else:
-            over_starter = have - starter_need
-            need_penalty = 20 * (over_starter + 1)
-            if have >= CPU_POSITION_CAPS.get(pos, 99):
-                need_penalty += 300
-
-        # Endgame override -- see must_fill_now above. -1000 swamps
-        # tier_score's entire 0-400 range, so a mandatory-but-unranked
-        # position (a kicker) reliably wins over ranked depth once there's
-        # no time left not to take it.
-        if must_fill_now and pos in unfilled_starters:
-            need_penalty -= 1000
-
-        # Free agent penalty
-        fa_penalty = 30 if (not player.team or player.team in ("FA", "---")) else 0
-        
-        # Small age bonus for prime (24-28)
-        age = player.age or 25
-        age_score = 0
-        if 24 <= age <= 28:
-            age_score = -5  # Small boost
-        elif age > 35:
-            age_score = 20  # Penalty for very old
-        
-        total_score = tier_score + pos_bonus + need_penalty + fa_penalty + age_score
-        scored_players.append((total_score, player))
-
-    # Sort by score ascending
-    scored_players.sort(key=lambda x: x[0])
-
-    if scored_players:
-        best_score = scored_players[0][0]
-        # Pick from top contenders with some randomness -- real drafters
-        # (human or CPU) don't take the literal #1 rated player 100% of
-        # the time, so a little randomness among genuinely close
-        # contenders is realistic. The window was previously 40 points,
-        # which under the OLD discrete tier_score (0/100/200/300/400)
-        # meant "anywhere in the same tier" -- now that tier_score is
-        # continuous (see above), 40 points is a real, roughly-nearby
-        # rank gap on the 0-400 scale, so this is left as-is rather than
-        # needing to shrink further.
-        top_tier_count = 3 if current_round <= 5 else 5
-        top_tier = [p for s, p in scored_players if s <= best_score + 40]
-        candidates = top_tier[:max(top_tier_count * 2, 6)]
-        return random.choice(candidates)
-
-    return None
+        candidates.append((rec[0], rec[1], rec[2], rec[3], len(candidates) + 1))
+    chosen = _choose_cpu_candidate(candidates, len(candidates), team_positions, current_round, total_rounds)
+    if not chosen:
+        return None
+    return await db.get(Player, chosen)
 
 
-async def run_mock_draft(db: AsyncSession, draft_id: str, skip_team_ids: list[str] | None = None) -> list[dict]:
-    """Run a mock draft with AI auto-picks.
+def current_pick_slot(draft: Draft, num_teams: int) -> tuple[int, Optional[str]]:
+    """(1-based global pick number, team on the clock or None) -- the same
+    formula make_pick uses."""
+    order = json.loads(draft.team_order or "[]")
+    idx = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
+    team_id = order[idx] if 0 <= idx < len(order) else None
+    return idx + 1, team_id
 
-    If skip_team_ids is provided, those teams' picks are left open
-    for manual drafting (hybrid mock mode).
 
-    Performance note: this used to re-fetch the Draft row AND the full
-    undrafted-eligible-position player pool (up to ~9,400 rows in
-    production) on every single iteration -- ~2,000+ queries for one
-    12-team/15-round (180-pick) mock draft. make_pick itself (the actual
-    write path, shared with real human drafts) is untouched below --
-    still the sole writer of Draft/DraftPick/Team.roster, still fully
-    CAS-protected. What changed is that this loop no longer re-reads
-    state make_pick just wrote a moment ago in the same process: round/
-    pick/status are tracked locally using the EXACT same advance formula
-    make_pick's own CAS update uses (so they stay perfectly in sync with
-    what make_pick independently re-reads from the DB on its next call),
-    and the undrafted-player pool is fetched once and trimmed in memory
-    as each pick is made.
+async def _num_teams(db: AsyncSession, league_id: str) -> int:
+    return int(await db.scalar(select(func.count(Team.id)).where(Team.league_id == league_id)) or 0)
+
+
+async def get_autopick(db: AsyncSession, draft_id: str, team_id: str) -> bool:
+    row = await db.execute(
+        select(DraftAutopick.enabled).where(DraftAutopick.draft_id == draft_id, DraftAutopick.team_id == team_id)
+    )
+    value = row.scalar_one_or_none()
+    return bool(value)
+
+
+async def set_autopick(db: AsyncSession, draft_id: str, team_id: str, enabled: bool, user_id: Optional[str]) -> bool:
+    result = await db.execute(
+        select(DraftAutopick).where(DraftAutopick.draft_id == draft_id, DraftAutopick.team_id == team_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        db.add(DraftAutopick(draft_id=draft_id, team_id=team_id, enabled=enabled, updated_by=user_id))
+    else:
+        row.enabled = enabled
+        row.updated_by = user_id
+        row.updated_at = datetime.now(timezone.utc)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Concurrent first toggle for the same team -- the other insert won; apply ours on top.
+        await db.rollback()
+        await db.execute(
+            update(DraftAutopick)
+            .where(DraftAutopick.draft_id == draft_id, DraftAutopick.team_id == team_id)
+            .values(enabled=enabled, updated_by=user_id, updated_at=datetime.now(timezone.utc))
+        )
+        await db.commit()
+    return enabled
+
+
+async def advance_draft_if_due(db: AsyncSession, draft_id: str, now: Optional[datetime] = None) -> Optional[DraftPick]:
+    """Server-authoritative clock: make the current pick if it's due, else
+    do nothing. Called every second by the draft watchdog (scheduler.py)
+    whether or not any browser is open, and reads everything from the DB
+    each time -- so it survives restarts (an expired clock found after a
+    redeploy is picked on the first tick) and needs no in-memory state.
+
+    Due when:
+      - a CPU (or ownerless) team, or a human team with autopick ON
+        (draft_autopick, server-persisted), has been on the clock for
+        settings.CPU_PICK_DELAY_S; or
+      - a human team's pick clock (timer_seconds > 0) has run out -- with
+        autopick OFF too. The toggle only decides whether to wait for the
+        clock; it never lets the draft stall (QA 2026-10-19, pick 18).
+    Paused drafts never advance.
+
+    Double-pick safety: make_pick takes a row lock on the draft (Postgres
+    FOR UPDATE), compare-and-swaps current_round/current_pick, and is
+    pinned to this exact pick number (expected_pick_number). Two workers
+    (e.g. old + new container during a deploy) or a human click racing the
+    watchdog: exactly one wins, the rest get ValueError and change nothing.
     """
-    if skip_team_ids is None:
-        skip_team_ids = []
-    skip_set = set(skip_team_ids)
+    from app.core.config import settings
 
-    result = await db.execute(select(Draft).where(Draft.id == draft_id))
-    draft = result.scalar_one_or_none()
+    draft = (await db.execute(select(Draft).where(Draft.id == draft_id))).scalar_one_or_none()
+    if (
+        not draft
+        or draft.status != DraftRunStatus.IN_PROGRESS
+        or draft.is_paused
+        or not draft.current_pick_started_at
+    ):
+        return None
+    now = now or datetime.now(timezone.utc)
+    started_at = draft.current_pick_started_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = (now - started_at).total_seconds()
+    if elapsed < settings.CPU_PICK_DELAY_S:
+        return None
+
+    num_teams = await _num_teams(db, draft.league_id)
+    if num_teams == 0:
+        return None
+    pick_number, team_id = current_pick_slot(draft, num_teams)
+    if not team_id:
+        return None
+    team = await db.get(Team, team_id)
+    if team is None:
+        return None
+    is_cpu_turn = team.is_cpu or not team.owner_id
+    timer_expired = draft.timer_seconds > 0 and elapsed >= draft.timer_seconds
+    if not (is_cpu_turn or timer_expired or await get_autopick(db, draft_id, team_id)):
+        return None
+
+    current_round, total_rounds = draft.current_round, draft.total_rounds
+    player = await get_next_pick_for_team(db, draft_id, team_id, current_round=current_round, total_rounds=total_rounds)
+    if not player:
+        return None
+    return await make_pick(db, draft_id, team_id, player.id, expected_pick_number=pick_number)
+
+
+async def run_mock_draft(
+    db: AsyncSession,
+    draft_id: str,
+    skip_team_ids: list[str] | None = None,
+) -> list[DraftPick]:
+    """Fill picks with CPU choices until a skipped (human) team is on the
+    clock, the draft is paused, or it completes. Powers "Sim to My Pick"
+    (skip = the user's teams) and "Auto-Pick All" (no skip).
+
+    Re-reads the draft row before every pick and pins each make_pick to
+    that pick number, so it coexists with the watchdog picking at the same
+    time: a lost race just re-syncs and carries on, instead of the old
+    local-mirror loop aborting with a 400 ("Someone else just picked") on
+    the first collision -- which is what made Auto-Pick All look like it
+    did nothing. Yields to the event loop between picks."""
+    skip_set = set(skip_team_ids or [])
+
+    draft = (await db.execute(select(Draft).where(Draft.id == draft_id))).scalar_one_or_none()
     if not draft:
         raise ValueError("Draft not found")
-
-    # Start draft if pending
     if draft.status == DraftRunStatus.PENDING:
         await start_draft(db, draft_id)
 
-    team_order_list = json.loads(draft.team_order)
-    team_result = await db.execute(select(Team).where(Team.league_id == draft.league_id))
-    teams_by_id = {t.id: t for t in team_result.scalars().all()}
-    num_teams = len(teams_by_id)
-
-    # Local mirror of Draft's own state, captured AFTER the possible
-    # start_draft() call above (which mutates this same session-identity-
-    # mapped `draft` object in place, so these reads already reflect it).
-    # Never written back to the DB or the `draft` ORM object from here --
-    # make_pick remains the only writer, via its own CAS update.
-    current_round = draft.current_round
-    current_pick = draft.current_pick
-    total_rounds = draft.total_rounds
-    status = draft.status
-
-    # Fetch the undrafted eligible-position player pool ONCE -- was the
-    # single biggest cost in the old per-iteration query (see docstring).
-    drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
-    drafted_ids = {row[0] for row in drafted_result.all()}
-    available_result = await db.execute(
-        select(Player).where(~Player.id.in_(drafted_ids), Player.position.in_(FANTASY_POSITIONS))
-    )
-    available_players = list(available_result.scalars().all())
-
-    all_picks = []
-    max_picks = len(team_order_list)
-
-    for _ in range(max_picks):
-        if status != DraftRunStatus.IN_PROGRESS:
+    num_teams = await _num_teams(db, draft.league_id)
+    max_picks = len(json.loads(draft.team_order or "[]"))
+    all_picks: list[DraftPick] = []
+    lost_races = 0
+    while len(all_picks) + lost_races <= max_picks:
+        draft = (
+            await db.execute(select(Draft).where(Draft.id == draft_id).execution_options(populate_existing=True))
+        ).scalar_one()
+        if draft.status != DraftRunStatus.IN_PROGRESS or draft.is_paused:
             break
-
-        pick_index = (current_round - 1) * num_teams + (current_pick - 1)
-        if pick_index >= len(team_order_list):
+        pick_number, team_id = current_pick_slot(draft, num_teams)
+        if not team_id or team_id in skip_set:
             break
-        current_team_id = team_order_list[pick_index]
-
-        # If it's a user team's turn — STOP and let them pick manually
-        if current_team_id in skip_set:
-            break
-
-        # Get AI pick
         player = await get_ai_mock_pick(
-            db, draft_id, current_team_id,
-            current_round=current_round, total_rounds=total_rounds, available_players=available_players,
+            db, draft_id, team_id, current_round=draft.current_round, total_rounds=draft.total_rounds,
         )
         if not player:
             break
-
-        # Make the pick (unchanged CAS-protected write path)
-        pick = await make_pick(db, draft_id, current_team_id, player.id)
+        try:
+            pick = await make_pick(db, draft_id, team_id, player.id, expected_pick_number=pick_number)
+        except ValueError:
+            await db.rollback()
+            lost_races += 1
+            if lost_races > 10:
+                break
+            continue
         all_picks.append(pick)
-        available_players = [p for p in available_players if p.id != player.id]
-
-        # Advance the local mirror using the identical formula make_pick's
-        # own CAS update just applied to the DB row.
-        if current_pick >= num_teams:
-            current_round, current_pick = current_round + 1, 1
-        else:
-            current_pick += 1
-        status = DraftRunStatus.COMPLETED if current_round > total_rounds else DraftRunStatus.IN_PROGRESS
+        await asyncio.sleep(0)
     return all_picks

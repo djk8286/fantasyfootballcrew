@@ -17,7 +17,7 @@ from app.services.standings_service import (
     DEFAULT_SEASON_WEEKS,
 )
 from app.services.guillotine_service import process_league_guillotine
-from app.services.nfl_schedule_service import get_week_games
+from app.services.nfl_schedule_service import game_teams, get_week_games
 from app.api.deps import get_current_user, require_commissioner
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
@@ -130,8 +130,8 @@ async def get_weekly_scores(
     games = await get_week_games(year, week, 2, db)
     game_by_team: dict[str, NFLGame] = {}
     for g in games:
-        game_by_team[g.home_team] = g
-        game_by_team[g.away_team] = g
+        for code in game_teams(g):
+            game_by_team[code] = g
 
     def _game_status(player: Player | None) -> str:
         if not player or not player.team:
