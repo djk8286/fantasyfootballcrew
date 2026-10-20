@@ -65,3 +65,4 @@ __all__ = [
     "DraftAutopick",
     "TeamPlayerNews",
 ]
+from app.models.player_projection import PlayerProjection

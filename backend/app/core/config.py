@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     TRUSTED_PROXY_CIDRS: List[str] = ["100.64.0.0/10", "10.0.0.0/8", "127.0.0.0/8", "::1/128"]
     # Fantasy golf (in development). Off until the API/UI phases ship.
     GOLF_ENABLED: bool = False
+    # Weekly projections from Sleeper's public, unofficial projections API
+    # (services/nfl_projections_service.py). On by default: it's free,
+    # read-only and has a timeout. Off stops the sync and hides
+    # projections from lineup payloads and auto-fill.
+    SLEEPER_PROJECTIONS_ENABLED: bool = True
     SLEEPER_API_BASE: str = "https://api.sleeper.app/v1"
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None

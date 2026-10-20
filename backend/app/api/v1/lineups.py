@@ -33,6 +33,9 @@ from app.services.lineup_slots import (
 )
 from app.services.nfl_schedule_service import as_utc, ensure_week_games, game_started, game_teams
 from app.models.nfl_game import NFLGame
+from app.core.config import settings
+from app.services.nfl_projections_service import load_projections, projected_points
+from app.services.standings_service import _effective_matchups
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/teams", tags=["lineups"])
@@ -108,8 +111,37 @@ def _last_week_points(player: Player, week: int, year: int, scoring_config: dict
     return None if stats is None else calculate_player_score(stats, scoring_config, player.position)
 
 
+async def week_projections(roster: list[Player], year: int, week: int, db: AsyncSession) -> dict[str, dict] | None:
+    """Projected stat lines for these players, or None when projections
+    are switched off or none are synced for the week at all."""
+    if not settings.SLEEPER_PROJECTIONS_ENABLED:
+        return None
+    return await load_projections(db, [p.id for p in roster], year, week) or None
+
+
+def _projected(player: Player, projections: dict | None, games: WeekGames, scoring_config: dict) -> float | None:
+    """League-scored projection. A player on bye projects 0. Unprojected
+    players get None while the week has projections at all."""
+    if projections is None:
+        return None
+    if games.on_bye(player.team):
+        return 0.0
+    return projected_points(projections.get(player.id), scoring_config, player.position)
+
+
+def projected_total(slots: Slots, by_id: dict[str, Player], projections: dict | None,
+                    games: WeekGames, scoring_config: dict) -> float | None:
+    if projections is None:
+        return None
+    return round(sum(
+        _projected(by_id[e["player_id"]], projections, games, scoring_config) or 0.0
+        for e in slots if e.get("player_id") in by_id
+    ), 2)
+
+
 def _serialize_roster_player(
     player: Player, is_starter: bool, scoring_config: dict, games: WeekGames, week: int, year: int,
+    projections: dict | None = None,
 ) -> dict:
     stats, stats_year = effective_season_stats(player)
     return {
@@ -123,6 +155,7 @@ def _serialize_roster_player(
         "season_points": calculate_player_score(stats, scoring_config, player.position),
         "season_points_year": stats_year,
         "last_week_points": _last_week_points(player, week, year, scoring_config),
+        "projected_points": _projected(player, projections, games, scoring_config),
         "game": games.info(player.team),
         "on_bye": games.on_bye(player.team),
         "is_starter": is_starter,
@@ -267,6 +300,8 @@ async def get_lineup(
     games = await load_week_games(year, week, db)
     current = await _current_lineup(team, league, roster, week, year, db)
     starter_ids = set(current.starters) if current.has_lineup_set else set()
+    projections = await week_projections(roster, year, week, db)
+    by_id = {p.id: p for p in roster}
     return {
         "team_id": team_id,
         "week": week,
@@ -280,7 +315,38 @@ async def get_lineup(
         "slots": current.slots,
         "unplaced": current.unplaced,
         "issues": lineup_issues(current.slots, _player_states(roster, games), current.unplaced),
-        "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config, games, week, year) for p in roster],
+        "projected_total": projected_total(current.slots, by_id, projections, games, scoring_config),
+        "matchup": await _matchup_projection(team, league, week, year, games, db),
+        "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config, games, week, year, projections)
+                   for p in roster],
+    }
+
+
+async def team_week_projection(team: Team, league: League, week: int, year: int,
+                               games: WeekGames, db: AsyncSession) -> float | None:
+    """Projected points for the lineup this team would score right now."""
+    roster = await _resolve_roster(team, db)
+    projections = await week_projections(roster, year, week, db)
+    if projections is None:
+        return None
+    current = await _current_lineup(team, league, roster, week, year, db)
+    return projected_total(current.slots, {p.id: p for p in roster}, projections, games, league.scoring_config or {})
+
+
+async def _matchup_projection(team: Team, league: League, week: int, year: int,
+                              games: WeekGames, db: AsyncSession) -> dict | None:
+    """This week's opponent and both projected totals, or None on a bye week."""
+    teams = (await db.execute(select(Team).where(Team.league_id == league.id))).scalars().all()
+    opponent_id = next((b if a == team.id else a for a, b in _effective_matchups(league, teams, week)
+                        if team.id in (a, b)), None)
+    opponent = next((t for t in teams if t.id == opponent_id), None)
+    if opponent is None:
+        return None
+    return {
+        "opponent_team_id": opponent.id,
+        "opponent_name": opponent.name,
+        "projected": await team_week_projection(team, league, week, year, games, db),
+        "opponent_projected": await team_week_projection(opponent, league, week, year, games, db),
     }
 
 
@@ -383,7 +449,8 @@ async def optimize_lineup(
     current_user: User = Depends(get_current_user),
 ):
     """Auto-fill this week's lineup with the best starters available,
-    ranked by effective_season_stats (this season's production once it has
+    ranked by this week's league-scored projection when the week has any,
+    else effective_season_stats (this season's production once it has
     any, else last season's total). Never starts a player who's ruled out
     or on bye. Players whose game has kicked off stay where they are.
     Saves the result, same as a manual set."""
@@ -408,11 +475,17 @@ async def optimize_lineup(
         counts[e["slot"]] -= 1
 
     skipped_inactive = [f"{p.first_name} {p.last_name}" for p in roster if p.id not in locked and _is_inactive(p)]
+    # Rank by this week's projection when the week has any. A player
+    # Sleeper doesn't project ranks last, not on last season's total.
+    projections = await week_projections(roster, year, week, db)
     pool = {}
     for p in roster:
         if p.id in locked or _is_inactive(p) or games.on_bye(p.team):
             continue
-        stats, _ = effective_season_stats(p)
+        if projections is not None:
+            stats = projections.get(p.id) or {}
+        else:
+            stats, _ = effective_season_stats(p)
         pool[p.id] = {"stats": stats, "position": p.position, "name": f"{p.first_name} {p.last_name}"}
 
     result = _run_optimizer(pool, scoring_config, counts)
@@ -422,4 +495,5 @@ async def optimize_lineup(
     starters = await _save(team_id, week, year, slots, db)
     return {"status": "ok", "starters": starters, "slots": slots, "optimal_score": result["optimal_score"],
             "skipped_inactive": skipped_inactive,
+            "ranked_by": "projection" if projections is not None else "season",
             "kept_locked": [f"{p.first_name} {p.last_name}" for p in roster if p.id in {e["player_id"] for e in kept}]}
