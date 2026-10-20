@@ -548,6 +548,15 @@ async def _sync_current_week_scoreboard_once(season: int, week: int) -> None:
     (run_scheduler's call site catches and logs it)."""
     async with async_session() as db:
         count = await nfl_schedule_service.sync_week_scoreboard(season, week, 2, db)  # 2 = regular season, ESPN's enum
+        # Next week too, so lineups for it show opponents/kickoffs and byes
+        # before the live week rolls over (QA 2026-10-19: Week 7 showed "-"
+        # for every game while Week 6 was still live).
+        if week < 18:
+            try:
+                count += await nfl_schedule_service.sync_week_scoreboard(season, week + 1, 2, db)
+            except Exception as e:
+                await db.rollback()
+                print(f"[scheduler] Next-week scoreboard sync failed: {e}")
     if count:
         print(f"[scheduler] Synced {count} live NFL game(s) for week {week}, {season}")
 
@@ -660,16 +669,19 @@ async def run_scheduler() -> None:
 
         if synced is not None:
             season, week = synced
+            # Games first: scoring reads them for byes and kickoff state, and
+            # on the tick the live week rolls over there were none yet, so
+            # default lineups were built as if the schedule were unknown.
+            try:
+                await run_job("sync_scoreboard", _sync_current_week_scoreboard_once, season, week)
+            except Exception as e:
+                print(f"[scheduler] Current-week scoreboard sync pass failed: {e}")
             try:
                 await run_job("calculate_scores", _calculate_all_league_scores_once, season, week)
             except Exception as e:
                 # Never let an auto-score failure interrupt the sync loop
                 # itself -- stats are already synced for this tick either way.
                 print(f"[scheduler] Auto-score pass failed: {e}")
-            try:
-                await run_job("sync_scoreboard", _sync_current_week_scoreboard_once, season, week)
-            except Exception as e:
-                print(f"[scheduler] Current-week scoreboard sync pass failed: {e}")
             try:
                 await run_job("playoffs", _process_all_league_playoffs_once, season, week)
             except Exception as e:

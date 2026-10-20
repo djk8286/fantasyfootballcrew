@@ -41,3 +41,17 @@ export function historySummaryLabel(
     ? item.summary.slice(0, -suffix.length) + ` — ${label}`
     : `${item.summary} (${label})`;
 }
+
+/** Labels for the league header switcher: the current league and the
+ * user's other leagues, disambiguated the same way as the dashboard and
+ * AI pages (QA 2026-10-19: two "QA Test League" rows in the switcher). */
+export function switcherLabels(
+  current: LabelableLeague,
+  mine: LabelableLeague[],
+): { current: string; others: { id: string; label: string }[] } {
+  const all = mine.some((l) => l.id === current.id) ? mine : [current, ...mine];
+  return {
+    current: leagueLabel(current, all),
+    others: mine.filter((l) => l.id !== current.id).map((l) => ({ id: l.id, label: leagueLabel(l, all) })),
+  };
+}

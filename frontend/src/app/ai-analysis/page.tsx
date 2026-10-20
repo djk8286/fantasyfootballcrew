@@ -7,7 +7,8 @@ import { tradeOptionLabel, defaultComparePair } from "@/lib/trade-label";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Bot, Sparkles, ArrowLeftRight, TrendingUp, Send, Loader2, Users, Scale } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, aiApi, getCurrentUserId, isCurrentUser, isLoggedIn, ApiError } from "@/lib/api-client";
-import { pollJob, savePendingJob, loadPendingJob, clearPendingJob } from "@/lib/ai-jobs";
+import { pollJobShared, type JobStatus, savePendingJob, loadPendingJob, clearPendingJob } from "@/lib/ai-jobs";
+import AiJobProgress from "@/components/AiJobProgress";
 
 interface League {
   id: string;
@@ -198,6 +199,23 @@ function LineupTab() {
 
   const userId = getCurrentUserId();
   const [teamsLoading, setTeamsLoading] = useState(false);
+  const restoredTeam = useRef<string | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const resultRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!loading || startedAt === null) return;
+    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [loading, startedAt]);
+
+  // Bring a freshly arrived result into view (it renders below the form).
+  useEffect(() => {
+    if (analysis && !loading) resultRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [analysis, loading]);
 
   const loadHistory = useCallback((lid: string) => {
     aiApi
@@ -232,7 +250,10 @@ function LineupTab() {
         const all = Array.isArray(data) ? (data as Team[]) : [];
         const mine = all.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
         setTeams(mine);
-        setTeamId(mine[0]?.id || "");
+        // A restored pending job keeps its own team selected.
+        const want = restoredTeam.current;
+        restoredTeam.current = null;
+        setTeamId(want && mine.some((t) => t.id === want) ? want : mine[0]?.id || "");
       })
       .catch(() => {})
       .finally(() => { if (!stale) setTeamsLoading(false); });
@@ -257,12 +278,15 @@ function LineupTab() {
   }, []);
 
   const waitForJob = useCallback(
-    async (jobId: string, lid: string) => {
+    async (jobId: string, lid: string, started: number) => {
       setLoading(true);
+      setStartedAt(started);
       setError("");
       try {
-        const result = await pollJob(() => aiApi.job(jobId), { isCancelled: () => pollCancelled.current });
-        if (result === null) return; // unmounted; the pending job stays saved
+        // One shared poller per job: a remount (navigate away and back)
+        // joins the poll already running instead of starting a second.
+        const result = await pollJobShared(jobId, () => aiApi.job(jobId) as Promise<JobStatus>);
+        if (pollCancelled.current || result === null) return; // unmounted; the pending job stays saved
         clearPendingJob();
         setAnalysis(result);
         loadHistory(lid);
@@ -289,18 +313,21 @@ function LineupTab() {
     if (!pending) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring a job started before navigating away
     setLeagueId(pending.leagueId);
-    void waitForJob(pending.jobId, pending.leagueId);
+    restoredTeam.current = pending.teamId;
+    void waitForJob(pending.jobId, pending.leagueId, pending.startedAt);
   }, [waitForJob]);
 
   const handleSubmit = async () => {
     if (!teamId) return;
+    const started = Date.now();
     setLoading(true);
+    setStartedAt(started);
     setError("");
     setAnalysis("");
     try {
       const { job_id } = await aiApi.startLineupJob(teamId);
-      savePendingJob({ jobId: job_id, leagueId, teamId, startedAt: Date.now() });
-      await waitForJob(job_id, leagueId);
+      savePendingJob({ jobId: job_id, leagueId, teamId, startedAt: started });
+      await waitForJob(job_id, leagueId, started);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to get analysis");
       setLoading(false);
@@ -367,7 +394,8 @@ function LineupTab() {
         Analyze Lineup
       </button>
 
-      {analysis && <AnalysisResult analysis={analysis} />}
+      {loading && <AiJobProgress seconds={elapsed} />}
+      <div ref={resultRef}>{analysis && !loading && <AnalysisResult analysis={analysis} />}</div>
       <HistoryList items={history} onSelect={setAnalysis} />
     </div>
   );

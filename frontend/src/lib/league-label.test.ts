@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historySummaryLabel } from "./league-label";
+import { historySummaryLabel, leagueLabel, switcherLabels } from "./league-label";
 
 const leagues = [
   { id: "aaaaaa1", name: "QA Test League", created_at: "2026-10-17T06:50:00Z" },
@@ -17,5 +17,24 @@ describe("historySummaryLabel", () => {
   it("leaves unique names and league-less entries alone", () => {
     expect(historySummaryLabel({ summary: "My Team — Solo League", league_id: "cccccc3" }, leagues)).toBe("My Team — Solo League");
     expect(historySummaryLabel({ summary: "Bet: over 47.5", league_id: null }, leagues)).toBe("Bet: over 47.5");
+  });
+});
+
+describe("switcherLabels", () => {
+  it("disambiguates the current league and the others the same way as the dashboard", () => {
+    const [a, b, c] = leagues;
+    const out = switcherLabels(a, leagues);
+    expect(out.current).toBe(leagueLabel(a, leagues));
+    expect(out.current).not.toBe(a.name);
+    expect(out.others.map((o) => o.id)).toEqual([b.id, c.id]);
+    expect(out.others[0].label).toBe(leagueLabel(b, leagues));
+    expect(out.others[0].label).not.toBe(out.current);
+    expect(out.others[1].label).toBe("Solo League");
+  });
+  it("counts the current league even when it isn't in the user's list", () => {
+    const [a, b] = leagues;
+    const out = switcherLabels(a, [b]);
+    expect(out.current).not.toBe(a.name);
+    expect(out.others[0].label).not.toBe(b.name);
   });
 });

@@ -317,3 +317,15 @@ def _clear_draft_board_caches():
     draft_board.clear_caches()
     yield
     draft_board.clear_caches()
+
+
+@pytest.fixture(autouse=True)
+def _no_on_demand_schedule_sync(monkeypatch):
+    """Lineup reads sync a missing NFL week from ESPN on demand; tests must
+    never reach the network, so it's off unless a test turns it on with a
+    faked fetch."""
+    from app.services import nfl_schedule_service
+    monkeypatch.setattr(nfl_schedule_service, "ON_DEMAND_SYNC", False)
+    nfl_schedule_service._ensure_attempts.clear()
+    yield
+    nfl_schedule_service._ensure_attempts.clear()
