@@ -19,6 +19,7 @@ from app.models.player import Player
 from app.models.league import League, DraftStatus, LeagueType, DraftType
 from app.models.draft_queue_entry import DraftQueueEntry
 from app.models.draft_autopick import DraftAutopick
+from app.services.roster_guard import assert_free_agent
 from app.services.sleeper_sync import sleeper_avatar_url, headline_stats as compute_headline_stats, effective_season_stats
 from app.services.scoring_engine import calculate_player_score, DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
 from app.models.contract import Contract
@@ -398,8 +399,11 @@ async def make_pick(
     # which rolls back this whole transaction (including the turn-advance
     # CAS above, since db.commit() hasn't happened yet) -- so the picking
     # team's turn is left intact for a clean retry, nothing half-commits.
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
+    # One player, one roster per league (see roster_guard): waivers stay
+    # open during a draft, so a player can already be on a roster here
+    # without a DraftPick row. Lock the league and check every roster.
+    league_teams = await assert_free_agent(db, draft.league_id, player_id)
+    team = next((t for t in league_teams if t.id == team_id), None)
     if team:
         current_roster = list(team.roster or [])
         if player_id not in current_roster:
@@ -531,7 +535,7 @@ def _started_at_iso(draft: Draft) -> Optional[str]:
 
 
 def _state_key(draft: Draft, league: Optional[League], teams: list, picks: list, catalog) -> tuple:
-    teams_sig = tuple(sorted((t.id, t.name, t.owner_id, t.co_owner_id, t.partner_team_id) for t in teams))
+    teams_sig = tuple(sorted((t.id, t.name, t.owner_id, t.co_owner_id, t.partner_team_id, t.roster_version) for t in teams))
     return (
         draft.id, draft.status.value, draft.current_round, draft.current_pick, bool(draft.is_paused),
         draft.timer_seconds, _started_at_iso(draft), draft.total_rounds, draft.draft_type, draft.team_order,
@@ -547,7 +551,11 @@ async def _build_state(db: AsyncSession, draft: Draft, league: Optional[League],
     pick_index = (draft.current_round - 1) * num_teams + (draft.current_pick - 1)
     current_team_id = team_order[pick_index] if pick_index < len(team_order) else None
 
+    # Off the board: drafted, or already on a roster here (waivers stay
+    # open during a draft).
     drafted_ids = {p[4] for p in picks}
+    for t in teams:
+        drafted_ids.update(t.roster or [])
 
     # Available players: the pre-sorted catalog minus anyone drafted, with
     # pos_rank (RB1, RB2, ...) counted among what's still on the board --
@@ -821,6 +829,19 @@ async def remove_from_queue(db: AsyncSession, draft_id: str, team_id: str, playe
     await db.commit()
 
 
+async def _unavailable_ids(db: AsyncSession, draft_id: str) -> set[str]:
+    """Players a pick can't take: drafted in this draft, or already on any
+    roster in its league (e.g. added off waivers mid-draft)."""
+    drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
+    ids = {row[0] for row in drafted_result.all()}
+    league_id = (await db.execute(select(Draft.league_id).where(Draft.id == draft_id))).scalar_one_or_none()
+    if league_id:
+        rosters = await db.execute(select(Team.roster).where(Team.league_id == league_id))
+        for (roster,) in rosters.all():
+            ids.update(roster or [])
+    return ids
+
+
 async def get_next_pick_for_team(
     db: AsyncSession,
     draft_id: str,
@@ -840,8 +861,7 @@ async def get_next_pick_for_team(
     tab happens to be open and running its own client-side queue check."""
     queue = await get_team_queue(db, draft_id, team_id)
     if queue:
-        drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
-        drafted_ids = {row[0] for row in drafted_result.all()}
+        drafted_ids = await _unavailable_ids(db, draft_id)
         for entry in queue:
             if entry.player_id in drafted_ids:
                 continue
@@ -973,6 +993,8 @@ async def get_ai_mock_pick(
     team_positions = await _team_position_counts(db, draft_id, team_id)
 
     if available_players is not None:
+        unavailable = await _unavailable_ids(db, draft_id)
+        available_players = [p for p in available_players if p.id not in unavailable]
         rank_by_id = build_rank_by_id(available_players, DEFAULT_SCORING)
         by_id = {p.id: p for p in available_players}
         candidates = [
@@ -982,8 +1004,7 @@ async def get_ai_mock_pick(
         return by_id.get(chosen) if chosen else None
 
     catalog = await draft_board.get_catalog(db, DEFAULT_SCORING, FANTASY_POSITIONS)
-    drafted_result = await db.execute(select(DraftPick.player_id).where(DraftPick.draft_id == draft_id))
-    drafted_ids = {row[0] for row in drafted_result.all()}
+    drafted_ids = await _unavailable_ids(db, draft_id)
     # cpu_records are already in DEFAULT_SCORING rank order, so position in
     # the filtered list IS the rank among available players -- the same
     # number build_rank_by_id(available) used to produce.

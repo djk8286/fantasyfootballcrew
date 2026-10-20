@@ -28,6 +28,7 @@ from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, compute_waiver_salary, team_cap_summary, release_player
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
+from app.services.roster_guard import league_teams_fresh, lock_league_rosters, roster_owner_map
 
 
 async def _priority_order(league: League, league_id: str, db: AsyncSession) -> list[str]:
@@ -47,10 +48,17 @@ async def process_league_waivers(league: League, db: AsyncSession, reviewed_by: 
     manual endpoint, management-window check for Best-Ball) -- this
     function itself has no permission/window logic of its own."""
     league_id = league.id
+    # Serialize with every other roster addition in this league (draft
+    # picks, another processing run) and read rosters only after the lock,
+    # so "is this player still a free agent" is answered against the
+    # current rosters, not ones read before someone else's add landed.
+    await lock_league_rosters(db, league_id)
     order = await _priority_order(league, league_id, db)
 
-    teams_result = await db.execute(select(Team).where(Team.league_id == league_id))
-    teams_by_id = {t.id: t for t in teams_result.scalars().all()}
+    teams_by_id = {t.id: t for t in await league_teams_fresh(db, league_id)}
+    # player_id -> team_id rostering him right now; kept current as this
+    # run grants and drops.
+    owner_of: dict[str, str] = {pid: t.id for pid, t in roster_owner_map(teams_by_id.values()).items()}
 
     claims_result = await db.execute(
         select(Transaction).where(
@@ -125,6 +133,19 @@ async def process_league_waivers(league: League, db: AsyncSession, reviewed_by: 
             if not team or not add_id or add_id in granted_players:
                 claim.status = TransactionStatus.DENIED
                 denied.append({"team_id": team_id, "add_player_id": add_id})
+                continue
+
+            if add_id in owner_of:
+                # Claims are checked at submission, but a claim filed while
+                # the player was free (e.g. mid-draft) can come up for
+                # processing after someone else rostered him (QA 10-19:
+                # Josh Allen ended up on two rosters).
+                holder = teams_by_id.get(owner_of[add_id])
+                claim.status = TransactionStatus.DENIED
+                denied.append({
+                    "team_id": team_id, "add_player_id": add_id,
+                    "reason": f"player is already on {holder.name if holder else 'another team'}'s roster",
+                })
                 continue
 
             roster = set(team.roster or [])
@@ -205,6 +226,10 @@ async def process_league_waivers(league: League, db: AsyncSession, reviewed_by: 
 
             claim.status = TransactionStatus.APPROVED
             claim.reviewed_by = reviewed_by
+            claim.details = {**details, "granted_at": datetime.now(timezone.utc).isoformat()}
+            owner_of[add_id] = team_id
+            if drop_id and owner_of.get(drop_id) == team_id:
+                del owner_of[drop_id]
             granted_players.add(add_id)
             granted.append({"team_id": team_id, "add_player_id": add_id, "drop_player_id": drop_id})
 
