@@ -1,214 +1,274 @@
 "use client";
 
-import PlayerLink from "@/components/PlayerLink";
-import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { teamsApi, leaguesApi, playersApi, standingsApi, teamNewsApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
-import { teamOwnershipText } from "@/lib/owner-label";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeftRight, Bot, ListChecks, Lock, Skull, UserCheck } from "lucide-react";
 import Avatar from "@/components/Avatar";
-import PositionBadge, { POSITION_ORDER } from "@/components/PositionBadge";
-import { PlayerAvatar, PlayerCardOverlay } from "@/components/PlayerAvatar";
+import PlayerLink from "@/components/PlayerLink";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
-import { ConferenceBadge, conferenceShortLabel, SalaryCapBadge, BestBallBadge, PartnerBadge } from "@/components/LeagueBadges";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
+import { ActivityFeed, type ActivityItem } from "@/components/ActivityFeed";
+import { PlayerNewsCard } from "@/components/PlayerNewsCard";
+import { BestBallBadge, ConferenceBadge, PartnerBadge, SalaryCapBadge, conferenceShortLabel } from "@/components/LeagueBadges";
+import { Badge, InjuryTag, PositionChip } from "@/components/ui/Badge";
+import { Button, buttonClasses } from "@/components/ui/Button";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { Num, StatBlock } from "@/components/ui/Num";
+import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
+import { Tabs } from "@/components/ui/Tabs";
 import {
-  Bot,
-  UserCheck,
-  Trophy,
-  Swords,
-  Calendar,
-  ListChecks,
-  Shield,
-  Skull,
-  DollarSign,
-  Newspaper,
-} from "lucide-react";
-import type { HoverPlayer, PlayerHoverHandler } from "@/components/PlayerAvatar";
+  friendlyErrorMessage,
+  getCurrentUserId,
+  isCurrentUser,
+  isLoggedIn,
+  leaguesApi,
+  nflApi,
+  standingsApi,
+  teamsApi,
+  tradesApi,
+  waiversApi,
+} from "@/lib/api-client";
+import { initialWeek } from "@/lib/current-week";
+import { groupRoster, ordinal, preDraftNote, recordText, scheduleRows, type ScheduleWeek } from "@/lib/team-page";
 
-// ─── Interfaces ───────────────────────────────────────────────
+// ─── Data ─────────────────────────────────────────────────────
 
-interface Team {
+interface Game {
+  opponent: string;
+  home: boolean;
+  kickoff_at: string;
+  status: "pre" | "in" | "post";
+  detail: string;
+  locked: boolean;
+}
+
+interface RosterRow {
   id: string;
-  name: string;
-  owner_id: string | null;
-  co_owner_id: string | null;
+  full_name: string;
+  position: string;
+  team: string;
+  injury_status: string | null;
+  season_points: number | null;
+  last_week_points: number | null;
+  game: Game | null;
+  on_bye: boolean;
+  slot: string;
+}
+
+interface TeamRoster {
+  team: {
+    id: string;
+    name: string;
+    avatar_url: string | null;
+    is_cpu: boolean;
+    owner_id: string | null;
+    co_owner_id: string | null;
+    owner_username: string | null;
+    co_owner_username: string | null;
+  };
+  record: { wins: number; losses: number; ties: number; points_for: number; points_against: number; rank: number | null; teams: number; streak: string | null };
+  week: number;
+  league_start_week: number;
+  has_lineup_set: boolean;
+  issues: { kind: string; message: string }[];
+  roster: RosterRow[];
+}
+
+interface TeamExtras {
   partner_team_id: string | null;
-  league_id: string;
-  avatar_url: string | null;
-  is_cpu: boolean;
   conference: string | null;
-  wins: number;
-  losses: number;
-  ties: number;
-  points_for: number;
-  points_against: number;
-  roster: string[] | null;
   eliminated_week: number | null;
   last_words: string | null;
 }
 
 interface LeagueData {
-  id: string;
   name: string;
   league_type?: string;
+  draft_status?: string;
   conference_a_name?: string | null;
   conference_b_name?: string | null;
-  commissioner_id?: string;
 }
 
-interface RosterPlayer {
-  id: string;
-  full_name: string;
-  first_name: string;
-  last_name: string;
-  position: string;
-  team: string | null;
-  avatar_url: string | null;
-  sleeper_id: string | null;
-  season_points: number | null;
-  season_points_year: number | null;
-}
-
-interface ScheduleTeamEntry {
-  id: string;
-  name: string;
-  score: number | null;
-  projected_score: number | null;
-  is_projected: boolean;
-}
-
-interface ScheduleMatchup {
-  team_a: ScheduleTeamEntry;
-  team_b: ScheduleTeamEntry;
-}
-
-interface ScheduleWeek {
-  week: number;
-  matchups: ScheduleMatchup[];
-}
-
-// Salary-Cap + Contract Leagues (Phase 5) -- mirrors
-// salary_cap_service.team_cap_summary's response shape exactly.
 interface CapSummary {
-  cap_total: number;
-  contracts_total: number;
-  dead_money_total: number;
-  cap_used: number;
   cap_space: number;
-  max_roster_size: number;
-  roster_size: number;
-  contracts: { player_id: string; salary: number; contract_years: number; signed_year: number }[];
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
+const kickoffFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 
-// ─── Player News (2026-09-22, real articles 2026-10-18) ─────────────────
-// Real ESPN articles about this roster's players (headline links straight
-// to the published story) plus the daily digest from backend
-// team_news_service.py. Ungated public read. A 404 just means there's no
-// digest and no article yet -- rendered as an empty state, not an error.
-
-interface TeamNewsArticle {
-  id: string;
-  player_id: string;
-  player_name: string;
-  headline: string;
-  url: string;
-  source: string;
-  published_at: string;
+/** Everything the page needs, in parallel. Module-level so effects only set state in .then. */
+async function fetchTeamPage(leagueId: string, teamId: string) {
+  const [state, league] = await Promise.all([
+    nflApi.getCurrentWeek().catch(() => null),
+    leaguesApi.get(leagueId).catch(() => null) as Promise<LeagueData | null>,
+  ]);
+  const year = state?.season ?? CURRENT_YEAR;
+  const week = initialWeek({ param: null, state, draftComplete: league?.draft_status === "completed" });
+  const [roster, extras, schedule, activity, capSettings, bestBall] = await Promise.all([
+    teamsApi.getRoster(teamId, week, year).catch(() => null) as Promise<TeamRoster | null>,
+    teamsApi.get(teamId).catch(() => null) as Promise<TeamExtras | null>,
+    standingsApi.getSchedule(leagueId, year).catch(() => null) as Promise<{ league_start_week?: number; schedule?: ScheduleWeek[] } | null>,
+    leaguesApi.getActivity(leagueId, teamId, 20).catch(() => null) as Promise<{ items?: ActivityItem[] } | null>,
+    leaguesApi.getSalaryCapSettings(leagueId).catch(() => null) as Promise<{ enabled?: boolean } | null>,
+    leaguesApi.getBestBallSettings(leagueId).catch(() => null) as Promise<{ enabled?: boolean } | null>,
+  ]);
+  const cap = capSettings?.enabled ? ((await teamsApi.getCap(teamId).catch(() => null)) as CapSummary | null) : null;
+  return {
+    league,
+    roster,
+    extras,
+    schedule: schedule?.schedule ?? [],
+    activity: activity?.items ?? [],
+    capEnabled: !!capSettings?.enabled,
+    cap,
+    bestBall: !!bestBall?.enabled,
+  };
 }
 
-interface TeamNews {
-  content: string | null;
-  updated_at: string | null;
-  articles?: TeamNewsArticle[];
-}
+type PageData = Awaited<ReturnType<typeof fetchTeamPage>>;
 
-function timeAgo(iso: string): string {
-  // Backend may send a naive timestamp (SQLite); treat it as UTC.
-  const t = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
-  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 60) return `${mins || 1}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
+// ─── Pieces ───────────────────────────────────────────────────
 
-function PlayerNewsPanel({ teamId, hasRoster }: { teamId: string; hasRoster: boolean }) {
-  const [news, setNews] = useState<TeamNews | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    teamNewsApi
-      .get(teamId)
-      .then((data) => setNews(data as TeamNews))
-      .catch(() => setNews(null))
-      .finally(() => setLoading(false));
-  }, [teamId]);
-
-  if (!hasRoster) return null;
-
-  const articles = news?.articles || [];
-
+function GameCell({ row }: { row: RosterRow }) {
+  if (row.on_bye) return <span className="text-ink-400">Bye</span>;
+  const g = row.game;
+  if (!g) return <span className="text-ink-400">—</span>;
+  const when =
+    g.status === "in" ? <span className="text-live">Live {g.detail}</span>
+    : g.status === "post" ? <span className="text-ink-400">{g.detail || "Final"}</span>
+    : <span className="text-ink-400">{kickoffFormat.format(new Date(g.kickoff_at))}</span>;
   return (
-    <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-          <Newspaper className="w-4 h-4 text-gold-400" />
-          Player News
-        </h3>
+    <span className="flex items-center gap-1.5 whitespace-nowrap">
+      <span className="text-ink-300">{g.home ? "vs" : "@"} {g.opponent}</span>
+      {when}
+      {g.locked && <Lock className="h-3 w-3 text-ink-400" aria-label="Locked" />}
+    </span>
+  );
+}
+
+function RosterTable({ rows, week }: { rows: RosterRow[]; week: number }) {
+  const groups = groupRoster(rows);
+  return (
+    <Card className="px-0 lg:px-0">
+      <div className="grid grid-cols-[1fr_auto_3.5rem] gap-3 border-b border-ink-700 px-4 pb-2 text-label font-semibold uppercase text-ink-400 md:grid-cols-[1fr_11rem_4rem_4rem_4rem]">
+        <span>Player</span>
+        <span className="hidden md:block">Week {week}</span>
+        <span className="text-right md:text-left">Status</span>
+        <span className="hidden text-right md:block">Last wk</span>
+        <span className="text-right">Season</span>
       </div>
-      {loading ? (
-        <div className="flex items-center justify-center py-6">
-          <div className="w-5 h-5 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : !news || (!news.content && articles.length === 0) ? (
-        <p className="text-surface-500 text-sm">
-          No recent news for this roster yet -- check back after the next refresh.
-        </p>
-      ) : (
-        <div className="space-y-4">
-          {articles.length > 0 && (
-            <ul className="divide-y divide-surface-700/60">
-              {articles.map((a) => (
-                <li key={a.id} className="py-2.5 first:pt-0 last:pb-0">
-                  <a
-                    href={a.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-white hover:text-gold-400 transition-colors font-medium leading-snug"
-                  >
-                    {a.headline}
-                  </a>
-                  <div className="mt-0.5 text-[11px] text-surface-500">
-                    <span className="text-surface-300">{a.player_name}</span> &middot; {a.source} &middot;{" "}
-                    <time dateTime={a.published_at}>{timeAgo(a.published_at)}</time>
+      {groups.map((g) => (
+        <div key={g.position}>
+          {g.players.map((p) => (
+            <div
+              key={p.id}
+              className="grid grid-cols-[1fr_auto_3.5rem] items-center gap-3 border-b border-ink-700 px-4 py-2.5 last:border-b-0 md:grid-cols-[1fr_11rem_4rem_4rem_4rem]"
+            >
+              <div className="flex min-w-0 items-center gap-2.5">
+                <PositionChip pos={p.position} />
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <PlayerLink id={p.id} className="truncate text-sm font-medium text-ink-100">
+                      {p.full_name}
+                    </PlayerLink>
+                    <span className="hidden shrink-0 text-xs text-ink-400 sm:inline">{p.team}</span>
+                    <InjuryTag status={p.injury_status} onBye={p.on_bye} />
                   </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          {news.content && (
-            <div>
-              <div className="flex items-center gap-1.5 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-purple-300">
-                <Bot className="w-3 h-3" /> Roster digest
+                  <div className="mt-0.5 flex gap-1 overflow-hidden text-xs md:hidden">
+                    <span className="shrink-0 text-ink-400 sm:hidden">{p.team} ·</span>
+                    <GameCell row={p} />
+                  </div>
+                </div>
               </div>
-              <div className="p-4 rounded-xl border bg-purple-400/5 border-purple-400/20 text-surface-200 text-sm leading-relaxed whitespace-pre-wrap">
-                {news.content}
+              <div className="hidden text-xs md:block">
+                <GameCell row={p} />
               </div>
-              {news.updated_at && (
-                <p className="text-surface-500 text-[10px] mt-2">
-                  Updated {new Date(news.updated_at).toLocaleString()}
-                </p>
-              )}
+              <span className="text-right md:text-left">
+                {p.slot === "BN" ? <Badge>BN</Badge> : <Badge tone="win">Start</Badge>}
+              </span>
+              <Num value={p.last_week_points} className="hidden text-right text-sm text-ink-300 md:block" />
+              <Num value={p.season_points} className="text-right text-sm text-ink-300" />
             </div>
-          )}
+          ))}
         </div>
+      ))}
+    </Card>
+  );
+}
+
+function ScheduleCard({ weeks, teamId, leagueId, startWeek }: { weeks: ScheduleWeek[]; teamId: string; leagueId: string; startWeek: number }) {
+  const rows = scheduleRows(weeks, teamId);
+  const note = preDraftNote(startWeek);
+  return (
+    <Card>
+      <CardHeader title="Schedule" />
+      {note && <p className="mb-2 text-xs text-ink-400">{note}</p>}
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink-400">The schedule shows up once the league drafts.</p>
+      ) : (
+        <ul className="divide-y divide-ink-700">
+          {rows.map((r) => (
+            <li
+              key={r.week}
+              className={`-mx-2 flex items-center gap-3 rounded-control px-2 py-2 text-sm ${r.next ? "bg-gold/[0.07] ring-1 ring-inset ring-gold/40" : ""}`}
+            >
+              <span className="num w-8 shrink-0 text-xs text-ink-400">W{r.week}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {r.opponent ? (
+                  <Link href={`/leagues/${leagueId}/teams/${r.opponent.id}`} className="text-ink-300 hover:text-ink-100">
+                    vs {r.opponent.name}
+                  </Link>
+                ) : (
+                  <span className="text-ink-400">Bye</span>
+                )}
+              </span>
+              {r.result ? (
+                <Badge tone={r.result === "W" ? "win" : r.result === "L" ? "loss" : "neutral"}>{r.result}</Badge>
+              ) : r.status === "live" ? (
+                <Badge tone="live">Live</Badge>
+              ) : r.next ? (
+                <Badge tone="you">Next</Badge>
+              ) : null}
+              <span className="num w-[6.5rem] shrink-0 text-right text-xs text-ink-300">
+                {r.status === "upcoming" ? "—" : `${(r.me ?? 0).toFixed(1)} – ${(r.them ?? 0).toFixed(1)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
+    </Card>
+  );
+}
+
+function PageSkeleton() {
+  return (
+    <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+      <Card>
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-14 w-14 rounded-full" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        </div>
+      </Card>
+      <Card>
+        <SkeletonRows rows={10} />
+      </Card>
     </div>
   );
 }
+
+// ─── Page ─────────────────────────────────────────────────────
+
+type TabId = "roster" | "schedule" | "moves" | "news";
+const TABS = [
+  { id: "roster", label: "Roster" },
+  { id: "schedule", label: "Schedule" },
+  { id: "moves", label: "Moves" },
+  { id: "news", label: "News" },
+] as const;
 
 export default function TeamPage() {
   const params = useParams();
@@ -216,398 +276,233 @@ export default function TeamPage() {
   const leagueId = params.id as string;
   const teamId = params.teamId as string;
 
-  const [team, setTeam] = useState<Team | null>(null);
-  const [league, setLeague] = useState<LeagueData | null>(null);
-  const [playersById, setPlayersById] = useState<Record<string, RosterPlayer>>({});
-  const [schedule, setSchedule] = useState<ScheduleWeek[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<PageData | null>(null);
   const [error, setError] = useState("");
-  const [claimingCoOwner, setClaimingCoOwner] = useState(false);
-  const [lastWordsInput, setLastWordsInput] = useState("");
-  const [savingLastWords, setSavingLastWords] = useState(false);
-  const [capEnabled, setCapEnabled] = useState(false);
-  const [cap, setCap] = useState<CapSummary | null>(null);
-  const [bestBallEnabled, setBestBallEnabled] = useState(false);
-
-  const currentUserId = getCurrentUserId();
-
-  const handleClaimCoOwner = async () => {
-    setClaimingCoOwner(true);
-    try {
-      const updated = await teamsApi.claimCoOwner(teamId);
-      setTeam(updated as Team);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to claim co-owner slot");
-    }
-    setClaimingCoOwner(false);
-  };
-
-  const handleSubmitLastWords = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!lastWordsInput.trim()) return;
-    setSavingLastWords(true);
-    try {
-      const updated = await teamsApi.update(teamId, { last_words: lastWordsInput.trim() });
-      setTeam(updated as Team);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save last words");
-    }
-    setSavingLastWords(false);
-  };
+  const [tab, setTab] = useState<TabId>("roster");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [lastWords, setLastWords] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [claiming, setClaiming] = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      teamsApi.get(teamId) as Promise<Team>,
-      leaguesApi.get(leagueId) as Promise<LeagueData>,
-      // Team.wins/losses columns are never written server-side; the real
-      // record comes from the standings endpoint (computed from weekly scores).
-      standingsApi.getStandings(leagueId).catch(() => null),
-    ])
-      .then(([t, l, st]) => {
-        const rows = ((st as { standings?: Array<{ team_id: string; wins: number; losses: number; ties: number }> } | null)?.standings) || [];
-        const rec = rows.find((r) => r.team_id === t.id);
-        setTeam(rec ? { ...t, wins: rec.wins, losses: rec.losses, ties: rec.ties } : t);
-        setLeague(l);
-      })
-      .catch(() => setError("Failed to load team"))
-      .finally(() => setLoading(false));
-
-    standingsApi
-      .getSchedule(leagueId, CURRENT_YEAR)
-      .then((data) => setSchedule((data as { schedule: ScheduleWeek[] }).schedule || []))
-      .catch(() => {});
-
-    // Salary-Cap + Contract Leagues (Phase 5) -- only fetch the (join-
-    // heavy) cap summary when the league actually has the feature on.
-    leaguesApi
-      .getSalaryCapSettings(leagueId)
-      .then((data) => {
-        const enabled = !!(data as { enabled?: boolean })?.enabled;
-        setCapEnabled(enabled);
-        if (enabled) {
-          teamsApi.getCap(teamId).then((c) => setCap(c as CapSummary)).catch(() => {});
-        }
-      })
-      .catch(() => {});
-
-    leaguesApi
-      .getBestBallSettings(leagueId)
-      .then((data) => setBestBallEnabled(!!(data as { enabled?: boolean })?.enabled))
-      .catch(() => {});
+    let live = true;
+    fetchTeamPage(leagueId, teamId).then((d) => {
+      if (!live) return;
+      setData(d);
+      setError(d.roster ? "" : "Couldn't load this team. Try again in a moment.");
+    });
+    return () => {
+      live = false;
+    };
   }, [leagueId, teamId]);
 
-  // Resolve roster player IDs into actual player data (same pattern as the
-  // league page's roster grid).
-  useEffect(() => {
-    if (!team) return;
-    const ids = (team.roster || []).filter((pid) => !(pid in playersById));
-    if (ids.length === 0) return;
+  const team = data?.roster?.team;
+  const isMine = !!team && (isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id));
+  const extras = data?.extras;
+  const eliminated = extras?.eliminated_week != null;
+  const startWeek = data?.roster?.league_start_week ?? 1;
+  const issues = data?.roster?.issues.length ?? 0;
+  const ownerLine = useMemo(() => {
+    if (!team) return "";
+    if (team.is_cpu) return "CPU-controlled";
+    if (isMine) return team.co_owner_id ? "You manage this team with a co-owner" : "You manage this team";
+    if (!team.owner_username) return "Unclaimed";
+    return team.co_owner_username ? `Managed by ${team.owner_username} and ${team.co_owner_username}` : `Managed by ${team.owner_username}`;
+  }, [team, isMine]);
 
-    Promise.all(
-      ids.map((pid) =>
-        playersApi
-          .get(pid, leagueId)
-          .then((p) => {
-            const raw = p as Omit<RosterPlayer, "full_name">;
-            const full_name = `${raw.first_name ?? ""} ${raw.last_name ?? ""}`.trim() || "Unknown Player";
-            return [pid, { ...raw, full_name } as RosterPlayer] as const;
-          })
-          .catch(() => [pid, null] as const),
-      ),
-    ).then((pairs) => {
-      setPlayersById((prev) => {
-        const next = { ...prev };
-        for (const [pid, p] of pairs) if (p) next[pid] = p;
-        return next;
-      });
-    });
-  }, [team, playersById, leagueId]);
+  if (!data) return <PageSkeleton />;
+  if (!data.roster || !team) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+        <Card>
+          <p className="text-sm text-loss">{error || "Team not found."}</p>
+        </Card>
+      </div>
+    );
+  }
 
-  // Fixed hover card state -- same pattern the draft room already uses.
-  const [hoveredPlayer, setHoveredPlayer] = useState<RosterPlayer | null>(null);
-  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
-  const handlePlayerHover = useCallback((player: RosterPlayer | null, el: HTMLElement | null) => {
-    if (player && el) {
-      setHoveredPlayer(player);
-      const rect = el.getBoundingClientRect();
-      setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
-    } else {
-      setHoveredPlayer(null);
-      setHoverPos(null);
+  const { record, roster, week } = data.roster;
+
+  async function cancelMove(item: ActivityItem) {
+    if (!item.cancel) return;
+    setBusyId(item.id);
+    try {
+      if (item.cancel.type === "trade") await tradesApi.cancel(leagueId, item.cancel.id);
+      else await waiversApi.cancelClaim(leagueId, item.cancel.id);
+      setData((d) => (d ? { ...d, activity: d.activity.filter((a) => a.id !== item.id) } : d));
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't cancel that. Try again."));
+    } finally {
+      setBusyId(null);
     }
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
   }
 
-  if (error || !team) {
-    return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <p className="text-red-400">{error || "Team not found"}</p>
-      </div>
-    );
+  async function submitLastWords(e: React.FormEvent) {
+    e.preventDefault();
+    if (!lastWords.trim()) return;
+    setSaving(true);
+    try {
+      const updated = (await teamsApi.update(teamId, { last_words: lastWords.trim() })) as TeamExtras;
+      setData((d) => (d ? { ...d, extras: updated } : d));
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't save that. Try again."));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  const roster = (team.roster || []).map((pid) => playersById[pid]).filter(Boolean) as RosterPlayer[];
-  const salaryByPlayerId = new Map((cap?.contracts || []).map((c) => [c.player_id, c.salary]));
-  const rosterByPos: Record<string, RosterPlayer[]> = {};
-  roster.forEach((p) => {
-    if (!rosterByPos[p.position]) rosterByPos[p.position] = [];
-    rosterByPos[p.position].push(p);
-  });
+  async function claimCoOwner() {
+    setClaiming(true);
+    try {
+      await teamsApi.claimCoOwner(teamId);
+      const d = await fetchTeamPage(leagueId, teamId);
+      setData(d);
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't join as co-owner."));
+    } finally {
+      setClaiming(false);
+    }
+  }
 
-  // This team's matchup each week, whichever side of the pairing it's on.
-  const myMatchups = schedule
-    .map((wk) => {
-      const m = wk.matchups.find((mm) => mm.team_a.id === teamId || mm.team_b.id === teamId);
-      if (!m) return null;
-      const me = m.team_a.id === teamId ? m.team_a : m.team_b;
-      const opp = m.team_a.id === teamId ? m.team_b : m.team_a;
-      return { week: wk.week, me, opp };
-    })
-    .filter((x): x is { week: number; me: ScheduleTeamEntry; opp: ScheduleTeamEntry } => !!x);
+  const canJoinAsCoOwner =
+    data.league?.league_type === "two_man" && !team.co_owner_id && team.owner_id !== getCurrentUserId() && !eliminated && isLoggedIn() && !team.is_cpu;
+
+  const rosterCard =
+    roster.length === 0 ? (
+      <Card>
+        <p className="text-sm text-ink-400">No players yet. The roster fills in at the draft.</p>
+      </Card>
+    ) : (
+      <RosterTable rows={roster} week={week} />
+    );
+  const scheduleCard = <ScheduleCard weeks={data.schedule} teamId={teamId} leagueId={leagueId} startWeek={startWeek} />;
+  const movesCard = (
+    <Card>
+      <CardHeader title="Moves" />
+      <ActivityFeed items={data.activity} onCancel={cancelMove} busyId={busyId} empty="No trades or claims yet." />
+    </Card>
+  );
+  const newsCard = roster.length > 0 ? <PlayerNewsCard teamId={teamId} /> : null;
+  const staffCard =
+    isMine && !eliminated ? (
+      <Card>
+        <CardHeader title="Coaching staff" />
+        <CoachStaffPanel teamId={teamId} canManage />
+      </Card>
+    ) : null;
 
   return (
-    <div className="min-h-screen bg-surface-900">
-      <div className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur-md border-b border-surface-700">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center gap-3">
-          <h1 className="text-lg font-semibold text-white">{league?.name} — Team</h1>
-        </div>
-      </div>
-
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {/* Guillotine (Phase 4): elimination banner + optional "last
-            words" -- an eliminated manager can leave a short farewell
-            message once, shown here and on the standings page's
-            Elimination History section. */}
-        {team.eliminated_week != null && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5">
-            <div className="flex items-center gap-2 text-red-400 font-semibold text-sm">
-              <Skull className="w-4 h-4" />
-              Eliminated in Week {team.eliminated_week}
-            </div>
-            {team.last_words ? (
-              <p className="text-surface-300 text-sm mt-2 italic">&ldquo;{team.last_words}&rdquo;</p>
-            ) : isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id) ? (
-              <form onSubmit={handleSubmitLastWords} className="mt-3 flex gap-2">
-                <input
-                  value={lastWordsInput}
-                  onChange={(e) => setLastWordsInput(e.target.value)}
-                  maxLength={280}
-                  placeholder="Any last words?"
-                  className="flex-1 bg-surface-900 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-surface-600"
-                />
-                <button
-                  type="submit"
-                  disabled={savingLastWords || !lastWordsInput.trim()}
-                  className="text-sm text-gold-400 hover:text-gold-300 font-medium disabled:opacity-50 shrink-0"
-                >
-                  {savingLastWords ? "Saving…" : "Submit"}
-                </button>
-              </form>
-            ) : null}
-          </div>
-        )}
-
-        {/* Team header */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 flex items-center gap-4 flex-wrap gap-y-4">
-          <Avatar url={team.avatar_url} size={64} className="border border-surface-700/50" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-white truncate">{team.name}</h2>
-              <ConferenceBadge
-                conference={team.conference}
-                displayName={conferenceShortLabel(team.conference, league?.conference_a_name, league?.conference_b_name)}
+    <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+      {eliminated && (
+        <Card className="border-loss/40 bg-loss/10">
+          <p className="flex items-center gap-2 text-sm font-semibold text-loss">
+            <Skull className="h-4 w-4" aria-hidden /> Eliminated in Week {extras?.eliminated_week}
+          </p>
+          {extras?.last_words ? (
+            <p className="mt-2 text-sm italic text-ink-300">&ldquo;{extras.last_words}&rdquo;</p>
+          ) : isMine ? (
+            <form onSubmit={submitLastWords} className="mt-3 flex gap-2">
+              <input
+                value={lastWords}
+                onChange={(e) => setLastWords(e.target.value)}
+                maxLength={280}
+                placeholder="Any last words?"
+                className="h-9 flex-1 rounded-control border border-ink-700 bg-ink-950 px-3 text-sm text-ink-100 placeholder:text-ink-400"
               />
-              {capEnabled && <SalaryCapBadge />}
-              {bestBallEnabled && <BestBallBadge />}
-              {bestBallEnabled && <ManagementWindowIndicator leagueId={leagueId} />}
-              {team.partner_team_id && (
-                <PartnerBadge onClick={() => router.push(`/leagues/${leagueId}/teams/${team.partner_team_id}`)} />
-              )}
+              <Button type="submit" size="sm" disabled={saving || !lastWords.trim()}>
+                {saving ? "Saving" : "Post"}
+              </Button>
+            </form>
+          ) : null}
+        </Card>
+      )}
+
+      {error && data.roster && (
+        <div role="alert" className="rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
+          {error}
+        </div>
+      )}
+
+      <Card you={isMine}>
+        <div className="flex flex-wrap items-center gap-4">
+          <Avatar url={team.avatar_url} size={56} className="shrink-0 border border-ink-700" />
+          <div className="min-w-0 flex-1 basis-48">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-title font-semibold text-ink-100">{team.name}</h1>
+              <ConferenceBadge
+                conference={extras?.conference}
+                displayName={conferenceShortLabel(extras?.conference, data.league?.conference_a_name, data.league?.conference_b_name)}
+              />
+              {data.capEnabled && <SalaryCapBadge />}
+              {data.bestBall && <BestBallBadge />}
+              {data.bestBall && <ManagementWindowIndicator leagueId={leagueId} />}
+              {extras?.partner_team_id && <PartnerBadge onClick={() => router.push(`/leagues/${leagueId}/teams/${extras.partner_team_id}`)} />}
             </div>
-            <p className="text-surface-400 text-sm flex items-center gap-1.5 mt-1 flex-wrap">
-              {team.is_cpu ? (
-                <>
-                  <Bot className="w-3.5 h-3.5" /> CPU-controlled
-                </>
-              ) : (
-                <>
-                  <UserCheck className="w-3.5 h-3.5" />
-                  {teamOwnershipText({
-                    ownerId: team.owner_id,
-                    coOwnerId: team.co_owner_id,
-                    commissionerId: league?.commissioner_id,
-                    isOwnerMe: isCurrentUser(team.owner_id),
-                    isCoOwnerMe: false,
-                  })}
-                  {team.co_owner_id && (
-                    <span className="text-surface-500">
-                      {" "}
-                      &middot; {isCurrentUser(team.co_owner_id) ? "you're co-owner" : "has a co-owner"}
-                    </span>
-                  )}
-                  {/* Co-Owner (2-Man Teams) only makes sense for TWO_MAN
-                      leagues -- see teams.py's matching server-side gate. */}
-                  {league?.league_type === "two_man" && !team.co_owner_id && team.owner_id !== currentUserId && team.eliminated_week == null && isLoggedIn() && (
-                    <button
-                      onClick={handleClaimCoOwner}
-                      disabled={claimingCoOwner}
-                      className="ml-1 text-[11px] text-gold-400 hover:text-gold-300 transition-colors font-medium underline decoration-dotted disabled:opacity-50"
-                    >
-                      {claimingCoOwner ? "Joining…" : "Join as Co-Owner"}
-                    </button>
-                  )}
-                </>
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-ink-400">
+              {team.is_cpu ? <Bot className="h-3.5 w-3.5" aria-hidden /> : <UserCheck className="h-3.5 w-3.5" aria-hidden />}
+              {ownerLine}
+              {canJoinAsCoOwner && (
+                <button type="button" onClick={claimCoOwner} disabled={claiming} className="ml-1 font-medium text-gold hover:text-gold-hi disabled:opacity-50">
+                  {claiming ? "Joining" : "Join as co-owner"}
+                </button>
               )}
             </p>
           </div>
-          <div className="flex gap-6 text-center shrink-0">
-            <div>
-              <div className="text-xl font-bold text-white">
-                {team.wins}-{team.losses}{team.ties > 0 ? `-${team.ties}` : ""}
-              </div>
-              <div className="text-[10px] text-surface-500 uppercase tracking-wider">Record</div>
-            </div>
-            <div>
-              <div className="text-xl font-bold text-white">{team.points_for.toFixed(1)}</div>
-              <div className="text-[10px] text-surface-500 uppercase tracking-wider">Points For</div>
-            </div>
-            <div>
-              <div className="text-xl font-bold text-white">{team.points_against.toFixed(1)}</div>
-              <div className="text-[10px] text-surface-500 uppercase tracking-wider">Points Against</div>
-            </div>
-            {capEnabled && cap && (
-              <div>
-                <div className={`text-xl font-bold ${cap.cap_space >= 0 ? "text-gold-400" : "text-red-400"}`}>
-                  ${cap.cap_space.toFixed(1)}
-                </div>
-                <div className="text-[10px] text-surface-500 uppercase tracking-wider">Cap Space</div>
-              </div>
+          <div className="flex w-full shrink-0 gap-2 sm:w-auto">
+            {isMine && !eliminated && !data.bestBall && (
+              <Link href={`/leagues/${leagueId}/teams/${teamId}/lineup`} className={buttonClasses("primary", "md")}>
+                <ListChecks className="h-4 w-4" aria-hidden />
+                Set lineup
+                {issues > 0 && <span className="num ml-1 rounded-chip bg-ink-950/30 px-1.5 text-xs">{issues}</span>}
+              </Link>
+            )}
+            {!isMine && isLoggedIn() && !eliminated && (
+              <Link href={`/leagues/${leagueId}/trades`} className={buttonClasses("secondary", "md")}>
+                <ArrowLeftRight className="h-4 w-4" aria-hidden />
+                Propose trade
+              </Link>
             )}
           </div>
-          {(isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id)) && team.eliminated_week == null && (
-            <Link
-              href={`/leagues/${leagueId}/teams/${teamId}/lineup`}
-              className="inline-flex items-center gap-2 bg-gold-400 hover:bg-gold-300 text-surface-900 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all shrink-0"
-            >
-              <ListChecks className="w-4 h-4" />
-              Set Lineup
-            </Link>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-4 border-t border-ink-700 pt-4 sm:grid-cols-5">
+          <StatBlock label="Record">{recordText(record)}</StatBlock>
+          <StatBlock label={`Rank of ${record.teams}`}>{record.rank ? ordinal(record.rank) : "—"}</StatBlock>
+          <StatBlock label="Streak">{record.streak ?? "—"}</StatBlock>
+          <StatBlock label="Pts for">
+            <Num value={record.points_for} size="lg" />
+          </StatBlock>
+          <StatBlock label="Pts against">
+            <Num value={record.points_against} size="lg" />
+          </StatBlock>
+          {data.capEnabled && data.cap && (
+            <StatBlock label="Cap space">
+              <span className={data.cap.cap_space >= 0 ? "text-ink-100" : "text-loss"}>${data.cap.cap_space.toFixed(1)}</span>
+            </StatBlock>
           )}
         </div>
+      </Card>
 
-        {/* Roster */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-gold-400" />
-            Roster
-          </h3>
-          {(team.roster || []).length === 0 ? (
-            <p className="text-surface-500 text-sm">No players drafted yet.</p>
-          ) : roster.length < (team.roster || []).length ? (
-            <p className="text-surface-500 text-sm">Loading roster…</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-              {POSITION_ORDER.filter((pos) => rosterByPos[pos]).map((pos) => (
-                <div key={pos} className="contents">
-                  {rosterByPos[pos].map((p) => (
-                    <div key={p.id} className="flex items-center gap-2 py-1.5 border-b border-surface-800/50">
-                      <PlayerAvatar player={p as unknown as HoverPlayer} size="sm" onHover={handlePlayerHover as unknown as PlayerHoverHandler} />
-                      <PlayerLink id={p.id} className="text-sm text-white truncate flex-1">{p.full_name}</PlayerLink>
-                      {p.season_points != null && (
-                        <span className="text-[10px] text-gold-400/80 font-semibold">
-                          {Math.round(p.season_points * 10) / 10}
-                        </span>
-                      )}
-                      {capEnabled && salaryByPlayerId.has(p.id) && (
-                        <span className="text-[10px] text-blue-400/80 font-semibold">
-                          ${salaryByPlayerId.get(p.id)}
-                        </span>
-                      )}
-                      <span className="text-[10px] text-surface-500">{p.team}</span>
-                      <PositionBadge pos={p.position} />
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
+      {/* One render. Mobile shows the chosen tab; desktop shows the roster with a rail. */}
+      <div className="lg:hidden">
+        <Tabs tabs={TABS} value={tab} onChange={setTab} label="Team sections" />
+      </div>
+      <div className="mt-3 gap-4 lg:mt-0 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className={`space-y-4 ${tab === "roster" ? "" : "hidden"} lg:block`}>
+          {rosterCard}
+          {staffCard}
         </div>
-
-        {/* Player News -- see PlayerNewsPanel above */}
-        <PlayerNewsPanel teamId={teamId} hasRoster={(team.roster || []).length > 0} />
-
-        {/* Coaching Staff -- was previously invisible anywhere a team
-            owner could see it themselves; only the commissioner's admin
-            tab could show/manage coaches at all. The list itself renders
-            for any visitor (matches list_coaches being a public read,
-            same as Roster/Schedule above); management controls are
-            gated the same way "Set Lineup" already is. */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-            <Shield className="w-4 h-4 text-gold-400" />
-            Coaching Staff
-          </h3>
-          <CoachStaffPanel
-            teamId={teamId}
-            canManage={(isCurrentUser(team.owner_id) || isCurrentUser(team.co_owner_id)) && team.eliminated_week == null}
-          />
-        </div>
-
-        {/* Schedule / results */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6">
-          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-gold-400" />
-            Schedule
-          </h3>
-          {myMatchups.length === 0 ? (
-            <p className="text-surface-500 text-sm">Schedule not available yet.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {myMatchups.map(({ week, me, opp }) => {
-                const decided = !me.is_projected && !opp.is_projected;
-                const won = decided && (me.score ?? 0) > (opp.score ?? 0);
-                const lost = decided && (me.score ?? 0) < (opp.score ?? 0);
-                return (
-                  <div
-                    key={week}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg border border-surface-700 bg-surface-900 text-sm"
-                  >
-                    <span className="text-surface-500 text-xs font-mono w-14 shrink-0">Week {week}</span>
-                    <div className="flex items-center gap-2 flex-1 min-w-0 justify-center">
-                      <Swords className="w-3.5 h-3.5 text-surface-600 shrink-0" />
-                      <Link
-                        href={`/leagues/${leagueId}/teams/${opp.id}`}
-                        className="text-surface-300 hover:text-gold-400 transition-colors truncate"
-                      >
-                        vs {opp.name}
-                      </Link>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 w-32 justify-end">
-                      <span className={won ? "text-green-400 font-semibold" : lost ? "text-red-400 font-semibold" : "text-surface-400"}>
-                        {me.score ?? me.projected_score ?? "—"}
-                      </span>
-                      <span className="text-surface-600">-</span>
-                      <span className="text-surface-400">{opp.score ?? opp.projected_score ?? "—"}</span>
-                      {me.is_projected && (
-                        <span className="text-[9px] text-surface-600 uppercase">proj</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="space-y-4">
+          <div className={`${tab === "schedule" ? "" : "hidden"} lg:block`}>{scheduleCard}</div>
+          <div className={`${tab === "moves" ? "" : "hidden"} lg:block`}>{movesCard}</div>
+          <div className={`${tab === "news" ? "" : "hidden"} lg:block`}>
+            {newsCard ?? (
+              <Card className="lg:hidden">
+                <p className="text-sm text-ink-400">No players yet, so no news.</p>
+              </Card>
+            )}
+          </div>
         </div>
       </div>
-
-      <PlayerCardOverlay player={hoveredPlayer} position={hoverPos} onDismiss={() => handlePlayerHover(null, null)} />
     </div>
   );
 }
