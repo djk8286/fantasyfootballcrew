@@ -1,3 +1,4 @@
+import contextlib
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,8 @@ from app.services.standings_service import get_standings, get_combined_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
 from app.services.ai_usage_service import record_ai_usage
 from app.services.ai_history_service import record_analysis, get_analysis_history
+from app.services import ai_jobs, ai_cost_service
+from app.models.ai_usage_event import AIUsageEvent
 from app.services.scheduler import fetch_nfl_state
 from app.services.team_comparison_service import build_team_trend
 from app.services.player_comparison_service import build_player_profile
@@ -208,6 +211,35 @@ class PlayerComparisonRequest(BaseModel):
     league_id: str
 
 
+async def _load_owned_team(body: "LineupAnalysisRequest", db: AsyncSession, current_user: User):
+    result = await db.execute(select(Team).where(Team.id == body.team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if current_user.id not in {team.owner_id, team.co_owner_id}:
+        raise HTTPException(status_code=403, detail="You do not own this team")
+    league_result = await db.execute(select(League).where(League.id == team.league_id))
+    return team, league_result.scalar_one_or_none()
+
+
+async def _lineup_prompt_inputs(team: Team, league: League | None, db: AsyncSession) -> dict:
+    """Everything analyze_lineup needs, gathered from the DB up front so the
+    (slow) LLM call itself can run without holding a request open."""
+    roster = await _roster_summary(team, db)
+    coaching_staff = await _coach_summary(team, db)
+    salary_context = await _salary_summary(team, league, db)
+    partner_context = await _partner_summary(team, league, db)
+    # This team's REAL current-week opponent + matchup context -- see
+    # _current_matchup_context.
+    opponent_roster, matchups = await _current_matchup_context(team, league, db)
+    return dict(
+        roster=roster, opponent_roster=opponent_roster, matchups=matchups,
+        scoring=(league.scoring_config if league else None) or {},
+        coaching_staff=coaching_staff, salary_context=salary_context,
+        partner_context=partner_context,
+    )
+
+
 @router.post("/lineup")
 @limiter.limit("10/hour")
 async def analyze_lineup(
@@ -216,45 +248,94 @@ async def analyze_lineup(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get AI lineup/start-sit analysis for a team's current roster.
-    Rate-limited (unlike everything else in this router before this) --
-    each call is a real LLM API request once a key is configured, so an
-    unlimited endpoint is a real cost/abuse surface, not just a
-    theoretical one."""
-    result = await db.execute(select(Team).where(Team.id == body.team_id))
-    team = result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    if current_user.id not in {team.owner_id, team.co_owner_id}:
-        raise HTTPException(status_code=403, detail="You do not own this team")
-
-    league_result = await db.execute(select(League).where(League.id == team.league_id))
-    league = league_result.scalar_one_or_none()
-    scoring = (league.scoring_config if league else None) or {}
-
-    roster = await _roster_summary(team, db)
-    coaching_staff = await _coach_summary(team, db)
-    salary_context = await _salary_summary(team, league, db)
-    partner_context = await _partner_summary(team, league, db)
-    # This team's REAL current-week opponent + matchup context -- was
-    # hardcoded empty, so the AI could only ever compare a lineup
-    # against generic rankings, never against what's actually happening
-    # in the team's own matchup this week. See _current_matchup_context.
-    opponent_roster, matchups = await _current_matchup_context(team, league, db)
-
+    """Synchronous lineup analysis (kept for API callers). The web app uses
+    the async /ai/lineup/jobs flow below, because generation routinely
+    takes 20-40 s and a page navigation mid-request dropped the result
+    (QA regression 2026-10-19). Rate-limited: each call is a real LLM
+    request once a key is configured."""
+    team, league = await _load_owned_team(body, db, current_user)
+    inputs = await _lineup_prompt_inputs(team, league, db)
     await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
-    service = _get_ai_service()
-    analysis = await service.analyze_lineup(
-        roster=roster, opponent_roster=opponent_roster, matchups=matchups, scoring=scoring,
-        coaching_staff=coaching_staff, salary_context=salary_context,
-        partner_context=partner_context,
-    )
+    analysis = await _get_ai_service().analyze_lineup(**inputs)
     await record_analysis(
         db, user_id=current_user.id, analysis_type="lineup", league_id=team.league_id,
         summary=f"{team.name} — {league.name}" if league else team.name, result=analysis,
     )
     await db.commit()
     return {"analysis": analysis}
+
+
+@contextlib.asynccontextmanager
+async def _job_session(session_dep):
+    """One short-lived session from a get_db-style generator, always closed
+    (returning its pool connection) -- the job holds no connection while
+    the model call itself runs."""
+    gen = session_dep()
+    try:
+        yield await gen.__anext__()
+    finally:
+        await gen.aclose()
+
+
+@router.post("/lineup/jobs", status_code=202)
+@limiter.limit("10/hour")
+async def start_lineup_analysis_job(
+    request: Request,
+    body: LineupAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start a lineup analysis in the background and return a job id
+    immediately; poll GET /ai/jobs/{job_id}. The result is also saved to
+    analysis history exactly like the synchronous endpoint."""
+    team, league = await _load_owned_team(body, db, current_user)
+    inputs = await _lineup_prompt_inputs(team, league, db)
+    await record_ai_usage(db, "lineup", league_id=team.league_id, user_id=current_user.id)
+    await db.commit()
+    # The background task inherits this request's context, so AIService's
+    # cost metering keeps writing tokens/cost onto this (now committed,
+    # detached) usage row in memory; _run copies them back to the DB so
+    # cost tracking and the daily spend cap still see this call.
+    usage_event = ai_cost_service.current_usage_event()
+    usage_event_id = usage_event.id if usage_event is not None else None
+    summary = f"{team.name} — {league.name}" if league else team.name
+    # Same session source the request used (honours test overrides).
+    session_dep = request.app.dependency_overrides.get(get_db, get_db)
+
+    async def _run() -> str:
+        try:
+            analysis = await _get_ai_service().analyze_lineup(**inputs)
+        finally:
+            if usage_event_id is not None and usage_event is not None:
+                async with _job_session(session_dep) as job_db:
+                    row = await job_db.get(AIUsageEvent, usage_event_id)
+                    if row is not None:
+                        row.model = usage_event.model
+                        row.input_tokens = usage_event.input_tokens
+                        row.output_tokens = usage_event.output_tokens
+                        row.cost_usd = usage_event.cost_usd
+                        row.error = usage_event.error
+                        await job_db.commit()
+        async with _job_session(session_dep) as job_db:
+            await record_analysis(
+                job_db, user_id=current_user.id, analysis_type="lineup",
+                league_id=team.league_id, summary=summary, result=analysis,
+            )
+            await job_db.commit()
+        return analysis
+
+    job = ai_jobs.start(current_user.id, "lineup", _run)
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/jobs/{job_id}")
+async def get_analysis_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Status of a background analysis job. Only its owner can read it;
+    anyone else (or an expired/unknown id) gets the same 404."""
+    job = ai_jobs.get(job_id, current_user.id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found or expired")
+    return job.public()
 
 
 @router.post("/trade")

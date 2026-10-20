@@ -579,16 +579,15 @@ async def get_team_player_news(team_id: str, db: AsyncSession = Depends(get_db))
     plus the real ESPN articles about its rostered players from the last
     week, read live from player_news so links are as fresh as the last
     ESPN poll even when the digest is a day old. Ungated public read.
-    404 only when the team doesn't exist or there's neither a digest nor
-    any article yet."""
+    404 only when the team doesn't exist. "Nothing yet" is a normal empty
+    200 (content null, no articles): it used to 404, which every visitor's
+    console logged as a failed request on fresh teams (QA 2026-10-19)."""
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
     news = await get_team_news(team_id, db)
     recent = await espn_news_service.recent_news_for_players(list(team.roster or []), db, days=7, limit=60)
-    if not news and not recent:
-        raise HTTPException(status_code=404, detail="No player news generated yet for this team")
     return {
         "team_id": team_id,
         "content": news.content if news else None,

@@ -208,3 +208,45 @@ async def test_change_password_keeps_this_cookie_session_but_kills_others(client
     assert (await client.get("/auth/me")).status_code == 200
     _set(client, "ffc_refresh", other_refresh, "/api/v1/auth")
     assert (await client.post("/auth/refresh", headers=ORIGIN)).status_code == 401
+
+
+# ─── QA 2026-10-19 NEW-3: guest pages must not log 401s ──────────────────
+
+@pytest.mark.asyncio
+async def test_session_probe_is_200_for_guests_and_reports_the_user_when_signed_in(client, db_session_factory):
+    r = await client.get("/auth/session")
+    assert r.status_code == 200 and r.json() == {"user": None}
+
+    u = await _user(db_session_factory)
+    await _login(client, u)
+    r = await client.get("/auth/session")
+    assert r.status_code == 200 and r.json()["user"]["id"] == u.id
+    assert "hashed_password" not in r.json()["user"]
+
+    # A bad/expired access cookie is just "no session", never an error.
+    _set(client, "ffc_access", "garbage", "/api")
+    r = await client.get("/auth/session")
+    assert r.status_code == 200 and r.json() == {"user": None}
+
+
+@pytest.mark.asyncio
+async def test_session_hint_cookie_is_set_with_auth_cookies_and_cleared_on_logout(client, db_session_factory):
+    u = await _user(db_session_factory)
+    r = await _login(client, u)
+    hint = next(h for h in r.headers.get_list("set-cookie") if h.startswith("ffc_session="))
+    # Script-readable on purpose (the frontend checks it before probing) and
+    # carries no secret -- it's never accepted as a credential.
+    assert "HttpOnly" not in hint and "Path=/" in hint and hint.startswith("ffc_session=1;")
+    r = await client.post("/auth/refresh", headers=ORIGIN)
+    assert any(h.startswith("ffc_session=1;") for h in r.headers.get_list("set-cookie"))
+
+    r = await client.post("/auth/logout", headers=ORIGIN)
+    cleared = next(h for h in r.headers.get_list("set-cookie") if h.startswith("ffc_session="))
+    assert "Max-Age=0" in cleared or "expires=" in cleared.lower()
+
+
+@pytest.mark.asyncio
+async def test_session_hint_cookie_alone_grants_nothing(client):
+    client.cookies.set("ffc_session", "1", domain="test.local", path="/")
+    assert (await client.get("/auth/me")).status_code == 401
+    assert (await client.get("/auth/session")).json() == {"user": None}

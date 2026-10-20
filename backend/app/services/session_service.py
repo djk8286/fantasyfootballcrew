@@ -21,6 +21,7 @@ from app.services.auth_service import create_access_token, hash_token
 
 ACCESS_COOKIE = "ffc_access"
 REFRESH_COOKIE = "ffc_refresh"
+SESSION_HINT_COOKIE = "ffc_session"  # NOT a credential: readable "a session may exist" flag
 ACCESS_PATH = "/api"
 REFRESH_PATH = "/api/v1/auth"
 
@@ -57,12 +58,18 @@ def set_auth_cookies(response: Response, access_token: str, refresh_raw: str) ->
                         max_age=int(settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60), **common)
     response.set_cookie(REFRESH_COOKIE, refresh_raw, path=REFRESH_PATH,
                         max_age=int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400), **common)
+    # Script-readable, value-less hint so the frontend only probes/refreshes
+    # a session when one may exist -- guests then make no auth calls at all
+    # (and log no 401s). Carries no secret; forging it just costs one 401.
+    response.set_cookie(SESSION_HINT_COOKIE, "1", path="/", httponly=False, secure=_secure(), samesite="lax",
+                        max_age=int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400))
 
 
 def clear_auth_cookies(response: Response) -> None:
     common = dict(httponly=True, secure=_secure(), samesite="lax")
     response.delete_cookie(ACCESS_COOKIE, path=ACCESS_PATH, **common)
     response.delete_cookie(REFRESH_COOKIE, path=REFRESH_PATH, **common)
+    response.delete_cookie(SESSION_HINT_COOKIE, path="/", httponly=False, secure=_secure(), samesite="lax")
 
 
 async def _new_refresh(db: AsyncSession, user: User, family_id: str) -> tuple[RefreshToken, str]:

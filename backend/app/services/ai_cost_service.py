@@ -43,6 +43,10 @@ def bind_usage_event(event: AIUsageEvent) -> None:
     _current_event.set(event)
 
 
+def current_usage_event() -> AIUsageEvent | None:
+    return _current_event.get()
+
+
 def set_current_job(job_name: str | None):
     return _current_job.set(job_name)
 
