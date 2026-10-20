@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyMove, benchIds, issuesFor, moveWarning, projectedTotal, targetsFor, type LineupPlayer, type Slot } from "./lineup";
+import { applyMove, benchIds, issuesFor, lineupLoadProblem, moveWarning, projectedTotal, targetsFor, type LineupPlayer, type Slot } from "./lineup";
 
 const P = (id: string, position: string, extra: Partial<LineupPlayer> = {}): LineupPlayer => ({
   id, name: id.toUpperCase(), position, injuryStatus: null, locked: false, onBye: false, ...extra,
@@ -134,5 +134,18 @@ describe("projectedTotal", () => {
 
   it("is null when the week has no projections", () => {
     expect(projectedTotal(two, {}, false)).toBeNull();
+  });
+});
+
+describe("lineupLoadProblem", () => {
+  it("asks logged-out visitors to log in", () => {
+    expect(lineupLoadProblem(401)).toEqual({ kind: "login" });
+  });
+  it("explains private leagues", () => {
+    expect(lineupLoadProblem(403)).toEqual({ kind: "message", text: "This league is private. Only its members can see lineups." });
+  });
+  it("falls back to a retry message", () => {
+    expect(lineupLoadProblem(null)).toEqual({ kind: "message", text: "Couldn't load this lineup. Try again in a moment." });
+    expect(lineupLoadProblem(500).kind).toBe("message");
   });
 });

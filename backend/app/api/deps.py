@@ -129,6 +129,20 @@ async def require_league_participant(league: League, current_user: User, db: Asy
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
 
 
+async def require_league_read(league: League, current_user: User, db: AsyncSession) -> None:
+    """Read gate for league-scoped data that shouldn't be world-readable.
+
+    The caller must already be logged in (get_current_user). OPEN and
+    INVITE_ONLY leagues are discoverable (the public listing hides only
+    PRIVATE), so any logged-in user may read them. PRIVATE leagues are
+    readable only by members: a team owner/co-owner or a commissioner/
+    co-commissioner (require_league_participant's definition).
+    """
+    if league.visibility != LeagueVisibility.PRIVATE:
+        return
+    await require_league_participant(league, current_user, db)
+
+
 async def user_can_join_league(db: AsyncSession, league: League, user: User) -> bool:
     """Whether `user` is allowed to claim a team/co-owner slot in
     `league`, given its visibility. Shared by teams.py's claim_team/

@@ -151,7 +151,7 @@ def _labels(s, slots):
 
 
 async def _get(client, s):
-    r = await client.get(f"/teams/{s['team']}/lineup", params=PARAMS)
+    r = await client.get(f"/teams/{s['team']}/lineup", params=PARAMS, headers=s["auth"])
     assert r.status_code == 200
     return r.json()
 

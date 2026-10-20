@@ -11,7 +11,7 @@ from app.models.player import Player
 from app.models.lineup import Lineup
 from app.models.weekly_score import WeeklyScore
 from app.models.user import User
-from app.api.deps import get_current_user, require_team_or_league_access
+from app.api.deps import get_current_user, require_league_read, require_team_or_league_access
 from app.services.scoring_engine import calculate_player_score, calculate_optimal_lineup, DEFAULT_ROSTER_SLOTS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats
 from app.services.best_ball_service import get_best_ball_settings
@@ -280,6 +280,7 @@ async def get_lineup(
     week: int = Query(..., ge=1, le=18),
     year: int = Query(..., ge=2020, le=2030),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """A team's roster for (week, year) with each player's game, and the
     lineup that scores right now placed into the league's slots.
@@ -292,6 +293,8 @@ async def get_lineup(
     starters/is_starter only reflect a saved lineup (or best-ball's
     auto_starters), same as before slots existed."""
     team, league = await _get_team_league_or_404(team_id, db)
+    # Login required; PRIVATE leagues only for members (see require_league_read).
+    await require_league_read(league, current_user, db)
     roster_slots = _league_slot_settings(league)
     scoring_config = league.scoring_config or {}
     is_best_ball = get_best_ball_settings(league)["enabled"]

@@ -315,7 +315,8 @@ async def test_washington_is_not_on_bye_when_espn_calls_it_wsh(db_session_factor
 @pytest.mark.asyncio
 async def test_lineup_endpoint_shows_default_starters(client, db_session_factory):
     s = await _league(db_session_factory)
-    r = await client.get(f"/teams/{s['a']}/lineup", params={"week": WEEK, "year": YEAR})
+    r = await client.get(f"/teams/{s['a']}/lineup", params={"week": WEEK, "year": YEAR},
+                         headers={"Authorization": f"Bearer {s['token']}"})
     assert r.status_code == 200
     body = r.json()
     assert body["has_lineup_set"] is False

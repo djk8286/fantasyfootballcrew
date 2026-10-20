@@ -132,7 +132,7 @@ async def test_lineup_for_unsynced_week_fetches_games_and_maps_wsh(client, db_se
 
     monkeypatch.setattr(nfl_schedule_service, "ON_DEMAND_SYNC", True)
     monkeypatch.setattr(nfl_schedule_service, "fetch_week_scoreboard", fake_fetch)
-    r = await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 1, "year": YEAR})
+    r = await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 1, "year": YEAR}, headers=s["auth"])
     assert r.status_code == 200
     body = r.json()
     assert calls == [WEEK + 1]
@@ -143,7 +143,7 @@ async def test_lineup_for_unsynced_week_fetches_games_and_maps_wsh(client, db_se
     assert rb3["on_bye"] is True  # LAC has no game that week
 
     # Stored now: the next read doesn't refetch.
-    await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 1, "year": YEAR})
+    await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 1, "year": YEAR}, headers=s["auth"])
     assert calls == [WEEK + 1]
 
 
@@ -159,7 +159,7 @@ async def test_failed_on_demand_fetch_still_returns_lineup_and_backs_off(client,
     monkeypatch.setattr(nfl_schedule_service, "ON_DEMAND_SYNC", True)
     monkeypatch.setattr(nfl_schedule_service, "fetch_week_scoreboard", boom)
     for _ in range(2):
-        r = await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 2, "year": YEAR})
+        r = await client.get(f"/teams/{s['team']}/lineup", params={"week": WEEK + 2, "year": YEAR}, headers=s["auth"])
         assert r.status_code == 200 and r.json()["schedule_known"] is False
     assert calls == [WEEK + 2]
 
