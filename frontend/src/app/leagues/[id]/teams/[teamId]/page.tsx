@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, Bot, ListChecks, Lock, Skull, UserCheck } from "lucide-react";
+import { ArrowLeftRight, Bot, Check, ListChecks, Lock, Pencil, Skull, UserCheck, X } from "lucide-react";
 import Avatar from "@/components/Avatar";
+import AvatarEditor from "@/components/AvatarEditor";
 import PlayerLink from "@/components/PlayerLink";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
@@ -283,6 +284,8 @@ export default function TeamPage() {
   const [lastWords, setLastWords] = useState("");
   const [saving, setSaving] = useState(false);
   const [claiming, setClaiming] = useState(false);
+  const [rename, setRename] = useState<string | null>(null);
+  const [editingAvatar, setEditingAvatar] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -364,6 +367,28 @@ export default function TeamPage() {
     }
   }
 
+  async function saveName(e: React.FormEvent) {
+    e.preventDefault();
+    const name = rename?.trim();
+    if (!name || name === team?.name) return setRename(null);
+    setSaving(true);
+    try {
+      await teamsApi.update(teamId, { name });
+      setData(await fetchTeamPage(leagueId, teamId));
+      setRename(null);
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Couldn't rename the team."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAvatar(url: string) {
+    await teamsApi.update(teamId, { avatar_url: url });
+    setData(await fetchTeamPage(leagueId, teamId));
+    setEditingAvatar(false);
+  }
+
   const canJoinAsCoOwner =
     data.league?.league_type === "two_man" && !team.co_owner_id && team.owner_id !== getCurrentUserId() && !eliminated && isLoggedIn() && !team.is_cpu;
 
@@ -423,12 +448,49 @@ export default function TeamPage() {
         </div>
       )}
 
+      {editingAvatar && (
+        <AvatarEditor title="Team avatar" currentUrl={team.avatar_url} onSave={saveAvatar} onClose={() => setEditingAvatar(false)} />
+      )}
+
       <Card you={isMine}>
         <div className="flex flex-wrap items-center gap-4">
-          <Avatar url={team.avatar_url} size={56} className="shrink-0 border border-ink-700" />
+          {isMine ? (
+            <button type="button" onClick={() => setEditingAvatar(true)} aria-label="Change team avatar" className="shrink-0 rounded-full hover:opacity-80">
+              <Avatar url={team.avatar_url} size={56} className="border border-ink-700" />
+            </button>
+          ) : (
+            <Avatar url={team.avatar_url} size={56} className="shrink-0 border border-ink-700" />
+          )}
           <div className="min-w-0 flex-1 basis-48">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-title font-semibold text-ink-100">{team.name}</h1>
+              {rename !== null ? (
+                <form onSubmit={saveName} className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    aria-label="Team name"
+                    value={rename}
+                    maxLength={60}
+                    onChange={(e) => setRename(e.target.value)}
+                    onKeyDown={(e) => e.key === "Escape" && setRename(null)}
+                    className="h-9 w-56 rounded-control border border-ink-700 bg-ink-950 px-3 text-sm text-ink-100"
+                  />
+                  <Button type="submit" size="sm" variant="ghost" aria-label="Save name" disabled={saving}>
+                    <Check className="h-4 w-4" />
+                  </Button>
+                  <Button size="sm" variant="ghost" aria-label="Cancel rename" onClick={() => setRename(null)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </form>
+              ) : (
+                <>
+                  <h1 className="truncate text-title font-semibold text-ink-100">{team.name}</h1>
+                  {isMine && (
+                    <button type="button" onClick={() => setRename(team.name)} aria-label="Rename team" className="text-ink-400 hover:text-gold">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                </>
+              )}
               <ConferenceBadge
                 conference={extras?.conference}
                 displayName={conferenceShortLabel(extras?.conference, data.league?.conference_a_name, data.league?.conference_b_name)}

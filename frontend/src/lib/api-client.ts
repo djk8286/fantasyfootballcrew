@@ -423,6 +423,9 @@ export interface LeagueListFilters {
 
 // Leagues
 export const leaguesApi = {
+  /** League home in one call. See GET /leagues/{id}/home. */
+  getHome: (leagueId: string, week: number, year: number) =>
+    apiRequest(`/api/v1/leagues/${leagueId}/home?week=${week}&year=${year}`),
   /** League feed, newest first. teamId narrows it to one team. */
   getActivity: (leagueId: string, teamId?: string, limit = 30) => {
     const params = new URLSearchParams({ limit: String(limit) });

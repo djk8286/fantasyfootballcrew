@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft,
@@ -92,7 +92,8 @@ interface DraftOrderInfo {
   is_locked: boolean;
 }
 
-type Tab = "adjustments" | "trades" | "draft-order" | "coaches" | "invites" | "digest" | "health" | "insights" | "schedule-insights" | "messages" | "chat";
+const TAB_IDS = ["adjustments", "trades", "draft-order", "coaches", "invites", "digest", "health", "insights", "schedule-insights", "messages", "chat"] as const;
+type Tab = (typeof TAB_IDS)[number];
 
 interface ChatMessageItem {
   id: string;
@@ -207,7 +208,8 @@ export default function CommissionerPage() {
 
   const [league, setLeague] = useState<League | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>("adjustments");
+  const tabParam = useSearchParams().get("tab");
+  const [activeTab, setActiveTab] = useState<Tab>(TAB_IDS.includes(tabParam as Tab) ? (tabParam as Tab) : "adjustments");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [aiEnabled, setAiEnabled] = useState(true);
