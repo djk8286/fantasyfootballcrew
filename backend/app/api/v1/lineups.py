@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from dataclasses import dataclass
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.limiter import limiter
@@ -20,6 +21,16 @@ from app.services.default_lineup import (
     is_inactive_status,
 )
 from app.services.standings_service import week_schedule_state
+from app.services.lineup_slots import (
+    LineupError,
+    PlayerState,
+    Slots,
+    expand_slots,
+    lineup_issues,
+    place_starters,
+    starters_of,
+    validate_slots,
+)
 from app.services.nfl_schedule_service import as_utc, game_started, game_teams, get_week_games
 from app.models.nfl_game import NFLGame
 from datetime import datetime, timezone
@@ -118,6 +129,118 @@ def _serialize_roster_player(
     }
 
 
+@dataclass
+class CurrentLineup:
+    """What a team will score for a week right now, placed into slots."""
+    has_lineup_set: bool
+    starters: list[str]
+    slots: Slots
+    unplaced: list[str]
+    default_starters: list[str]
+
+
+def _league_slot_settings(league: League) -> dict:
+    roster_slots = dict(DEFAULT_ROSTER_SLOTS)
+    roster_slots.update(league.roster_slots or {})
+    return roster_slots
+
+
+async def _current_lineup(
+    team: Team, league: League, roster: list[Player], week: int, year: int, db: AsyncSession,
+) -> CurrentLineup:
+    """The saved Lineup if there is one, otherwise the default lineup
+    calculate_week scores (frozen in that week's WeeklyScore once the week
+    has started). Best-ball leagues use that week's auto_starters."""
+    roster_slots = _league_slot_settings(league)
+    positions = {p.id: p.position for p in roster}
+
+    if get_best_ball_settings(league)["enabled"]:
+        ws = (await db.execute(select(WeeklyScore).where(
+            WeeklyScore.team_id == team.id, WeeklyScore.week == week, WeeklyScore.year == year,
+        ))).scalar_one_or_none()
+        auto = [pid for pid in ((ws.lineup_data or {}).get("auto_starters") or []) if pid in positions] if ws else []
+        slots, unplaced = place_starters(auto, positions, roster_slots)
+        return CurrentLineup(bool(auto), auto, slots, unplaced, [])
+
+    lineup = (await db.execute(
+        select(Lineup).where(Lineup.team_id == team.id, Lineup.week == week, Lineup.year == year)
+    )).scalar_one_or_none()
+    if lineup is not None:
+        starters = [pid for pid in (lineup.starters or []) if pid in positions]
+        stored = [e for e in (lineup.slots or []) if e.get("player_id") in positions]
+        try:
+            # Stored slots can go stale if the commissioner changes slot
+            # counts mid-week; then fall back to placing the starters again.
+            if not stored:
+                raise LineupError("no stored slots")
+            slots, unplaced = validate_slots(stored, positions, {}, roster_slots), []
+        except LineupError:
+            slots, unplaced = place_starters(starters, positions, roster_slots)
+        return CurrentLineup(True, starters, slots, unplaced, [])
+
+    teams_playing, week_started = await week_schedule_state(year, week, db)
+    ws = (await db.execute(select(WeeklyScore).where(
+        WeeklyScore.team_id == team.id, WeeklyScore.week == week, WeeklyScore.year == year,
+    ))).scalar_one_or_none()
+    data = (ws.lineup_data or {}) if ws else {}
+    frozen = data.get("default_starters") if data.get("lineup_source") == "default" else None
+    if week_started and frozen is not None:
+        default_starters = [pid for pid in frozen if pid in positions]
+    else:
+        default_starters = choose_default_starters(
+            [candidate_from_player(p, week, year) for p in roster],
+            roster_slots, league.scoring_config or {},
+            teams_playing=teams_playing, exclude_inactive=not week_started,
+        )
+    slots, unplaced = place_starters(default_starters, positions, roster_slots)
+    return CurrentLineup(False, default_starters, slots, unplaced, default_starters)
+
+
+def _player_states(roster: list[Player], games: WeekGames) -> dict[str, PlayerState]:
+    return {
+        p.id: PlayerState(
+            name=f"{p.first_name} {p.last_name}",
+            injury_status=p.injury_status,
+            inactive=_is_inactive(p),
+            on_bye=games.on_bye(p.team),
+        )
+        for p in roster
+    }
+
+
+def _run_optimizer(pool: dict, scoring_config: dict, counts: dict) -> dict:
+    return calculate_optimal_lineup(
+        pool,
+        scoring_config,
+        n_qb=counts.get("QB", 0),
+        n_rb=counts.get("RB", 0),
+        n_wr=counts.get("WR", 0),
+        n_te=counts.get("TE", 0),
+        n_flex=counts.get("FLEX", 0),
+        n_superflex=counts.get("SUPERFLEX", 0),
+        n_k=counts.get("K", 0),
+        n_def=counts.get("DEF", 0),
+        n_dl=counts.get("DL", 0),
+        n_lb=counts.get("LB", 0),
+        n_db=counts.get("DB", 0),
+        n_idp_flex=counts.get("IDP_FLEX", 0),
+    )
+
+
+async def _save(team_id: str, week: int, year: int, slots: Slots, db: AsyncSession) -> list[str]:
+    starters = starters_of(slots)
+    lineup = (await db.execute(
+        select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
+    )).scalar_one_or_none()
+    if lineup:
+        lineup.starters = starters
+        lineup.slots = slots
+    else:
+        db.add(Lineup(team_id=team_id, week=week, year=year, starters=starters, slots=slots))
+    await db.commit()
+    return starters
+
+
 @router.get("/{team_id}/lineup")
 async def get_lineup(
     team_id: str,
@@ -125,78 +248,52 @@ async def get_lineup(
     year: int = Query(..., ge=2020, le=2030),
     db: AsyncSession = Depends(get_db),
 ):
-    """A team's roster for (week, year), each player flagged is_starter or
-    not. No Lineup row for this (team, week, year) yet -- has_lineup_set:
-    false, every player comes back as bench, and default_starters lists
-    the default lineup calculate_week will score instead (the frozen one
-    from that week's WeeklyScore once the week has started).
+    """A team's roster for (week, year) with each player's game, and the
+    lineup that scores right now placed into the league's slots.
 
-    Best-Ball (Phase 6): there is no manual starter selection at all in
-    this mode -- starters come from that week's WeeklyScore.lineup_data
-    (auto_starters, set by calculate_week's own optimizer call), not any
-    Lineup row. No WeeklyScore yet for this week (scoring hasn't run) ->
-    every player comes back as bench, same "nothing decided yet" shape
-    the non-best-ball no-Lineup-row case already uses."""
+    slots: [{"slot", "player_id"}] in league order; null player_id is an
+    empty slot. No saved Lineup -> has_lineup_set false, and slots hold
+    the default lineup calculate_week will score (default_starters).
+    issues lists what will cost points: empty slots, starters ruled out or
+    on bye, and starters from an old lineup that fit no slot (unplaced).
+    starters/is_starter only reflect a saved lineup (or best-ball's
+    auto_starters), same as before slots existed."""
     team, league = await _get_team_league_or_404(team_id, db)
-    roster_slots = dict(DEFAULT_ROSTER_SLOTS)
-    roster_slots.update(league.roster_slots or {})
+    roster_slots = _league_slot_settings(league)
     scoring_config = league.scoring_config or {}
     is_best_ball = get_best_ball_settings(league)["enabled"]
 
-    if is_best_ball:
-        ws_result = await db.execute(
-            select(WeeklyScore).where(
-                WeeklyScore.team_id == team_id, WeeklyScore.week == week, WeeklyScore.year == year,
-            )
-        )
-        weekly_score = ws_result.scalar_one_or_none()
-        starter_ids = set((weekly_score.lineup_data or {}).get("auto_starters") or []) if weekly_score else set()
-        has_lineup_set = weekly_score is not None and bool(starter_ids)
-    else:
-        result = await db.execute(
-            select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
-        )
-        lineup = result.scalar_one_or_none()
-        starter_ids = set(lineup.starters or []) if lineup else set()
-        has_lineup_set = lineup is not None
-
     roster = await _resolve_roster(team, db)
     games = await load_week_games(year, week, db)
-    default_starters: list[str] = []
-    if not is_best_ball and not has_lineup_set:
-        teams_playing, week_started = await week_schedule_state(year, week, db)
-        ws_result = await db.execute(
-            select(WeeklyScore).where(
-                WeeklyScore.team_id == team_id, WeeklyScore.week == week, WeeklyScore.year == year,
-            )
-        )
-        ws = ws_result.scalar_one_or_none()
-        frozen = (ws.lineup_data or {}).get("default_starters") if ws and (ws.lineup_data or {}).get("lineup_source") == "default" else None
-        if week_started and frozen is not None:
-            roster_ids = {p.id for p in roster}
-            default_starters = [pid for pid in frozen if pid in roster_ids]
-        else:
-            default_starters = choose_default_starters(
-                [candidate_from_player(p, week, year) for p in roster],
-                roster_slots, scoring_config,
-                teams_playing=teams_playing, exclude_inactive=not week_started,
-            )
+    current = await _current_lineup(team, league, roster, week, year, db)
+    starter_ids = set(current.starters) if current.has_lineup_set else set()
     return {
         "team_id": team_id,
         "week": week,
         "year": year,
         "roster_slots": roster_slots,
         "best_ball": is_best_ball,
-        "has_lineup_set": has_lineup_set,
-        "default_starters": default_starters,
+        "has_lineup_set": current.has_lineup_set,
+        "default_starters": current.default_starters,
         "schedule_known": games.known,
         "starters": sorted(starter_ids),
+        "slots": current.slots,
+        "unplaced": current.unplaced,
+        "issues": lineup_issues(current.slots, _player_states(roster, games), current.unplaced),
         "roster": [_serialize_roster_player(p, p.id in starter_ids, scoring_config, games, week, year) for p in roster],
     }
 
 
+class SlotIn(BaseModel):
+    slot: str
+    player_id: str | None = None
+
+
 class SetLineupRequest(BaseModel):
-    starters: list[str]
+    """Either slots (preferred) or the older flat starters list, which the
+    server places into slots itself."""
+    starters: list[str] | None = None
+    slots: list[SlotIn] | None = None
 
 
 @router.put("/{team_id}/lineup")
@@ -210,6 +307,11 @@ async def set_lineup(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Save a lineup. Every starter must be rostered and fit the slot he's
+    in (FLEX takes RB/WR/TE, SUPERFLEX adds QB, IDP_FLEX takes DL/LB/DB).
+    A player whose game has kicked off can't be moved in or out of the
+    starters (409). Starting someone ruled out or on bye is allowed but
+    comes back in warnings and issues."""
     team, league = await _get_team_league_or_404(team_id, db)
     require_team_or_league_access(team, league, current_user)
     if get_best_ball_settings(league)["enabled"]:
@@ -217,41 +319,57 @@ async def set_lineup(
             status_code=400,
             detail="This league uses Best-Ball auto-lineups -- starters are selected automatically each week.",
         )
+    if data.slots is None and data.starters is None:
+        raise HTTPException(status_code=422, detail="Send slots or starters.")
 
+    roster_slots = _league_slot_settings(league)
+    roster = await _resolve_roster(team, db)
+    positions = {p.id: p.position for p in roster}
+    names = {p.id: f"{p.first_name} {p.last_name}" for p in roster}
     roster_set = set(team.roster or [])
-    starters = list(dict.fromkeys(data.starters))  # de-dupe, preserve order
-    invalid = [pid for pid in starters if pid not in roster_set]
-    if invalid:
-        raise HTTPException(status_code=422, detail=f"Not on this team's roster: {invalid}")
 
-    roster_slots = dict(DEFAULT_ROSTER_SLOTS)
-    roster_slots.update(league.roster_slots or {})
-    total_slots = sum(roster_slots.values())
-    if len(starters) > total_slots:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Too many starters: {len(starters)} submitted, this league only has {total_slots} starting slots",
-        )
-
-    result = await db.execute(
-        select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
-    )
-    lineup = result.scalar_one_or_none()
-    if lineup:
-        lineup.starters = starters
+    if data.slots is not None:
+        submitted = [s.model_dump() for s in data.slots]
+        invalid = [s["player_id"] for s in submitted if s["player_id"] and s["player_id"] not in roster_set]
+        if invalid:
+            raise HTTPException(status_code=422, detail=f"Not on this team's roster: {invalid}")
+        try:
+            slots = validate_slots(submitted, positions, names, roster_slots)
+        except LineupError as e:
+            raise HTTPException(status_code=422, detail=str(e))
     else:
-        db.add(Lineup(team_id=team_id, week=week, year=year, starters=starters))
-    await db.commit()
-    # Starting an inactive player is allowed (the manager may know
-    # something the feed doesn't) but flagged -- QA round 2 #4.
-    warnings = []
-    if starters:
-        res = await db.execute(select(Player).where(Player.id.in_(starters)))
-        warnings = [
-            f"{p.first_name} {p.last_name} is listed {p.injury_status} and may not play."
-            for p in res.scalars().all() if _is_inactive(p)
-        ]
-    return {"status": "ok", "starters": starters, "warnings": warnings}
+        starters = list(dict.fromkeys(data.starters or []))
+        invalid = [pid for pid in starters if pid not in roster_set]
+        if invalid:
+            raise HTTPException(status_code=422, detail=f"Not on this team's roster: {invalid}")
+        total_slots = len(expand_slots(roster_slots))
+        if len(starters) > total_slots:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many starters: {len(starters)} submitted, this league only has {total_slots} starting slots",
+            )
+        slots, left = place_starters(starters, positions, roster_slots)
+        if left:
+            who = ", ".join(f"{names.get(pid, pid)} ({positions.get(pid)})" for pid in left)
+            raise HTTPException(status_code=422, detail=f"No open starting slot for {who}.")
+
+    games = await load_week_games(year, week, db)
+    current = await _current_lineup(team, league, roster, week, year, db)
+    before, after = set(current.starters), set(starters_of(slots))
+    moved_locked = [p for p in roster if games.locked(p.team) and ((p.id in before) != (p.id in after))]
+    if moved_locked:
+        who = ", ".join(names[p.id] for p in moved_locked)
+        raise HTTPException(status_code=409, detail=f"Locked at kickoff, can't be moved: {who}.")
+
+    saved = await _save(team_id, week, year, slots, db)
+    issues = lineup_issues(slots, _player_states(roster, games))
+    return {
+        "status": "ok",
+        "starters": saved,
+        "slots": slots,
+        "warnings": [i["message"] for i in issues if i["kind"] in ("out", "bye")],
+        "issues": issues,
+    }
 
 
 @router.post("/{team_id}/lineup/optimize")
@@ -265,11 +383,10 @@ async def optimize_lineup(
     current_user: User = Depends(get_current_user),
 ):
     """Auto-fill this week's lineup with the best starters available,
-    ranked by effective_season_stats (current-season live production if
-    the season's started and synced anything, else last season's archived
-    total -- the same "best real number available" this app already uses
-    for season_points/projected_points, not a game-by-game projection this
-    app has no data source for). Saves the result, same as a manual set."""
+    ranked by effective_season_stats (this season's production once it has
+    any, else last season's total). Never starts a player who's ruled out
+    or on bye. Players whose game has kicked off stay where they are.
+    Saves the result, same as a manual set."""
     team, league = await _get_team_league_or_404(team_id, db)
     require_team_or_league_access(team, league, current_user)
     if get_best_ball_settings(league)["enabled"]:
@@ -278,45 +395,31 @@ async def optimize_lineup(
             detail="This league uses Best-Ball auto-lineups -- starters are selected automatically each week.",
         )
 
-    roster_slots = dict(DEFAULT_ROSTER_SLOTS)
-    roster_slots.update(league.roster_slots or {})
+    roster_slots = _league_slot_settings(league)
     scoring_config = league.scoring_config or {}
-
     roster = await _resolve_roster(team, db)
-    # Auto-fill never starts a player who's ruled out.
-    skipped_inactive = [f"{p.first_name} {p.last_name}" for p in roster if _is_inactive(p)]
-    roster = [p for p in roster if not _is_inactive(p)]
-    roster_for_optimizer = {}
+    games = await load_week_games(year, week, db)
+    current = await _current_lineup(team, league, roster, week, year, db)
+
+    locked = {p.id for p in roster if games.locked(p.team)}
+    kept = [e for e in current.slots if e["player_id"] in locked]
+    counts = dict(roster_slots)
+    for e in kept:
+        counts[e["slot"]] -= 1
+
+    skipped_inactive = [f"{p.first_name} {p.last_name}" for p in roster if p.id not in locked and _is_inactive(p)]
+    pool = {}
     for p in roster:
+        if p.id in locked or _is_inactive(p) or games.on_bye(p.team):
+            continue
         stats, _ = effective_season_stats(p)
-        roster_for_optimizer[p.id] = {"stats": stats, "position": p.position, "name": f"{p.first_name} {p.last_name}"}
+        pool[p.id] = {"stats": stats, "position": p.position, "name": f"{p.first_name} {p.last_name}"}
 
-    result = calculate_optimal_lineup(
-        roster_for_optimizer,
-        scoring_config,
-        n_qb=roster_slots.get("QB", 0),
-        n_rb=roster_slots.get("RB", 0),
-        n_wr=roster_slots.get("WR", 0),
-        n_te=roster_slots.get("TE", 0),
-        n_flex=roster_slots.get("FLEX", 0),
-        n_superflex=roster_slots.get("SUPERFLEX", 0),
-        n_k=roster_slots.get("K", 0),
-        n_def=roster_slots.get("DEF", 0),
-        n_dl=roster_slots.get("DL", 0),
-        n_lb=roster_slots.get("LB", 0),
-        n_db=roster_slots.get("DB", 0),
-        n_idp_flex=roster_slots.get("IDP_FLEX", 0),
-    )
-    starters = [a["player_id"] for a in result["lineup"]]
-
-    lu_result = await db.execute(
-        select(Lineup).where(Lineup.team_id == team_id, Lineup.week == week, Lineup.year == year)
-    )
-    lineup = lu_result.scalar_one_or_none()
-    if lineup:
-        lineup.starters = starters
-    else:
-        db.add(Lineup(team_id=team_id, week=week, year=year, starters=starters))
-    await db.commit()
-    return {"status": "ok", "starters": starters, "optimal_score": result["optimal_score"],
-            "skipped_inactive": skipped_inactive}
+    result = _run_optimizer(pool, scoring_config, counts)
+    picked = [{"slot": a["slot"], "player_id": a["player_id"]} for a in result["lineup"]]
+    positions = {p.id: p.position for p in roster}
+    slots = validate_slots(kept + picked, positions, {}, roster_slots)
+    starters = await _save(team_id, week, year, slots, db)
+    return {"status": "ok", "starters": starters, "slots": slots, "optimal_score": result["optimal_score"],
+            "skipped_inactive": skipped_inactive,
+            "kept_locked": [f"{p.first_name} {p.last_name}" for p in roster if p.id in {e["player_id"] for e in kept}]}
