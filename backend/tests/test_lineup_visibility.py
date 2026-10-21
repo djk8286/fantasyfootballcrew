@@ -144,17 +144,15 @@ async def test_private_league_guest_401_stranger_403_member_200(client, db_sessi
 
 
 @pytest.mark.asyncio
-async def test_private_league_team_reads_hide_rosters_from_non_members(client, db_session_factory):
-    """Team names/records stay readable (invitees pick a team to claim from
-    them); the roster does not."""
+async def test_private_league_team_reads_are_members_only(client, db_session_factory):
+    """Was: names readable, roster hidden. Since QA 2026-10-21 every read of
+    a PRIVATE league is members/invitees only (test_private_league_reads)."""
     s = await _league(db_session_factory, LeagueVisibility.PRIVATE)
     stranger, _ = await _user(db_session_factory)
     _anon(client)
-    for headers in ({}, stranger):
-        team = await client.get(f"/teams/{s['team']}", headers=headers)
-        assert team.status_code == 200 and team.json()["name"] == "Mine" and team.json()["roster"] is None
-        teams = (await client.get(f"/teams/league/{s['league']}", headers=headers)).json()
-        assert [t["roster"] for t in teams] == [None, None]
+    for headers, code in (({}, 401), (stranger, 403)):
+        assert (await client.get(f"/teams/{s['team']}", headers=headers)).status_code == code
+        assert (await client.get(f"/teams/league/{s['league']}", headers=headers)).status_code == code
     assert (await client.get(f"/teams/{s['team']}", headers=s["member"])).json()["roster"] == s["players"][:2]
 
 

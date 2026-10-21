@@ -9,7 +9,7 @@ from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User
 from app.schemas.trade import TradeProposalCreate
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_league_view
 from app.services.cpu_trade_service import evaluate_cpu_response, apply_cpu_verdict, answer_pending_cpu_trades
 
 router = APIRouter(prefix="/leagues/{league_id}/trades", tags=["trades"])
@@ -83,7 +83,7 @@ async def propose_trade(
     return trade
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_league_view)])
 async def list_team_trades(
     league_id: str,
     team_id: str | None = None,

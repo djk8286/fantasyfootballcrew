@@ -135,15 +135,20 @@ async def require_league_participant(league: League, current_user: User, db: Asy
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
 
 
-# ─── Who may see rosters and lineups ─────────────────────────────────
-# Rosters (which players a team has) are public for OPEN and INVITE_ONLY
-# leagues -- the leagues the public listing shows -- so guests can browse
-# them, same as every fantasy site. PRIVATE leagues: members and accepted
-# invitees only. Lineups (slot assignments, starters, lineup issues,
-# projected totals and box scores built from them) need a login on top of
-# that. One rule, used by GET /teams/{id}/lineup, /teams/{id}/roster,
-# /teams/{id}, /teams/league/{id}, /teams/{id}/news, /teams/{id}/cap,
-# /leagues/{id}/home and /leagues/{id}/standings/weekly.
+# ─── Who may see a league ───────────────────────────────────────────
+# OPEN and INVITE_ONLY leagues (the ones the public listing shows) are
+# readable by anyone, rosters included, same as every fantasy site.
+# PRIVATE leagues: members and accepted invitees / approved join requests
+# only -- EVERY read (standings, schedule, activity, trades, waivers,
+# draft, settings, teams, rosters...): 401 for guests, 403 for anyone
+# else logged in. GET /leagues/{id} still answers a non-viewer with the
+# league's name (in the 401/403 detail) so pages can say "Log in to see
+# <league>". Lineups (slot assignments, starters, lineup issues,
+# projected totals and box scores built from them) need a login in every
+# league. Routes opt in with dependencies=[Depends(require_league_view)]
+# (league_id path/query param), require_team_league_view (team_id) or
+# require_draft_league_view (draft_id); tests/test_private_league_reads.py
+# walks every GET route.
 
 async def can_view_rosters(league: League, viewer: User | None, db: AsyncSession) -> bool:
     """PRIVATE leagues: members, plus anyone holding an accepted invite or
@@ -167,6 +172,49 @@ async def require_league_read(league: League, current_user: User | None, db: Asy
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     if not await can_view_rosters(league, current_user, db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a participant in this league")
+
+
+async def league_view_or_raise(league: League, viewer: User | None, db: AsyncSession) -> None:
+    """The PRIVATE-league read gate: no-op for OPEN/INVITE_ONLY, else 401
+    guest / 403 non-member (members and invitees pass)."""
+    if not await can_view_rosters(league, viewer, db):
+        await require_league_read(league, viewer, db)
+
+
+async def require_league_view(
+    league_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+) -> None:
+    """Route dependency for any read keyed by league_id. A missing league
+    passes through so the route's own 404 (or empty answer) is unchanged."""
+    league = await db.get(League, league_id)
+    if league is not None:
+        await league_view_or_raise(league, viewer, db)
+
+
+async def require_team_league_view(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+) -> None:
+    team = await db.get(Team, team_id)
+    league = await db.get(League, team.league_id) if team is not None else None
+    if league is not None:
+        await league_view_or_raise(league, viewer, db)
+
+
+async def require_draft_league_view(
+    draft_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+) -> None:
+    from app.models.draft import Draft
+
+    draft = await db.get(Draft, draft_id)
+    league = await db.get(League, draft.league_id) if draft is not None else None
+    if league is not None:
+        await league_view_or_raise(league, viewer, db)
 
 
 async def user_can_join_league(db: AsyncSession, league: League, user: User) -> bool:

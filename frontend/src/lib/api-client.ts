@@ -212,6 +212,20 @@ export function setClaimedTeam(leagueId: string, teamId: string): void {
   }
 }
 
+/** Team ids this browser has claimed in `leagueId` (ffc_user_teams).
+ * Only meaningful for the logged-in user: pass it through
+ * league-nav.findMyTeamId, which ignores it when nobody is logged in.
+ * The blob is per-browser, not per-account, and survives logout. */
+export function claimedTeamIds(leagueId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
+    return typeof stored?.[leagueId] === "string" ? [stored[leagueId]] : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Thrown by apiRequest on a non-2xx response. `message` keeps the legacy
  * "API error: <status> <text> — <body>" format (app/admin/adminUtils.ts and
  * settings parse it); UI that shows errors to visitors should use

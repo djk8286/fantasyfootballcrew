@@ -53,3 +53,14 @@ describe("activeTabId", () => {
     expect(activeTabId("/leagues/L/scoring", tabs)).toBeNull();
   });
 });
+
+describe("findMyTeamId for a logged-out standings viewer (QA 2026-10-21)", () => {
+  it("never picks a team: not from a stale browser claim, not from a null owner", () => {
+    const rows = [
+      { id: "cpu", owner_id: null, co_owner_id: null },
+      { id: "human", owner_id: "u-1", co_owner_id: null },
+    ];
+    expect(findMyTeamId(rows, null, ["human"])).toBeNull();
+    expect(findMyTeamId(rows, null)).toBeNull();
+  });
+});

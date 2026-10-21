@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorStatus, loadProblem } from "./access-problem";
+import { errorStatus, leagueGate, loadProblem } from "./access-problem";
 
 describe("loadProblem", () => {
   it("asks guests to log in, per page", () => {
@@ -23,5 +23,27 @@ describe("errorStatus", () => {
     expect(errorStatus({ status: 401 })).toBe(401);
     expect(errorStatus(new Error("x"))).toBeNull();
     expect(errorStatus(null)).toBeNull();
+  });
+});
+
+describe("leagueGate", () => {
+  const err = (status: number, detail: unknown) => Object.assign(new Error("x"), { status, detail });
+  it("guest on a private league: log in, with the league's name", () => {
+    expect(leagueGate(err(401, { message: "Not authenticated", league: { id: "l", name: "QA 4", visibility: "private" } }))).toEqual({
+      kind: "login",
+      name: "QA 4",
+      invited: false,
+    });
+  });
+  it("logged-in non-member: private, and notices a pending invite", () => {
+    expect(leagueGate(err(403, { league: { name: "QA 4", viewer_join_status: "invited" } }))).toEqual({ kind: "private", name: "QA 4", invited: true });
+  });
+  it("copes with a plain-string detail", () => {
+    expect(leagueGate(err(401, "Not authenticated"))).toEqual({ kind: "login", name: null, invited: false });
+  });
+  it("anything else is not a gate", () => {
+    expect(leagueGate(err(404, "League not found"))).toBeNull();
+    expect(leagueGate(new Error("network"))).toBeNull();
+    expect(leagueGate(null)).toBeNull();
   });
 });

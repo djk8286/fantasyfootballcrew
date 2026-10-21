@@ -6,6 +6,7 @@ from app.models.league import League
 from app.models.team import Team
 from app.models.playoff import Playoff, PlayoffMatchup
 from app.services.playoff_service import get_playoff_settings
+from app.api.deps import require_league_view
 
 router = APIRouter(prefix="/leagues/{league_id}/playoffs", tags=["playoffs"])
 
@@ -17,7 +18,7 @@ def _team_ref(team_id: str | None, teams_by_id: dict[str, Team]) -> dict | None:
     return {"id": team_id, "name": team.name if team else "Unknown"}
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_league_view)])
 async def get_playoffs(league_id: str, year: int | None = None, db: AsyncSession = Depends(get_db)):
     """Current playoff bracket for a league, or a "not started yet" shape
     with just the settings if nothing's been generated (either playoffs

@@ -13,6 +13,8 @@ from app.api.deps import (
     get_current_user_optional,
     require_commissioner,
     require_league_read,
+    require_league_view,
+    require_team_league_view,
     require_team_or_league_access,
     user_can_join_league,
 )
@@ -583,7 +585,7 @@ async def _team_league_rosters_visible_or_raise(team_id: str, viewer: User | Non
     return team, league
 
 
-@router.get("/league/{league_id}", response_model=list[TeamRead])
+@router.get("/league/{league_id}", response_model=list[TeamRead], dependencies=[Depends(require_league_view)])
 async def get_league_teams(
     league_id: str,
     db: AsyncSession = Depends(get_db),
@@ -594,7 +596,7 @@ async def get_league_teams(
     return await _hide_rosters_unless_visible(await _with_live_records(list(teams), league_id, db), league_id, viewer, db)
 
 
-@router.get("/{team_id}", response_model=TeamRead)
+@router.get("/{team_id}", response_model=TeamRead, dependencies=[Depends(require_team_league_view)])
 async def get_team(
     team_id: str,
     db: AsyncSession = Depends(get_db),

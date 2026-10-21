@@ -26,7 +26,7 @@ from app.schemas.scoring import (
     OptimalLineupSlot,
     SleeperWeeklyScoringInput,
 )
-from app.api.deps import get_current_user, require_commissioner
+from app.api.deps import get_current_user, require_commissioner, require_league_view
 from pydantic import BaseModel
 from typing import Optional, Dict
 
@@ -81,7 +81,7 @@ async def create_scoring_config(
     return sc
 
 
-@router.get("/league/{league_id}")
+@router.get("/league/{league_id}", dependencies=[Depends(require_league_view)])
 async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get active scoring config rows for a league."""
     result = await db.execute(
