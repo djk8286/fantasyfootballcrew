@@ -26,6 +26,8 @@ from app.models.user import User
 from app.models.player import Player
 from app.schemas.draft import DraftCreate, DraftRead, DraftPickCreate, DraftPickRead, DraftState, MockDraftQuickstart
 from app.api.deps import (
+    require_draft_league_view,
+    require_league_view,
     get_current_user,
     require_commissioner,
     require_team_or_league_access,
@@ -206,7 +208,7 @@ async def api_make_pick(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/find")
+@router.get("/find", dependencies=[Depends(require_league_view)])
 async def api_get_draft_by_league(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the active draft for a league."""
     result = await db.execute(
@@ -218,7 +220,7 @@ async def api_get_draft_by_league(league_id: str, db: AsyncSession = Depends(get
     return {"id": draft.id, "league_id": draft.league_id, "status": draft.status.value}
 
 
-@router.get("/{draft_id}/state")
+@router.get("/{draft_id}/state", dependencies=[Depends(require_draft_league_view)])
 async def api_draft_state(draft_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Get the full state of a draft including board and picks.
 

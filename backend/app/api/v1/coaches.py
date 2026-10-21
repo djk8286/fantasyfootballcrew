@@ -8,7 +8,7 @@ from app.models.team import Team
 from app.models.coach import Coach, CoachPosition
 from app.models.user import User
 from app.schemas.coach import CoachCreate, CoachRead, CoachUpdate
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_team_league_view
 
 router = APIRouter(tags=["coaches"])
 
@@ -76,7 +76,7 @@ async def create_coach(
     return coach
 
 
-@router.get("/teams/{team_id}/coaches", response_model=list[CoachRead])
+@router.get("/teams/{team_id}/coaches", response_model=list[CoachRead], dependencies=[Depends(require_team_league_view)])
 async def list_coaches(team_id: str, db: AsyncSession = Depends(get_db)):
     # Deliberately no auth here -- matches this app's house style for
     # team-level read endpoints (get_league_teams/get_team in teams.py are

@@ -28,6 +28,7 @@ from app.services.league_home_service import league_home
 from app.services.lineup_slots import lineup_issues
 from app.services.season_weeks import league_start_week
 from app.services.team_activity_service import league_activity, team_record
+from app.api.deps import require_league_view
 
 router = APIRouter(tags=["team-hub"])
 
@@ -101,7 +102,7 @@ async def get_team_roster(
     }
 
 
-@router.get("/leagues/{league_id}/activity")
+@router.get("/leagues/{league_id}/activity", dependencies=[Depends(require_league_view)])
 async def get_league_activity(
     league_id: str,
     team_id: str | None = None,

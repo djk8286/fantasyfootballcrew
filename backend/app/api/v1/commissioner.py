@@ -16,7 +16,7 @@ from app.schemas.commissioner import (
     MessageDraftRequest, MessageSendRequest,
     ChatMessageRequest,
 )
-from app.api.deps import get_current_user, require_commissioner
+from app.api.deps import get_current_user, require_commissioner, require_league_view
 from app.services.notification_service import notify_team_owners
 from app.models.notification import NotificationType
 from app.models.contract import Contract
@@ -94,7 +94,7 @@ async def create_adjustment(
     return adj
 
 
-@router.get("/adjustments")
+@router.get("/adjustments", dependencies=[Depends(require_league_view)])
 async def list_adjustments(
     league_id: str,
     week: int | None = None,
@@ -146,7 +146,7 @@ async def delete_adjustment(
 #  2. TRADE VETO POWER
 # ═══════════════════════════════════════════════
 
-@router.get("/trades")
+@router.get("/trades", dependencies=[Depends(require_league_view)])
 async def list_pending_trades(
     league_id: str,
     status_filter: str | None = None,
@@ -413,7 +413,7 @@ async def analyze_trade_for_review(
 #  3. DRAFT ORDER
 # ═══════════════════════════════════════════════
 
-@router.get("/draft-order")
+@router.get("/draft-order", dependencies=[Depends(require_league_view)])
 async def get_draft_order(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the current draft order for a league."""
     league = await _get_league(league_id, db)

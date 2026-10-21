@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser } from "@/lib/api-client";
+import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser, claimedTeamIds, getCurrentUserId } from "@/lib/api-client";
+import { findMyTeamId } from "@/lib/league-nav";
 import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
@@ -141,16 +142,6 @@ interface LeagueData {
 const CURRENT_YEAR = new Date().getFullYear();
 
 
-function getMyTeamId(leagueId: string): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const stored = JSON.parse(localStorage.getItem("ffc_user_teams") || "{}");
-    return stored[leagueId] || null;
-  } catch {
-    return null;
-  }
-}
-
 // ─── Component ────────────────────────────────────────────────
 
 export default function StandingsPage() {
@@ -177,7 +168,11 @@ export default function StandingsPage() {
   // matchup list stays scannable.
   const [expandedMatchup, setExpandedMatchup] = useState<number | null>(null);
 
-  const myTeamId = getMyTeamId(leagueId);
+  // Logged-in viewer's team only. This used to read the browser's
+  // ffc_user_teams claim blob directly, which survives logout, so a guest
+  // on a browser that once claimed a team saw "YOUR TEAM" on a row whose
+  // owner label said "Joined" (QA 2026-10-21).
+  const myTeamId = findMyTeamId(standings, getCurrentUserId(), claimedTeamIds(leagueId));
   // team_id -> that team's per-player score breakdown this week (real
   // current scores, not just the team total) -- see PlayerBreakdownEntry.
   const breakdownByTeam = new Map(

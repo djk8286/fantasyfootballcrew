@@ -18,7 +18,7 @@ from app.services.ai_commissioner_settings_service import DEFAULT_AI_COMMISSIONE
 from app.models.player import Player
 from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
-from app.api.deps import get_current_user, get_current_user_optional, require_commissioner, user_can_join_league
+from app.api.deps import can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_view, user_can_join_league
 from app.services import team_recap_service
 from pydantic import BaseModel
 
@@ -156,7 +156,7 @@ async def list_leagues(
 # ─── Scoring Config (must be BEFORE /{league_id} to avoid greedy param) ─
 
 
-@router.get("/{league_id}/scoring")
+@router.get("/{league_id}/scoring", dependencies=[Depends(require_league_view)])
 async def get_league_scoring(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the scoring config for a league, or return defaults."""
     result = await db.execute(select(League).where(League.id == league_id))
@@ -199,7 +199,7 @@ async def update_league_scoring(
     return {"status": "ok", "scoring_config": league.scoring_config}
 
 
-@router.get("/{league_id}/roster-slots")
+@router.get("/{league_id}/roster-slots", dependencies=[Depends(require_league_view)])
 async def get_league_roster_slots(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the starting-lineup slot counts for a league, or defaults.
     Same defaults-merge shape as GET .../scoring above, same reasoning:
@@ -242,7 +242,7 @@ async def update_league_roster_slots(
     return {"status": "ok", "roster_slots": league.roster_slots}
 
 
-@router.get("/{league_id}/playoff-settings")
+@router.get("/{league_id}/playoff-settings", dependencies=[Depends(require_league_view)])
 async def get_league_playoff_settings(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the playoff config for a league, or defaults (disabled)."""
     result = await db.execute(select(League).where(League.id == league_id))
@@ -295,7 +295,7 @@ async def update_league_playoff_settings(
     return {"status": "ok", "playoff_settings": league.playoff_settings}
 
 
-@router.get("/{league_id}/rivalry-week-settings")
+@router.get("/{league_id}/rivalry-week-settings", dependencies=[Depends(require_league_view)])
 async def get_league_rivalry_week_settings(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the Rivalry Week config for a league, or defaults (disabled).
     Ungated -- safe to read regardless of league_type, same as
@@ -349,7 +349,7 @@ async def update_league_rivalry_week_settings(
     return {"status": "ok", "rivalry_week_settings": league.rivalry_week_settings}
 
 
-@router.get("/{league_id}/salary-cap-settings")
+@router.get("/{league_id}/salary-cap-settings", dependencies=[Depends(require_league_view)])
 async def get_league_salary_cap_settings(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the Salary-Cap config for a league, or defaults (disabled).
     Ungated -- same house style as GET playoff-settings/rivalry-week-settings."""
@@ -418,7 +418,7 @@ async def update_league_salary_cap_settings(
     return {"status": "ok", "salary_cap_settings": league.salary_cap_settings}
 
 
-@router.get("/{league_id}/salary-cap/preview-signing")
+@router.get("/{league_id}/salary-cap/preview-signing", dependencies=[Depends(require_league_view)])
 async def preview_salary_cap_signing(league_id: str, player_id: str, db: AsyncSession = Depends(get_db)):
     """Estimate what a free-agent/waiver signing WOULD cost, without
     creating a Contract -- lets the waivers page show a real number
@@ -436,7 +436,7 @@ async def preview_salary_cap_signing(league_id: str, player_id: str, db: AsyncSe
     return {"player_id": player_id, "estimated_salary": compute_waiver_salary(player, settings)}
 
 
-@router.get("/{league_id}/best-ball-settings")
+@router.get("/{league_id}/best-ball-settings", dependencies=[Depends(require_league_view)])
 async def get_league_best_ball_settings(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the Best-Ball config for a league, or defaults (disabled).
     Ungated -- same house style as GET playoff-settings/salary-cap-settings."""
@@ -491,7 +491,7 @@ async def update_league_best_ball_settings(
     return {"status": "ok", "best_ball_settings": league.best_ball_settings}
 
 
-@router.get("/{league_id}/ai-settings")
+@router.get("/{league_id}/ai-settings", dependencies=[Depends(require_league_view)])
 async def get_league_ai_settings(league_id: str, db: AsyncSession = Depends(get_db)):
     """Get the AI Co-Commissioner toggle for a league, or the default
     (enabled). Ungated -- same house style as GET best-ball-settings/
@@ -538,7 +538,7 @@ async def update_league_ai_settings(
     return {"status": "ok", "ai_commissioner_settings": league.ai_commissioner_settings}
 
 
-@router.get("/{league_id}/management-window")
+@router.get("/{league_id}/management-window", dependencies=[Depends(require_league_view)])
 async def get_league_management_window(league_id: str, db: AsyncSession = Depends(get_db)):
     """Whether trade approvals / waiver processing are currently allowed
     for this league. Meaningless (always open) outside Best-Ball --
@@ -753,6 +753,14 @@ async def get_league(
     if not row:
         raise HTTPException(status_code=404, detail="League not found")
     league, team_count = row
+    if not await can_view_rosters(league, current_user, db):
+        # PRIVATE and not a member/invitee: nothing but the name, so the
+        # page can say "Log in to see <league>" (deps.league_view_or_raise).
+        gate = {"id": league.id, "name": league.name, "visibility": league.visibility.value}
+        if current_user is None:
+            raise HTTPException(status_code=401, detail={"message": "Not authenticated", "league": gate})
+        gate["viewer_join_status"] = await _compute_viewer_join_status(db, league, current_user)
+        raise HTTPException(status_code=403, detail={"message": "Not a participant in this league", "league": gate})
     league_dict = LeagueRead.model_validate(league)
     league_dict.team_count = team_count
     if current_user is not None:
@@ -760,7 +768,7 @@ async def get_league(
     return league_dict
 
 
-@router.get("/{league_id}/team-recap")
+@router.get("/{league_id}/team-recap", dependencies=[Depends(require_league_view)])
 async def get_team_weekly_recap(
     league_id: str, week: int | None = None, year: int | None = None, db: AsyncSession = Depends(get_db),
 ):

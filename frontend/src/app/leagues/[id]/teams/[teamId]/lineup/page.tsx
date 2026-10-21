@@ -236,8 +236,22 @@ export default function LineupPage() {
   const [pick, setPick] = useState<Pick | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; undo: Slot[] | null } | null>(null);
+  // Nothing renders (not even the header) until the session check says
+  // who this is: guests get only the log-in card (QA 2026-10-21).
+  const [session, setSessionState] = useState<"checking" | "in" | "out">("checking");
 
   useEffect(() => {
+    let live = true;
+    syncSession().then(() => {
+      if (live) setSessionState(isLoggedIn() ? "in" : "out");
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (session !== "in") return;
     let live = true;
     Promise.all([nflApi.getCurrentWeek().catch(() => null), leaguesApi.get(leagueId).catch(() => null)]).then(([s, l]) => {
       if (!live) return;
@@ -252,7 +266,7 @@ export default function LineupPage() {
     return () => {
       live = false;
     };
-  }, [leagueId]);
+  }, [leagueId, session]);
 
   // Keep the shown week in the URL (?week=) so a reload or a shared link
   // opens the same week instead of snapping back to the live one.
@@ -411,6 +425,26 @@ export default function LineupPage() {
     pick?.kind === "bench" ? byId[pick.playerId]?.full_name : pick?.kind === "slot" ? byId[slots[pick.index]?.player_id ?? ""]?.full_name : null;
   const pickedSlot = pick?.kind === "slot" ? slots[pick.index]?.slot : null;
 
+  if (session === "checking") {
+    return (
+      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8" aria-busy="true">
+        <SkeletonRows rows={6} />
+      </div>
+    );
+  }
+  if (session === "out" || needsLogin) {
+    return (
+      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+        <p className="rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
+          <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="font-semibold text-gold">
+            Log in
+          </Link>{" "}
+          to see this lineup.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -477,14 +511,6 @@ export default function LineupPage() {
         </Card>
       )}
 
-      {needsLogin && (
-        <p className="mb-4 rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
-          <Link href={`/login?next=${encodeURIComponent(`/leagues/${leagueId}/teams/${teamId}/lineup`)}`} className="font-semibold text-gold">
-            Log in
-          </Link>{" "}
-          to see this lineup.
-        </p>
-      )}
       {error && (
         <div role="alert" className="mb-4 rounded-card border border-loss/40 bg-loss/10 px-4 py-3 text-sm text-loss">
           {error}

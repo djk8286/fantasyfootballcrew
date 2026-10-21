@@ -28,3 +28,27 @@ export function errorStatus(err: unknown): number | null {
   const s = (err as { status?: unknown } | null)?.status;
   return typeof s === "number" ? s : null;
 }
+
+/** A PRIVATE league the viewer can't read: GET /leagues/{id} answers 401
+ * (guest) or 403 (logged in, not a member or invitee) with only
+ * {id, name, visibility[, viewer_join_status]} in detail.league. */
+export interface LeagueGate {
+  kind: "login" | "private";
+  name: string | null;
+  invited: boolean;
+}
+
+export function leagueGate(err: unknown): LeagueGate | null {
+  const status = errorStatus(err);
+  if (status !== 401 && status !== 403) return null;
+  const detail = (err as { detail?: unknown } | null)?.detail;
+  const league = (detail && typeof detail === "object" ? (detail as { league?: unknown }).league : null) as
+    | { name?: unknown; viewer_join_status?: unknown }
+    | null
+    | undefined;
+  return {
+    kind: status === 401 ? "login" : "private",
+    name: typeof league?.name === "string" ? league.name : null,
+    invited: league?.viewer_join_status === "invited",
+  };
+}

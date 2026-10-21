@@ -18,12 +18,12 @@ from app.services.standings_service import (
 )
 from app.services.guillotine_service import process_league_guillotine
 from app.services.nfl_schedule_service import game_teams, get_week_games
-from app.api.deps import can_view_lineups, can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read
+from app.api.deps import can_view_lineups, can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read, require_league_view
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_league_view)])
 async def get_league_standings(
     league_id: str,
     db: AsyncSession = Depends(get_db),
@@ -49,7 +49,7 @@ async def get_league_standings(
     }
 
 
-@router.get("/combined")
+@router.get("/combined", dependencies=[Depends(require_league_view)])
 async def get_league_combined_standings(
     league_id: str,
     db: AsyncSession = Depends(get_db),
@@ -69,7 +69,7 @@ async def get_league_combined_standings(
     return {"league_id": league_id, "league_name": league.name, "combined_standings": combined}
 
 
-@router.get("/weekly")
+@router.get("/weekly", dependencies=[Depends(require_league_view)])
 async def get_weekly_scores(
     league_id: str,
     week: int = Query(..., ge=1, le=18, description="Week number (1-18)"),
@@ -183,7 +183,7 @@ async def get_weekly_scores(
     }
 
 
-@router.get("/schedule")
+@router.get("/schedule", dependencies=[Depends(require_league_view)])
 async def get_season_schedule_endpoint(
     league_id: str,
     year: int = Query(..., ge=2020, le=2030, description="Season year"),

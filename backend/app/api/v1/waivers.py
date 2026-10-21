@@ -11,7 +11,7 @@ from app.models.player import Player
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User
 from app.schemas.waiver import WaiverClaimCreate
-from app.api.deps import can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read
+from app.api.deps import can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read, require_league_view
 from app.services.draft_manager import build_rank_by_id, get_rank_score, FANTASY_POSITIONS
 from app.services.sleeper_sync import sleeper_avatar_url, effective_season_stats, fetch_trending_add_counts
 from app.services.scoring_engine import calculate_player_score
@@ -42,7 +42,7 @@ async def _get_team_in_league(team_id: str, league_id: str, db: AsyncSession) ->
     return team
 
 
-@router.get("/free-agents")
+@router.get("/free-agents", dependencies=[Depends(require_league_view)])
 async def list_free_agents(
     league_id: str,
     limit_per_position: int = 25,
@@ -162,7 +162,7 @@ async def submit_claim(
     return claim
 
 
-@router.get("/claims")
+@router.get("/claims", dependencies=[Depends(require_league_view)])
 async def list_claims(
     league_id: str,
     team_id: str | None = None,
@@ -237,7 +237,7 @@ async def cancel_claim(
     return {"status": "cancelled"}
 
 
-@router.get("/priority")
+@router.get("/priority", dependencies=[Depends(require_league_view)])
 async def get_priority(league_id: str, db: AsyncSession = Depends(get_db)):
     league = await _get_league(league_id, db)
     order = await _priority_order(league, league_id, db)
