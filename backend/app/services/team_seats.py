@@ -8,8 +8,12 @@ from app.models.team import Team
 
 async def lock_league_seats(db: AsyncSession, league_id: str, *teams: Team) -> None:
     """Serialize seat changes in a league (Postgres row lock, held to
-    commit), then re-read the teams so checks see the winner's write."""
-    await db.execute(select(League.id).where(League.id == league_id).with_for_update())
+    commit), then re-read the teams so checks see the winner's write.
+
+    FOR NO KEY UPDATE (key_share=True): it still serializes with every other
+    league lock, but doesn't block the KEY SHARE locks that inserting child
+    rows (notifications, transactions, contracts) takes on the league."""
+    await db.execute(select(League.id).where(League.id == league_id).with_for_update(key_share=True))
     for team in teams:
         await db.refresh(team)
 

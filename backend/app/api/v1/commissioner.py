@@ -253,8 +253,13 @@ async def review_trade(
         dual_pair = league.league_type == LeagueType.DUAL_SQUAD and proposer.partner_team_id == target.id
         if not dual_pair and all(current_user.id in side for side in sides):
             raise HTTPException(status_code=400, detail="You manage both teams in this trade, so you can't approve it")
+        # The requirement is also recorded on the trade at propose/accept
+        # (needs_independent_approver), so it still applies if the outside
+        # commissioner has since been removed. Older trades without the
+        # flag use the live commissioner list alone.
         commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
-        if current_user.id in in_trade and commissioners - in_trade:
+        needs_independent = bool(details.get("needs_independent_approver")) or bool(commissioners - in_trade)
+        if current_user.id in in_trade and needs_independent:
             raise HTTPException(status_code=400, detail="You manage a team in this trade, so another commissioner has to approve it")
         for team_obj in (proposer, target):
             if team_obj.eliminated_week is not None:

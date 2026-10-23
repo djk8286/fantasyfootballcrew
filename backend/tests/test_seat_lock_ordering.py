@@ -237,6 +237,7 @@ async def test_revoke_invite_locks_league_then_invite(client, db_session_factory
 
 AWAITING = ("A trade involving your team is waiting for commissioner review. "
             "Approve or deny it before removing a co-commissioner.")
+SELF_APPROVE = "You manage a team in this trade, so another commissioner has to approve it"
 
 
 @pytest.mark.asyncio
@@ -272,13 +273,131 @@ async def test_removal_allowed_after_deny_or_before_acceptance(client, db_sessio
     helper, _ = await _make_user(f)
     await _commish_action(client, s, "add_co_commish", helper.id)
 
-    await _propose(client, s)  # offered, not accepted yet -> not awaiting review
+    # Offered, not accepted yet: removal isn't blocked, but the trade keeps
+    # needing a commissioner outside it, so it can only be denied now.
+    trade = await _propose(client, s)
+    assert trade["details"]["needs_independent_approver"] is True
     assert (await _commish_action(client, s, "remove_co_commish", helper.id)).status_code == 200
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+    r = await _review(client, s, trade["id"], "approve")
+    assert (r.status_code, r.json()["detail"]) == (400, SELF_APPROVE)
+    assert (await _review(client, s, trade["id"], "deny")).status_code == 200
 
     await _commish_action(client, s, "add_co_commish", helper.id)
     trade = await _accepted_trade(client, s)
     assert (await _review(client, s, trade["id"], "deny")).status_code == 200
     assert (await _commish_action(client, s, "remove_co_commish", helper.id)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_propose_remove_accept_then_self_approve_is_refused(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    helper, _ = await _make_user(f)
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    trade = await _propose(client, s)
+    assert (await _commish_action(client, s, "remove_co_commish", helper.id)).status_code == 200
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+
+    r = await _review(client, s, trade["id"], "approve")
+    assert (r.status_code, r.json()["detail"]) == (400, SELF_APPROVE)
+    async with f() as db:
+        row = (await db.execute(select(Transaction).where(Transaction.id == trade["id"]))).scalar_one()
+        assert row.status == TransactionStatus.PENDING
+    # Cancelling is still possible.
+    r = await client.post(f"/leagues/{s['league'].id}/trades/{trade['id']}/cancel", headers=s["h"]["commish"])
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_flagged_trade_can_be_approved_by_a_commissioner_outside_it(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    helper, helper_token = await _make_user(f)
+    other, _ = await _make_user(f)
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    trade = await _propose(client, s)
+    assert (await _commish_action(client, s, "remove_co_commish", helper.id)).status_code == 200
+    await _commish_action(client, s, "add_co_commish", other.id)
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+    r = await client.post(f"/leagues/{s['league'].id}/commissioner/trades/{trade['id']}/review",
+                          headers={"Authorization": f"Bearer {helper_token}"}, json={"action": "approve"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_flag_is_set_at_accept_when_an_outside_commissioner_appears(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    trade = await _propose(client, s)  # sole commissioner, seated in the trade
+    assert "needs_independent_approver" not in trade["details"]
+    helper, _ = await _make_user(f)
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    r = await _respond(client, s, trade["id"], "owner", "accept")
+    assert r.status_code == 200
+    assert r.json()["details"]["needs_independent_approver"] is True
+
+
+@pytest.mark.asyncio
+async def test_older_trade_without_flag_uses_the_live_rule(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    helper, _ = await _make_user(f)
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    trade = await _propose(client, s)
+    assert (await _commish_action(client, s, "remove_co_commish", helper.id)).status_code == 200
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+    async with f() as db:  # a trade written before the flag existed
+        row = (await db.execute(select(Transaction).where(Transaction.id == trade["id"]))).scalar_one()
+        row.details = {k: v for k, v in row.details.items() if k != "needs_independent_approver"}
+        await db.commit()
+    r = await _review(client, s, trade["id"], "approve")
+    assert r.status_code == 200, r.text
+
+    # ... and with an outside commissioner present, the live rule still refuses.
+    s = await _setup(f)
+    trade = await _accepted_trade(client, s)
+    async with f() as db:
+        row = (await db.execute(select(Transaction).where(Transaction.id == trade["id"]))).scalar_one()
+        row.details = {k: v for k, v in row.details.items() if k != "needs_independent_approver"}
+        await db.commit()
+    await _commish_action(client, s, "add_co_commish", helper.id)
+    r = await _review(client, s, trade["id"], "approve")
+    assert (r.status_code, r.json()["detail"]) == (400, SELF_APPROVE)
+
+
+@pytest.mark.asyncio
+async def test_league_locks_are_no_key_update(client, db_session_factory):
+    """League locks are FOR NO KEY UPDATE so child-row inserts (which take a
+    KEY SHARE lock on the league) aren't blocked by them."""
+    from sqlalchemy.dialects import postgresql
+    from app.services.team_seats import lock_league_seats
+    from app.services.roster_guard import lock_league_rosters
+    seen = []
+
+    def on_execute(state):
+        stmt = state.statement
+        if state.is_select and getattr(stmt, "_for_update_arg", None) is not None \
+                and stmt.get_final_froms()[0].name == "leagues":
+            seen.append(str(stmt.compile(dialect=postgresql.dialect())))
+
+    s = await _setup(db_session_factory)
+    event.listen(Session, "do_orm_execute", on_execute)
+    try:
+        async with db_session_factory() as db:
+            await lock_league_seats(db, s["league"].id)
+            await lock_league_rosters(db, s["league"].id)
+        trade = await _accepted_trade(client, s)
+        assert (await _review(client, s, trade["id"], "approve")).status_code == 200
+        await client.post(f"/teams/bulk-add/{s['league'].id}", headers=s["h"]["commish"], json={"count": 1})
+        r = await client.patch(f"/leagues/{s['league'].id}", headers=s["h"]["commish"], json={"name": "Renamed"})
+        assert r.status_code == 200, r.text
+    finally:
+        event.remove(Session, "do_orm_execute", on_execute)
+    assert len(seen) >= 5, seen
+    assert all("FOR NO KEY UPDATE" in q for q in seen), seen
 
 
 @pytest.mark.asyncio

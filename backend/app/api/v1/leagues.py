@@ -581,7 +581,7 @@ async def update_league(
     # bulk-add take), then counts, so max_teams can't be lowered below a
     # count that's changing underneath it. FOR UPDATE can't be combined
     # with the GROUP BY count.
-    await db.execute(select(League.id).where(League.id == league.id).with_for_update())
+    await db.execute(select(League.id).where(League.id == league.id).with_for_update(key_share=True))
     await db.refresh(league)
     team_count = await db.scalar(select(func.count(Team.id)).where(Team.league_id == league.id))
 

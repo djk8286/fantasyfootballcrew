@@ -63,7 +63,7 @@ async def create_team(
     # creates/bulk-adds in the same league, so the max_teams count below
     # can't be raced past.
     league_result = await db.execute(
-        select(League).where(League.id == team_data.league_id).with_for_update()
+        select(League).where(League.id == team_data.league_id).with_for_update(key_share=True)
     )
     league = league_result.scalar_one_or_none()
     if not league:
@@ -361,6 +361,8 @@ async def remove_owner(
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
     await lock_league_seats(db, league.id, team)
+    await db.refresh(league)  # re-check rights against the locked, current league
+    require_commissioner(league, current_user)
 
     if team.owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no owner to remove")
@@ -391,6 +393,8 @@ async def remove_co_owner(
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
     await lock_league_seats(db, league.id, team)
+    await db.refresh(league)  # re-check rights against the locked, current league
+    require_commissioner(league, current_user)
 
     if team.co_owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no co-owner to remove")
@@ -492,6 +496,8 @@ async def delete_team(
     if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
         raise HTTPException(status_code=403, detail="Commissioner access required")
     await lock_league_seats(db, league.id, team)
+    await db.refresh(league)  # re-check rights against the locked, current league
+    require_commissioner(league, current_user)
 
     # Dual-Squad (Phase 7): clear the partner's pointer first so deleting
     # one half of a pair doesn't leave a dangling partner_team_id (or hit
@@ -523,7 +529,7 @@ async def bulk_add_cpu_teams(
     """Fill a league's empty slots with CPU-controlled teams (commissioner only)."""
     # Check league exists and get current team count. Locked like
     # create_team so the two can't both fill the last slot at once.
-    result = await db.execute(select(League).where(League.id == league_id).with_for_update())
+    result = await db.execute(select(League).where(League.id == league_id).with_for_update(key_share=True))
     league = result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
