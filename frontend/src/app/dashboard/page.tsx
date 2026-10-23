@@ -11,6 +11,7 @@ import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { PositionChip } from "@/components/ui/Badge";
 import RankBadge from "@/components/ui/RankBadge";
 import AdSlot from "@/components/AdSlot";
+import FreshnessChip from "@/components/ffc/FreshnessChip";
 
 
 interface League {
@@ -481,12 +482,19 @@ function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void
 
   return (
     <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 mb-6 flex flex-col h-130">
-      <div className="flex items-center justify-between mb-3 shrink-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3 shrink-0">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <Radio className="w-4 h-4 text-gold-400" />
           NFL Scores -- Week {data.week}
         </h2>
-        {data.recap && <AIBadge />}
+        <div className="flex items-center gap-2">
+          <FreshnessChip
+            sources={["espn"]}
+            live={data.games.some((g) => g.status_state === "in")}
+            onRefresh={() => dashboardApi.getNflScores().then((d) => setData(d as typeof data))}
+          />
+          {data.recap && <AIBadge />}
+        </div>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {data.recap && (

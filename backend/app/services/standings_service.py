@@ -29,6 +29,7 @@ from app.services.default_lineup import (
 )
 from app.services.nfl_schedule_service import game_started, game_teams, get_week_games
 from app.services.season_weeks import WeekState, league_start_week, season_week_states, week_counts
+from app.services.guillotine_placement import guillotine_placement, order_guillotine_rows
 
 
 async def _weekly_adjustment_totals(team_ids: List[str], week: int, year: int, db: AsyncSession) -> Dict[str, float]:
@@ -687,7 +688,20 @@ async def calculate_week(
 
 
 async def get_standings(league_id: str, db: AsyncSession, through_week: int | None = None) -> List[Dict[str, Any]]:
+    """Standings rows, best first. See get_standings_detail."""
+    rows, _ = await get_standings_detail(league_id, db, through_week=through_week)
+    return rows
+
+
+async def get_standings_detail(
+    league_id: str, db: AsyncSession, through_week: int | None = None
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
+    (rows, guillotine). guillotine is None outside GUILLOTINE leagues;
+    there it is guillotine_placement's result, and the rows are ordered
+    by it (alive teams first, finalists by series, then cuts by most
+    recent) with eliminated_week and guillotine_place on each row.
+
     Get current standings for a league by analyzing weekly scores
     and head-to-head matchups.
 
@@ -715,7 +729,7 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
     team_map = {t.id: t.name for t in teams}
 
     if not teams:
-        return []
+        return [], None
 
     # Needed by _effective_matchups (Phase 4, Guillotine finale pairing) --
     # a no-op fetch for the vast majority of leagues, which aren't
@@ -739,7 +753,7 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
 
     if not all_scores:
         # Return teams with zero stats
-        return [
+        return _with_guillotine(league, teams, {}, [
             {
                 "team_id": t.id,
                 "team_name": t.name,
@@ -751,7 +765,7 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
                 "points_against": 0.0,
             }
             for t in teams
-        ]
+        ])
 
     # Group scores by week
     weekly_scores: Dict[Tuple[int, int], Dict[str, float]] = {}  # (year, week) -> {team_id: score}
@@ -812,7 +826,30 @@ async def get_standings(league_id: str, db: AsyncSession, through_week: int | No
         reverse=True,
     )
 
-    return sorted_standings
+    return _with_guillotine(league, teams, weekly_scores, sorted_standings)
+
+
+def _with_guillotine(
+    league: Optional[League],
+    teams: List[Team],
+    weekly_scores: Dict[Tuple[int, int], Dict[str, float]],
+    rows: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Order a GUILLOTINE league's rows by final placement; a no-op
+    for every other league type."""
+    if league is None or league.league_type != LeagueType.GUILLOTINE:
+        return rows, None
+    eliminated = {t.id: t.eliminated_week for t in teams}
+    for r in rows:
+        r["eliminated_week"] = eliminated.get(r["team_id"])
+
+    def is_pairing(week: int, a: str, b: str) -> bool:
+        return any({x, y} == {a, b} for x, y in _effective_matchups(league, teams, week))
+
+    placement = guillotine_placement(
+        teams, weekly_scores, {r["team_id"]: r["points_for"] for r in rows}, is_pairing,
+    )
+    return order_guillotine_rows(rows, placement), placement
 
 
 async def get_combined_standings(league_id: str, db: AsyncSession, through_week: int | None = None) -> List[Dict[str, Any]]:

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Lock, Sparkles, X } from "lucide-react";
 import PlayerLink from "@/components/PlayerLink";
+import FreshnessChip from "@/components/ffc/FreshnessChip";
 import { InjuryTag, PositionChip } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -303,6 +304,14 @@ export default function LineupPage() {
     };
   }, [teamId, leagueId, week, year]);
 
+  // Chip refresh: new scores and points, but keep any unsaved slot edits.
+  const refreshScores = async () => {
+    if (week === null) return;
+    const r = await fetchLineupPage(teamId, leagueId, week, year);
+    setMatchup(r.matchup);
+    if (r.lineup && isLoggedIn()) setData(r.lineup);
+  };
+
   useEffect(() => {
     if (!pick) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPick(null);
@@ -452,7 +461,8 @@ export default function LineupPage() {
           <p className="text-label font-semibold uppercase text-ink-400">Lineup</p>
           <h1 className="truncate text-2xl font-semibold text-ink-100 md:text-title">{teamName || " "}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FreshnessChip sources={["sleeper"]} onRefresh={refreshScores} />
           <div className="flex items-center rounded-control border border-ink-700 bg-ink-900">
             <button
               type="button"

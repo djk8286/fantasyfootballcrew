@@ -254,3 +254,47 @@ async def get_system_health(db: AsyncSession) -> dict:
             "overdue_drafts": overdue,
         },
     }
+
+
+# Data sources the public freshness chip reports on, keyed by the source
+# name the UI shows, mapped to the scheduler job that pulls from it.
+SYNC_SOURCES: dict[str, str] = {"sleeper": "sync_stats", "espn": "sync_scoreboard"}
+
+
+async def get_sync_status(db: AsyncSession) -> dict:
+    """Last sync times per data source, for the freshness chip. Public, so
+    it carries timestamps and an ok flag only, never error text."""
+    jobs = list(SYNC_SOURCES.values())
+    last_success = dict((await db.execute(
+        select(JobRun.job_name, func.max(JobRun.finished_at))
+        .where(JobRun.job_name.in_(jobs), JobRun.success.is_(True))
+        .group_by(JobRun.job_name)
+    )).all())
+    latest_sub = (
+        select(JobRun.job_name, func.max(JobRun.started_at).label("max_started"))
+        .where(JobRun.job_name.in_(jobs))
+        .group_by(JobRun.job_name)
+        .subquery()
+    )
+    latest = {r.job_name: r for r in (await db.execute(
+        select(JobRun).join(
+            latest_sub,
+            (JobRun.job_name == latest_sub.c.job_name) & (JobRun.started_at == latest_sub.c.max_started),
+        )
+    )).scalars().all()}
+    # The ESPN scoreboard is also written outside the scheduler loop, so
+    # the newest game row counts as an ESPN sync too.
+    game_synced = _aware((await db.execute(select(func.max(NFLGame.synced_at)))).scalar())
+
+    sources = {}
+    for source, job in SYNC_SOURCES.items():
+        success_at = _aware(last_success.get(job))
+        if source == "espn" and game_synced and (success_at is None or game_synced > success_at):
+            success_at = game_synced
+        run = latest.get(job)
+        sources[source] = {
+            "last_success_at": success_at.isoformat() if success_at else None,
+            "last_attempt_at": _aware(run.finished_at).isoformat() if run else None,
+            "last_attempt_ok": run.success if run else None,
+        }
+    return {"generated_at": _now().isoformat(), "sources": sources}

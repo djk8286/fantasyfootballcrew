@@ -53,6 +53,7 @@ from app.core.config import settings
 from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service, espn_news_service
 from app.services.ai_service import AIService
 from app.services.job_run_service import run_job, prune_job_runs
+from app.services.nfl_state import record_nfl_state
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.team import Team
@@ -71,6 +72,9 @@ def _league_is_auto_scorable(league: League) -> bool:
     return not league.is_mock and league.draft_status == DraftStatus.COMPLETED
 
 
+NFL_STATE_PRIME_TIMEOUT = 20.0  # seconds; the startup read of /state/nfl
+
+
 async def fetch_nfl_state() -> dict:
     """Sleeper's live season/week clock. Authoritative source for "what NFL
     week is it right now" -- deliberately not computed from calendar dates,
@@ -79,7 +83,10 @@ async def fetch_nfl_state() -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{SLEEPER_API}/state/nfl", timeout=15)
         response.raise_for_status()
-        return response.json()
+        state = response.json()
+    # Kept for GET /nfl/sync-status, so that public route never calls Sleeper.
+    record_nfl_state(state)
+    return state
 
 
 async def _sync_stats_once() -> tuple[int, int] | None:
@@ -654,6 +661,13 @@ async def run_scheduler() -> None:
     # then every REFRESH_INTERVAL_S. In-memory is fine here -- a redeploy
     # just means one extra polite pass.
     last_espn_news: float | None = None
+
+    # Read Sleeper's season state first, so GET /nfl/sync-status knows the
+    # season type before the slow startup syncs and repairs below finish.
+    try:
+        await asyncio.wait_for(fetch_nfl_state(), NFL_STATE_PRIME_TIMEOUT)
+    except Exception as e:  # includes asyncio.TimeoutError
+        print(f"[scheduler] Startup NFL state read failed: {type(e).__name__}: {e}")
 
     # Sync player metadata once immediately so a fresh deploy isn't empty;
     # don't let a failure here block the stats loop from ever starting.

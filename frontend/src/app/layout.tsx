@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Barlow_Condensed, Geist, Geist_Mono, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
@@ -12,6 +12,27 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Guillotine skin faces. Self-hosted by next/font at build time; not
+// preloaded, so pages that never use them don't download them.
+const barlow = Barlow_Condensed({
+  variable: "--ffc-font-barlow",
+  weight: "700",
+  subsets: ["latin"],
+  preload: false,
+});
+
+const inter = Inter({
+  variable: "--ffc-font-inter",
+  subsets: ["latin"],
+  preload: false,
+});
+
+const jetbrains = JetBrains_Mono({
+  variable: "--ffc-font-jetbrains",
+  subsets: ["latin"],
+  preload: false,
 });
 
 export const metadata: Metadata = {
@@ -48,7 +69,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${barlow.variable} ${inter.variable} ${jetbrains.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-surface-900 text-white relative">
         {/* Stadium-at-night backdrop: faint yard-line stripes + vignette, fixed behind all content */}
