@@ -51,10 +51,15 @@ describe("leagueGate", () => {
 describe("safeNext", () => {
   it("keeps a same-site path with its query and hash", () => {
     expect(safeNext("/league/abc/trades?week=7&team=x#offer")).toBe("/league/abc/trades?week=7&team=x#offer");
+    expect(safeNext("/leagues/x/standings?week=3")).toBe("/leagues/x/standings?week=3");
   });
   it.each([
     "//evil.com",
     "/\\evil.com",
+    "/.//evil.com",
+    "/..//evil.com",
+    "/a/..//evil.com",
+    "/%2e//evil.com",
     "/\t/evil.com",
     "/\n/evil.com",
     "https://evil.com",
