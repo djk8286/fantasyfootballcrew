@@ -19,6 +19,7 @@ from app.schemas.commissioner import (
 from app.api.deps import get_current_user, require_commissioner, require_league_view
 from app.services.notification_service import notify_team_owners
 from app.services.trade_writes import write_pending_trade
+from app.services.team_seats import lock_league_seats
 from app.models.notification import NotificationType
 from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
@@ -183,6 +184,13 @@ async def review_trade(
     """Approve or deny a pending trade."""
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
+    if data.action == "approve":
+        # Lock order for an approval is league, then trade, then teams --
+        # the same league-first order every seat change uses, so the two
+        # can't wait on each other. Re-read the league under the lock so
+        # the commissioner check below sees the current co-commissioners.
+        await lock_league_seats(db, league.id)
+        await db.refresh(league)
 
     result = await db.execute(
         select(Transaction).where(

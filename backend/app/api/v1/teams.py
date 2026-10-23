@@ -360,6 +360,7 @@ async def remove_owner(
     already produces elsewhere."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if team.owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no owner to remove")
@@ -389,6 +390,7 @@ async def remove_co_owner(
     """Commissioner-only. Leaves the primary owner untouched."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if team.co_owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no co-owner to remove")
@@ -489,6 +491,7 @@ async def delete_team(
         raise HTTPException(status_code=404, detail="League not found")
     if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
         raise HTTPException(status_code=403, detail="Commissioner access required")
+    await lock_league_seats(db, league.id, team)
 
     # Dual-Squad (Phase 7): clear the partner's pointer first so deleting
     # one half of a pair doesn't leave a dangling partner_team_id (or hit

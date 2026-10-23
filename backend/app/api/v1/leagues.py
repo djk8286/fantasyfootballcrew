@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.league import League, LeagueVisibility, LeagueType
 from app.models.team import Team
+from app.models.transaction import Transaction, TransactionStatus, TransactionType
 from app.models.user import User
 from app.schemas.league import LeagueCreate, LeagueRead, LeagueUpdate
 from app.services.scoring_engine import DEFAULT_SCORING, DEFAULT_ROSTER_SLOTS
@@ -20,6 +21,7 @@ from app.models.league_invite import LeagueInvite, InviteStatus
 from app.models.league_join_request import LeagueJoinRequest, JoinRequestStatus
 from app.api.deps import can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_view, user_can_join_league
 from app.services import team_recap_service
+from app.services.team_seats import lock_league_seats
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
@@ -614,6 +616,29 @@ async def update_league(
     return league_dict
 
 
+async def _has_trade_awaiting_review(db: AsyncSession, league_id: str, user_id: str) -> bool:
+    """True if a trade in this league has been accepted by the receiving
+    side, is waiting on a commissioner, and involves a team this user
+    owns or co-owns."""
+    my_teams = set((await db.execute(
+        select(Team.id).where(Team.league_id == league_id, or_(Team.owner_id == user_id, Team.co_owner_id == user_id))
+    )).scalars())
+    if not my_teams:
+        return False
+    trades = (await db.execute(select(Transaction).where(
+        Transaction.league_id == league_id,
+        Transaction.type == TransactionType.TRADE,
+        Transaction.status == TransactionStatus.PENDING,
+    ))).scalars()
+    for trade in trades:
+        details = trade.details or {}
+        if "accepted" not in {details.get("recipient_response"), details.get("cpu_response")}:
+            continue
+        if trade.team_id in my_teams or details.get("target_team_id") in my_teams:
+            return True
+    return False
+
+
 @router.post("/{league_id}/commissioner")
 @limiter.limit("20/hour")
 async def manage_commissioners(
@@ -658,7 +683,19 @@ async def manage_commissioners(
     elif req.action == "remove_co_commish":
         if req.user_id not in league.co_commissioner_ids:
             raise HTTPException(status_code=400, detail="User is not a co-commissioner")
-        league.co_commissioner_ids.remove(req.user_id)
+        # League lock first, same order as trade approval, so this check
+        # and an approval can't interleave.
+        await lock_league_seats(db, league.id)
+        await db.refresh(league)
+        if req.user_id not in (league.co_commissioner_ids or []):
+            raise HTTPException(status_code=400, detail="User is not a co-commissioner")
+        if await _has_trade_awaiting_review(db, league.id, current_user.id):
+            raise HTTPException(
+                status_code=400,
+                detail="A trade involving your team is waiting for commissioner review. "
+                       "Approve or deny it before removing a co-commissioner.",
+            )
+        league.co_commissioner_ids = [uid for uid in league.co_commissioner_ids if uid != req.user_id]
 
     elif req.action == "transfer":
         if req.user_id == league.commissioner_id:

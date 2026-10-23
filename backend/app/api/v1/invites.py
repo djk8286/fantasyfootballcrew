@@ -114,8 +114,10 @@ async def revoke_invite(
 ):
     league = await _get_league_or_404(league_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id)  # same league-then-invite order as accept_invite
     result = await db.execute(
         select(LeagueInvite).where(LeagueInvite.id == invite_id, LeagueInvite.league_id == league_id)
+        .with_for_update().execution_options(populate_existing=True)
     )
     invite = result.scalar_one_or_none()
     if not invite:
@@ -164,6 +166,18 @@ async def get_invite_by_token(token: str, db: AsyncSession = Depends(get_db)):
     )
 
 
+async def _lock_pending_invite(db: AsyncSession, invite: LeagueInvite) -> LeagueInvite:
+    """Re-read the invite under a row lock (taken after the league lock)
+    and check it's still pending, so one invite is only accepted once."""
+    locked = (await db.execute(
+        select(LeagueInvite).where(LeagueInvite.id == invite.id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if locked is None or _display_status(locked) != "pending":
+        raise HTTPException(status_code=400, detail="This invite is no longer valid")
+    return locked
+
+
 @router.post("/invites/{token}/accept")
 @limiter.limit("20/hour")
 async def accept_invite(
@@ -179,6 +193,11 @@ async def accept_invite(
     if _display_status(invite) != "pending":
         raise HTTPException(status_code=400, detail="This invite is no longer valid")
 
+    league = await _get_league_or_404(invite.league_id, db)
+    # Lock order: league, then the invite row.
+    await lock_league_seats(db, league.id)
+    invite = await _lock_pending_invite(db, invite)
+
     # Token-possession-based, not email-matching -- see LeagueInvite's
     # docstring. Whoever holds the link and is logged in gets credit for
     # accepting it, regardless of whether their account email matches
@@ -186,9 +205,6 @@ async def accept_invite(
     invite.status = InviteStatus.ACCEPTED
     invite.accepted_at = datetime.now(timezone.utc)
     invite.accepted_by_user_id = current_user.id
-
-    league = await _get_league_or_404(invite.league_id, db)
-    await lock_league_seats(db, league.id)
     # Notify whoever specifically sent this invite, not every commissioner
     # -- they're the one with context on who they invited and why. Skip
     # if that account's since been deleted (invited_by_user_id nulled) --
