@@ -16,7 +16,9 @@ class LeagueCreate(BaseModel):
     description: Optional[str] = None
     league_type: LeagueType = LeagueType.STANDARD
     scoring_config: Optional[dict] = None
-    max_teams: int = 12
+    # Input bounds only. LeagueRead stays a plain int so any stored value
+    # outside this range still reads fine.
+    max_teams: int = Field(default=12, ge=2, le=32)
     draft_type: DraftType = DraftType.SNAKE
     auto_fill_cpu: bool = True
     visibility: LeagueVisibility = LeagueVisibility.OPEN
@@ -25,7 +27,7 @@ class LeagueCreate(BaseModel):
 class LeagueUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    max_teams: Optional[int] = None
+    max_teams: Optional[int] = Field(default=None, ge=2, le=32)
     draft_type: Optional[DraftType] = None
     scoring_config: Optional[dict] = None
     visibility: Optional[LeagueVisibility] = None

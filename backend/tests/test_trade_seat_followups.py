@@ -44,14 +44,14 @@ async def test_claiming_a_second_team_is_refused_on_every_claim_path(client, db_
     co_id = (await _team(f, s["teams"][1].id)).co_owner_id
 
     r = await _claim(client, s, 2, "co")  # co-owner of team 1 claims CPU team 2
-    assert (r.status_code, r.json()["detail"]) == (400, TAKEN)
+    assert (r.status_code, r.json()["detail"]) == (409, TAKEN)
     r = await _claim(client, s, 2, "commish")  # commissioner already owns team 0
-    assert (r.status_code, r.json()["detail"]) == (400, TAKEN)
+    assert (r.status_code, r.json()["detail"]) == (409, TAKEN)
     async with f() as db:
         from app.models.user import User
         co_email = (await db.execute(select(User).where(User.id == co_id))).scalar_one().email
     r = await _assign_owner(client, s, 2, co_email)
-    assert (r.status_code, r.json()["detail"]) == (400, "That person already manages a team in this league")
+    assert (r.status_code, r.json()["detail"]) == (409, "That person already manages a team in this league")
     assert (await _team(f, s["teams"][2].id)).is_cpu
 
     r = await _claim(client, s, 2, "out")  # a newcomer still can

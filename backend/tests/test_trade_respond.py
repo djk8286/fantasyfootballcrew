@@ -170,7 +170,7 @@ async def test_cannot_co_own_a_second_team_in_the_same_league(client, db_session
 
     r = await client.post(f"/teams/{s['teams'][1].id}/claim-co-owner",
                           headers={"Authorization": f"Bearer {attacker_token}"})
-    assert r.status_code == 400
+    assert r.status_code == 409
     assert r.json()["detail"] == "You already manage a team in this league"
 
     r = await client.post(f"/teams/{s['teams'][1].id}/claim-co-owner", headers=s["h"]["out"])
@@ -305,11 +305,10 @@ async def test_commissioner_cannot_seat_themselves_on_a_second_team(client, db_s
     team1 = s["teams"][1].id
 
     r = await client.patch(f"/teams/{team1}", headers=s["h"]["commish"], json={"co_owner_id": s["commish"].id})
-    assert r.status_code == 400
-    assert r.json()["detail"] == "That person already manages a team in this league"
+    assert r.status_code == 422  # TeamUpdate no longer takes co_owner_id
     r = await client.post(f"/teams/{team1}/assign-co-owner", headers=s["h"]["commish"],
                           json={"identifier": s["commish"].email})
-    assert r.status_code == 400
+    assert r.status_code == 409
     assert r.json()["detail"] == "That person already manages a team in this league"
     assert (await _team(f, team1)).co_owner_id is None
 
