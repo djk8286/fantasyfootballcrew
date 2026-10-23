@@ -26,6 +26,9 @@ def _fresh_status(monkeypatch):
     monkeypatch.setattr(nfl_module, "current_nfl_week", _no_sleeper)
     monkeypatch.setattr(nfl_module, "fetch_nfl_state", _no_sleeper)
     monkeypatch.setattr(scheduler, "fetch_nfl_state", _no_sleeper)
+    # Other tests fill the /current-week cache, which season_type falls back to.
+    monkeypatch.setattr(nfl_module, "_state_cache", None)
+    monkeypatch.setattr(nfl_module, "_state_cache_at", 0.0)
     nfl_state.record_nfl_state({"season": "2026", "week": "7", "season_type": "regular"})
     yield
     nfl_module.reset_sync_status_cache()
@@ -194,3 +197,132 @@ async def test_rate_limited_per_client(client):
     codes = [(await client.get("/nfl/sync-status")).status_code for _ in range(121)]
     assert codes[:120] == [200] * 120
     assert codes[120] == 429
+
+
+def _slow_db(monkeypatch, delay=0.0, exc=None):
+    calls = {"n": 0}
+    real = nfl_module.get_sync_status
+
+    async def wrapped(db):
+        calls["n"] += 1
+        await asyncio.sleep(delay)
+        if exc is not None:
+            raise exc
+        return await real(db)
+
+    monkeypatch.setattr(nfl_module, "get_sync_status", wrapped)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_expired_cache_serves_the_stale_copy_while_one_request_refills(client, monkeypatch):
+    assert (await client.get("/nfl/sync-status")).status_code == 200
+    calls = _slow_db(monkeypatch, delay=0.5)
+    nfl_module._sync_cache_at -= nfl_module.SYNC_STATUS_TTL + 1
+    t0 = asyncio.get_running_loop().time()
+    refill = asyncio.create_task(client.get("/nfl/sync-status"))
+    await asyncio.sleep(0.05)
+    others = await asyncio.gather(*[client.get("/nfl/sync-status") for _ in range(20)])
+    assert {r.status_code for r in others} == {200}
+    # The others didn't wait for the slow refill.
+    assert asyncio.get_running_loop().time() - t0 < 0.4
+    assert (await refill).status_code == 200
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_db_timeout_serves_stale_copy_or_503_when_there_is_none(client, monkeypatch):
+    monkeypatch.setattr(nfl_module, "SYNC_STATUS_DB_TIMEOUT", 0.1)
+    original = nfl_module.get_sync_status
+    # Cold cache and a stuck database: 503, and queued requests fail fast.
+    calls = _slow_db(monkeypatch, delay=5)
+    t0 = asyncio.get_running_loop().time()
+    rs = await asyncio.gather(*[client.get("/nfl/sync-status") for _ in range(5)])
+    assert {r.status_code for r in rs} == {503}
+    assert calls["n"] == 1
+    assert asyncio.get_running_loop().time() - t0 < 1.0
+
+    # The database recovers: the next request refills.
+    monkeypatch.setattr(nfl_module, "get_sync_status", original)
+    assert (await client.get("/nfl/sync-status")).status_code == 200
+
+    # Expired cache, database stuck again: the old copy is served.
+    _slow_db(monkeypatch, delay=5)
+    nfl_module._sync_cache_at -= nfl_module.SYNC_STATUS_TTL + 1
+    r = await client.get("/nfl/sync-status")
+    assert r.status_code == 200
+    assert set(r.json()["sources"]) == {"sleeper", "espn"}
+
+
+@pytest.mark.asyncio
+async def test_db_error_serves_stale_copy_and_does_not_leak(client, monkeypatch):
+    assert (await client.get("/nfl/sync-status")).status_code == 200
+    _slow_db(monkeypatch, exc=RuntimeError("boom secret-dsn"))
+    nfl_module._sync_cache_at -= nfl_module.SYNC_STATUS_TTL + 1
+    r = await client.get("/nfl/sync-status")
+    assert r.status_code == 200
+    assert "secret-dsn" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_season_type_falls_back_to_a_recent_current_week_cache(client, monkeypatch):
+    nfl_state.reset_nfl_state()
+    now = nfl_module.time.monotonic()
+    monkeypatch.setattr(nfl_module, "_state_cache", {"season": 2026, "week": 7, "season_type": "post"})
+    monkeypatch.setattr(nfl_module, "_state_cache_at", now)
+    assert (await client.get("/nfl/sync-status")).json()["season_type"] == "post"
+    # Old or unknown values don't count.
+    monkeypatch.setattr(nfl_module, "_state_cache_at", now - nfl_state.MAX_AGE_S - 1)
+    assert (await client.get("/nfl/sync-status")).json()["season_type"] is None
+    monkeypatch.setattr(nfl_module, "_state_cache", {"season": 2026, "week": 7, "season_type": "weird"})
+    monkeypatch.setattr(nfl_module, "_state_cache_at", now)
+    assert (await client.get("/nfl/sync-status")).json()["season_type"] is None
+
+
+class _StopScheduler(BaseException):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_scheduler_primes_nfl_state_before_the_slow_startup_syncs(monkeypatch):
+    order = []
+
+    async def fake_fetch():
+        order.append("state")
+        state = {"season": "2026", "week": "7", "season_type": "off"}
+        nfl_state.record_nfl_state(state)
+        return state
+
+    async def stop(name, fn, *a, **k):
+        order.append(name)
+        raise _StopScheduler
+
+    nfl_state.reset_nfl_state()
+    monkeypatch.setattr(scheduler, "fetch_nfl_state", fake_fetch)
+    monkeypatch.setattr(scheduler, "run_job", stop)
+    with pytest.raises(_StopScheduler):
+        await scheduler.run_scheduler()
+    assert order[:2] == ["state", "sync_players"]
+    assert nfl_state.latest_season_type() == "off"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_startup_survives_a_hung_or_failing_state_read(monkeypatch):
+    monkeypatch.setattr(scheduler, "NFL_STATE_PRIME_TIMEOUT", 0.05)
+    for behaviour in ("hang", "fail"):
+        reached = []
+
+        async def fake_fetch():
+            if behaviour == "hang":
+                await asyncio.sleep(10)
+            raise httpx.ConnectError("sleeper down")
+
+        async def stop(name, fn, *a, **k):
+            reached.append(name)
+            raise _StopScheduler
+
+        monkeypatch.setattr(scheduler, "fetch_nfl_state", fake_fetch)
+        monkeypatch.setattr(scheduler, "run_job", stop)
+        with pytest.raises(_StopScheduler):
+            await asyncio.wait_for(scheduler.run_scheduler(), 2)
+        assert reached == ["sync_players"]

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nflApi } from "@/lib/api-client";
-import { chipState, type ChipKind, type SyncSource, type SyncStatus } from "@/lib/freshness";
+import { chipState, pollFailedAfter, type ChipKind, type SyncSource, type SyncStatus } from "@/lib/freshness";
 import { FfcIcon } from "./icons";
 
 const SYNCING_AFTER_MS = 400;
@@ -52,8 +52,9 @@ export default function FreshnessChip({
   const [now, setNow] = useState(() => Date.now());
   const [loadedAt, setLoadedAt] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
-  // A failed status poll clears on the next good poll. A failed page
-  // reload stays until a reload works.
+  // A failed status poll clears on the next good poll; a rate limit or a
+  // passing server error doesn't count. A failed page reload stays until
+  // a reload works.
   const [pollFailed, setPollFailed] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const inFlight = useRef(false);
@@ -67,7 +68,8 @@ export default function FreshnessChip({
       setPollFailed(false);
       return s;
     } catch (e) {
-      setPollFailed(true);
+      // A 429 or a passing 5xx keeps the last good status on screen.
+      setPollFailed((was) => pollFailedAfter(was, e));
       throw e;
     }
   }, []);

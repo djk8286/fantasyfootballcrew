@@ -168,3 +168,15 @@ export function chipState(input: ChipInput): ChipState | null {
     tickMs,
   };
 }
+
+/** A status poll that hit the rate limit or a passing server error. The
+ * syncs themselves are fine, so the chip keeps its last good status. */
+export function isTransientPollError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" && (status === 429 || (status >= 500 && status <= 599));
+}
+
+/** Whether the chip should read "Sync failed" after a status poll fails. */
+export function pollFailedAfter(wasFailed: boolean, err: unknown): boolean {
+  return isTransientPollError(err) ? wasFailed : true;
+}

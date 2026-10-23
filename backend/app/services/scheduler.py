@@ -72,6 +72,9 @@ def _league_is_auto_scorable(league: League) -> bool:
     return not league.is_mock and league.draft_status == DraftStatus.COMPLETED
 
 
+NFL_STATE_PRIME_TIMEOUT = 20.0  # seconds; the startup read of /state/nfl
+
+
 async def fetch_nfl_state() -> dict:
     """Sleeper's live season/week clock. Authoritative source for "what NFL
     week is it right now" -- deliberately not computed from calendar dates,
@@ -658,6 +661,13 @@ async def run_scheduler() -> None:
     # then every REFRESH_INTERVAL_S. In-memory is fine here -- a redeploy
     # just means one extra polite pass.
     last_espn_news: float | None = None
+
+    # Read Sleeper's season state first, so GET /nfl/sync-status knows the
+    # season type before the slow startup syncs and repairs below finish.
+    try:
+        await asyncio.wait_for(fetch_nfl_state(), NFL_STATE_PRIME_TIMEOUT)
+    except Exception as e:  # includes asyncio.TimeoutError
+        print(f"[scheduler] Startup NFL state read failed: {type(e).__name__}: {e}")
 
     # Sync player metadata once immediately so a fresh deploy isn't empty;
     # don't let a failure here block the stats loop from ever starting.

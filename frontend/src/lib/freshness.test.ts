@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chipState, relativeAge, type SyncStatus } from "./freshness";
+import { chipState, isTransientPollError, pollFailedAfter, relativeAge, type SyncStatus } from "./freshness";
+import { ApiError } from "./api-client";
 
 const NOW = Date.parse("2026-10-22T02:42:00Z"); // Wed 7:42 PM PT
 const tz = "America/Los_Angeles";
@@ -116,5 +117,33 @@ describe("chipState", () => {
     }
     expect(chipState({ ...base, sources: ["sleeper"], status: { ...st, season_type: "regular" } })!.kind).toBe("failed");
     expect(chipState({ ...base, sources: ["sleeper"], status: { ...st, season_type: null } })!.kind).toBe("failed");
+  });
+});
+
+describe("status poll errors", () => {
+  const status: SyncStatus = {
+    generated_at: "2026-10-18T20:00:00Z",
+    season_type: "regular",
+    sources: { sleeper: { last_success_at: "2026-10-18T19:59:00Z", last_attempt_at: "2026-10-18T19:59:00Z", last_attempt_ok: true } },
+  };
+  const now = Date.parse("2026-10-18T20:00:00Z");
+  const err = (s: number) => new ApiError(`API error: ${s}`, s, null);
+
+  it("keeps the last good status on a 429 or a passing 5xx", () => {
+    for (const s of [429, 500, 502, 503, 504]) {
+      expect(isTransientPollError(err(s))).toBe(true);
+      const failed = pollFailedAfter(false, err(s));
+      const chip = chipState({ now, status, sources: ["sleeper"], clientFailed: failed });
+      expect(chip?.kind).toBe("fresh");
+      expect(chip?.text).not.toContain("Sync failed");
+    }
+  });
+
+  it("still shows a failure for other errors, and a transient one doesn't clear it", () => {
+    for (const e of [err(404), err(400), new TypeError("Failed to fetch"), null]) {
+      expect(pollFailedAfter(false, e)).toBe(true);
+    }
+    expect(pollFailedAfter(true, err(429))).toBe(true);
+    expect(chipState({ now, status, sources: ["sleeper"], clientFailed: pollFailedAfter(false, err(404)) })?.text).toBe("Sync failed");
   });
 });

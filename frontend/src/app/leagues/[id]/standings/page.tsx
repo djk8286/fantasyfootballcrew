@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser, claimedTeamIds, getCurrentUserId } from "@/lib/api-client";
+import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser, claimedTeamIds, getCurrentUserId, friendlyErrorMessage } from "@/lib/api-client";
+import StandingsUnavailable from "@/components/StandingsUnavailable";
 import { findMyTeamId } from "@/lib/league-nav";
 import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
@@ -165,6 +166,8 @@ export default function StandingsPage() {
   const [weeklyData, setWeeklyData] = useState<WeeklyScoresResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Bumped by "Try again" on a failed first load.
+  const [loadKey, setLoadKey] = useState(0);
 
   // Week selector
   const [selectedWeek, setSelectedWeek] = useState(1);
@@ -269,7 +272,11 @@ export default function StandingsPage() {
 
     Promise.all([
       leaguesApi.get(leagueId).catch(() => null),
-      loadStandings(),
+      // Settled, so a standings failure still lets the league name show.
+      loadStandings().then(
+        (value) => ({ ok: true as const, value }),
+        (err: unknown) => ({ ok: false as const, err }),
+      ),
       // The real live NFL week (straight from Sleeper) -- the old logic
       // here read a `week` field that Standing/RawStandingEntry never
       // actually carried, so `(st[0] as any)?.week` was always
@@ -279,21 +286,26 @@ export default function StandingsPage() {
     ])
       .then(([leagueData, st, nflState]) => {
         if (!leagueData) {
-          setError("League not found");
+          setError("We couldn't find this league.");
           return;
         }
         setLeague(leagueData as LeagueData);
-        applyStandings(st);
+        if (!st.ok) {
+          setError(friendlyErrorMessage(st.err, "Something went wrong. Please try again."));
+          return;
+        }
+        setError("");
+        applyStandings(st.value);
 
         const wk = nflState?.week ?? 1;
         setMaxWeek(wk);
         setSelectedWeek(wk);
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load standings");
+        setError(friendlyErrorMessage(err, "Something went wrong. Please try again."));
       })
       .finally(() => setLoading(false));
-  }, [leagueId, loadStandings, applyStandings]);
+  }, [leagueId, loadStandings, applyStandings, loadKey]);
 
   // Fetch weekly scores when week changes
   useEffect(() => {
@@ -627,21 +639,16 @@ export default function StandingsPage() {
     );
   }
 
-  if (error && !league) {
+  // A failed first load: no data to show yet. The header and league nav
+  // stay; the error sits inline in the content area.
+  if (error && (!league || dataAt == null)) {
     return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="text-center">
-          <AlertTriangle className="w-12 h-12 text-surface-600 mx-auto mb-3" />
-          <h2 className="text-xl font-semibold text-white mb-2">Standings unavailable</h2>
-          <p className="text-surface-400 text-sm mb-4">{error}</p>
-          <Link
-            href={`/leagues/${leagueId}`}
-            className="text-gold-400 hover:text-gold-300 text-sm font-medium"
-          >
-            Back to League
-          </Link>
-        </div>
-      </div>
+      <StandingsUnavailable
+        leagueId={leagueId}
+        leagueName={league?.name}
+        message={error}
+        onRetry={() => { setError(""); setLoading(true); setLoadKey((k) => k + 1); }}
+      />
     );
   }
 
