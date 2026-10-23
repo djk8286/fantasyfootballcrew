@@ -83,13 +83,13 @@ async def _make_trade_league(db_session_factory, best_ball_settings=None):
         }
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, accepted=True):
     async with db_session_factory() as db:
         trade = Transaction(
             id=str(uuid.uuid4()), league_id=league_id, team_id=proposer_id,
             type=TransactionType.TRADE, status=TransactionStatus.PENDING,
             details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested,
-                     "recipient_response": "accepted"},
+                     **({"recipient_response": "accepted"} if accepted else {})},
         )
         db.add(trade)
         await db.commit()

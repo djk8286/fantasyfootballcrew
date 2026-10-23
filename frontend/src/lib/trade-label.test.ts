@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tradeOptionLabel, defaultComparePair, pendingTradeView, tradeAccepted } from "./trade-label";
+import { tradeOptionLabel, defaultComparePair, pendingTradeView, pickFromTeam, tradeAccepted } from "./trade-label";
 
 const teams: Record<string, string> = { a: "QA Tester Team", b: "CPU Team 3" };
 const players: Record<string, string> = { p1: "Tyler Loop", p2: "Matt Gay", p3: "Bijan Robinson", p4: "RJ Harvey", p5: "Josh Allen" };
@@ -52,5 +52,19 @@ describe("pendingTradeView", () => {
   });
   it("has nothing to say once a trade is closed", () => {
     expect(pendingTradeView({ ...offer, status: "denied" }, ["b"], name)).toEqual({ note: null, canRespond: false, canCancel: false });
+  });
+});
+
+describe("pickFromTeam", () => {
+  const mine = [{ id: "squad-a" }, { id: "squad-b" }];
+  it("uses the picked team", () => {
+    expect(pickFromTeam(mine, "squad-b")?.id).toBe("squad-b");
+  });
+  it("falls back to the first team when nothing or a stale team is picked", () => {
+    expect(pickFromTeam(mine, "")?.id).toBe("squad-a");
+    expect(pickFromTeam(mine, "gone")?.id).toBe("squad-a");
+  });
+  it("is empty when you manage no team", () => {
+    expect(pickFromTeam([], "squad-a")).toBeUndefined();
   });
 });

@@ -18,6 +18,7 @@ from app.schemas.commissioner import (
 )
 from app.api.deps import get_current_user, require_commissioner, require_league_view
 from app.services.notification_service import notify_team_owners
+from app.services.trade_writes import write_pending_trade
 from app.models.notification import NotificationType
 from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
@@ -188,7 +189,7 @@ async def review_trade(
             Transaction.id == trade_id,
             Transaction.league_id == league_id,
             Transaction.type == TransactionType.TRADE,
-        )
+        ).with_for_update()  # trade lock first, team locks after (see below)
     )
     trade = result.scalar_one_or_none()
     if not trade:
@@ -336,14 +337,18 @@ async def review_trade(
         for contract in requested_contracts.values():
             contract.team_id = proposer.id
 
-        trade.status = TransactionStatus.APPROVED
+        await write_pending_trade(
+            db, trade, status=TransactionStatus.APPROVED, reviewed_by=current_user.id,
+        )
         trade_link = f"/leagues/{league_id}/trades"
         await notify_team_owners(db, proposer, NotificationType.TRADE_APPROVED,
                                   f"Your trade with {target.name} was approved.", league_id, trade_link)
         await notify_team_owners(db, target, NotificationType.TRADE_APPROVED,
                                   f"Your trade with {proposer.name} was approved.", league_id, trade_link)
     elif data.action == "deny":
-        trade.status = TransactionStatus.DENIED
+        await write_pending_trade(
+            db, trade, status=TransactionStatus.DENIED, reviewed_by=current_user.id,
+        )
         result = await db.execute(select(Team).where(Team.id.in_({trade.team_id, target_team_id})))
         teams_by_id = {t.id: t for t in result.scalars().all()}
         proposer = teams_by_id.get(trade.team_id)
@@ -360,7 +365,6 @@ async def review_trade(
     else:
         raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'")
 
-    trade.reviewed_by = current_user.id
     await db.commit()
     await db.refresh(trade)
     return trade
@@ -385,7 +389,6 @@ async def analyze_trade_for_review(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
-    await check_and_record_ai_usage(league_id, "trade_review_analyze", db)
 
     result = await db.execute(
         select(Transaction).where(
@@ -399,6 +402,10 @@ async def analyze_trade_for_review(
         raise HTTPException(status_code=404, detail="Trade not found")
     if trade.status != TransactionStatus.PENDING:
         raise HTTPException(status_code=400, detail="Only a pending trade can be analyzed")
+    details = trade.details or {}
+    if "accepted" not in {details.get("recipient_response"), details.get("cpu_response")}:
+        raise HTTPException(status_code=400, detail="The receiving team hasn't accepted this trade yet.")
+    await check_and_record_ai_usage(league_id, "trade_review_analyze", db)
 
     target_team_id = (trade.details or {}).get("target_team_id")
     proposer_result = await db.execute(select(Team).where(Team.id == trade.team_id))

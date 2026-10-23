@@ -883,7 +883,7 @@ function TradesPanel({
                 </div>
                 {trade.status === "pending" && (
                   <div className="flex items-center gap-2">
-                    {aiEnabled && (
+                    {aiEnabled && tradeAccepted(trade.details) && (
                       <button
                         onClick={() => handleAnalyze(trade.id)}
                         disabled={analyzing === trade.id}

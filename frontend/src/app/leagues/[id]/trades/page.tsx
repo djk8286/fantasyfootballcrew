@@ -8,7 +8,7 @@ import Link from "next/link";
 import { ArrowLeftRight, CheckCircle2, Send, XCircle } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
-import { pendingTradeView } from "@/lib/trade-label";
+import { pendingTradeView, pickFromTeam } from "@/lib/trade-label";
 
 interface Team {
   id: string;
@@ -60,13 +60,15 @@ export default function TradesPage() {
   const [respondingId, setRespondingId] = useState("");
   const { toast, showToast, clearToast } = useToast();
 
+  const [fromTeamId, setFromTeamId] = useState("");
   const [targetTeamId, setTargetTeamId] = useState("");
   const [offeredIds, setOfferedIds] = useState<string[]>([]);
   const [requestedIds, setRequestedIds] = useState<string[]>([]);
 
   const userId = getCurrentUserId();
-  const myTeam = teams.find((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
-  const myTeamIds = teams.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id)).map((t) => t.id);
+  const myTeams = teams.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
+  const myTeamIds = myTeams.map((t) => t.id);
+  const myTeam = pickFromTeam(myTeams, fromTeamId);
   const targetTeam = teams.find((t) => t.id === targetTeamId);
 
   const loadTrades = useCallback(async () => {
@@ -237,6 +239,30 @@ export default function TradesPage() {
             )
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
+              {myTeams.length > 1 && (
+                <div>
+                  <label htmlFor="trade-from" className="block text-xs text-surface-400 mb-1.5">Trade from</label>
+                  <select
+                    id="trade-from"
+                    value={myTeam.id}
+                    onChange={(e) => {
+                      setFromTeamId(e.target.value);
+                      setOfferedIds([]);
+                      if (targetTeamId === e.target.value) {
+                        setTargetTeamId("");
+                        setRequestedIds([]);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-surface-900 border border-surface-600 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
+                  >
+                    {myTeams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-surface-400 mb-1.5">Trade with</label>
                 <select

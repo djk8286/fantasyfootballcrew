@@ -243,8 +243,8 @@ async def test_eliminated_teams_owner_can_join_a_survivor_team_in_same_league(cl
     """The "join a survivor's team" mechanic: an eliminated manager
     already owns team A (now dead) in league L; nothing should stop them
     from claiming the open co-owner slot on a still-alive team B in that
-    same league -- confirmed there's no "already in this league"
-    restriction on claim_co_owner today."""
+    same league. claim_co_owner's one-seat-per-league rule skips
+    eliminated teams for exactly this."""
     owner, _owner_token = await _make_user(db_session_factory)
     eliminated_owner, eliminated_owner_token = await _make_user(db_session_factory)
     survivor_owner, _survivor_owner_token = await _make_user(db_session_factory)

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.team import Team
@@ -120,6 +120,7 @@ async def update_team(
         # branch that reaches here is genuinely trying to SET one.
         if league.league_type != LeagueType.TWO_MAN:
             raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
+        await _require_one_live_seat(db, team, update_data.co_owner_id, "That person already manages a team in this league")
         team.co_owner_id = update_data.co_owner_id
     if update_data.conference is not None:
         if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
@@ -197,6 +198,23 @@ async def release_player_route(
     return team
 
 
+async def _require_one_live_seat(db: AsyncSession, team: Team, user_id: str, detail: str) -> None:
+    """One live seat per person per league before they become `team`'s
+    co-owner. Holding two teams lets you answer your own trade offers. A
+    Dual-Squad partner is the exception, and so is an eliminated team
+    (Guillotine: its manager may join a survivor)."""
+    other_teams = await db.execute(
+        select(Team.id).where(
+            Team.league_id == team.league_id,
+            Team.id != team.id,
+            Team.eliminated_week.is_(None),
+            or_(Team.owner_id == user_id, Team.co_owner_id == user_id),
+        )
+    )
+    if any(other_id != team.partner_team_id for other_id in other_teams.scalars()):
+        raise HTTPException(status_code=400, detail=detail)
+
+
 @router.post("/{team_id}/claim-co-owner", response_model=TeamRead)
 @limiter.limit("20/hour")
 async def claim_co_owner(
@@ -234,6 +252,7 @@ async def claim_co_owner(
         raise HTTPException(status_code=400, detail="This team already has a co-owner")
     if current_user.id == team.owner_id:
         raise HTTPException(status_code=400, detail="You already own this team")
+    await _require_one_live_seat(db, team, current_user.id, "You already manage a team in this league")
 
     team.co_owner_id = current_user.id
     await db.commit()
@@ -407,6 +426,7 @@ async def assign_co_owner(
         raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
     if target.id == team.owner_id:
         raise HTTPException(status_code=400, detail="That person already owns this team")
+    await _require_one_live_seat(db, team, target.id, "That person already manages a team in this league")
 
     team.co_owner_id = target.id
     await db.commit()

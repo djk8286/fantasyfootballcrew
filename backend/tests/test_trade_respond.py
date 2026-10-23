@@ -1,9 +1,13 @@
 """A human trade target has to answer the offer before the commissioner can
 approve it. Before, nobody on the receiving team could accept or decline, and
 the offer just sat at "pending" until the commissioner acted."""
+import asyncio
+
 import pytest
 from sqlalchemy import select
 
+from app.api.v1 import trades as trades_mod
+from app.models.league import League, LeagueType
 from app.models.notification import Notification, NotificationType
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionStatus, TransactionType
@@ -131,3 +135,187 @@ async def test_cpu_offers_are_answered_by_the_cpu_not_respond(client, db_session
     assert trade["details"]["cpu_response"] == "accepted"
     assert (await _respond(client, s, trade["id"], "owner", "decline")).status_code == 403
     assert (await _review(client, s, trade["id"])).status_code == 200
+
+
+async def _set_team(factory, team_id, **fields):
+    async with factory() as db:
+        row = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one()
+        for k, v in fields.items():
+            setattr(row, k, v)
+        await db.commit()
+
+
+async def _set_league_type(factory, league_id, league_type):
+    async with factory() as db:
+        (await db.execute(select(League).where(League.id == league_id))).scalar_one().league_type = league_type
+        await db.commit()
+
+
+async def _notes(factory, user_id):
+    async with factory() as db:
+        rows = (await db.execute(select(Notification).where(Notification.user_id == user_id))).scalars().all()
+    return sorted((n.type, n.message) for n in rows)
+
+
+@pytest.mark.asyncio
+async def test_cannot_co_own_a_second_team_in_the_same_league(client, db_session_factory):
+    """The exploit: own team 2, grab the open co-owner seat on team 1, then
+    accept your own lopsided offer on team 1's behalf."""
+    f = db_session_factory
+    s = await _setup(f)
+    await _set_league_type(f, s["league"].id, LeagueType.TWO_MAN)
+    attacker, attacker_token = await _make_user(f)
+    await _set_team(f, s["teams"][1].id, co_owner_id=None)
+    await _set_team(f, s["teams"][2].id, is_cpu=False, owner_id=attacker.id)
+
+    r = await client.post(f"/teams/{s['teams'][1].id}/claim-co-owner",
+                          headers={"Authorization": f"Bearer {attacker_token}"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "You already manage a team in this league"
+
+    r = await client.post(f"/teams/{s['teams'][1].id}/claim-co-owner", headers=s["h"]["out"])
+    assert r.status_code == 200  # a normal 2-Man co-owner still gets in
+
+
+@pytest.mark.asyncio
+async def test_managing_both_teams_does_not_answer_the_offer(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    await _set_team(f, s["teams"][1].id, co_owner_id=s["commish"].id)  # however they got the seat
+
+    trade = await _propose(client, s)
+    assert "recipient_response" not in trade["details"]
+    r = await _respond(client, s, trade["id"], "commish", "accept")
+    assert r.status_code == 403
+    assert (await _review(client, s, trade["id"])).status_code == 400
+    assert (await _respond(client, s, trade["id"], "owner", "decline")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_dual_squad_partner_offer_is_auto_accepted_but_not_other_teams(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    await _set_league_type(f, s["league"].id, LeagueType.DUAL_SQUAD)
+    me = s["commish"].id
+    await _set_team(f, s["teams"][0].id, partner_team_id=s["teams"][1].id)
+    await _set_team(f, s["teams"][1].id, owner_id=me, co_owner_id=None, partner_team_id=s["teams"][0].id)
+    await _set_team(f, s["teams"][2].id, is_cpu=False, owner_id=me)
+
+    partner = await _propose(client, s)
+    assert partner["details"]["recipient_response"] == "accepted"
+    assert (await _review(client, s, partner["id"])).status_code == 200
+
+    r = await client.post(f"/leagues/{s['league'].id}/trades", headers=s["h"]["commish"],
+                          json={"team_id": s["teams"][0].id, "target_team_id": s["teams"][2].id,
+                                "offered_player_ids": [s["ps"][2].id], "requested_player_ids": []})
+    other = r.json()
+    assert "recipient_response" not in other["details"]
+    assert (await _respond(client, s, other["id"], "commish", "accept")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_decline_landing_after_accept_and_approve_is_rejected(client, db_session_factory, monkeypatch):
+    """The co-owner's decline reads the offer, stalls, and lands after the
+    owner accepted and the commissioner approved. It used to flip the
+    trade to DENIED with the players already moved."""
+    f = db_session_factory
+    s = await _setup(f)
+    trade = await _propose(client, s)
+
+    real = trades_mod._get_team_in_league
+    stalled, release, calls = asyncio.Event(), asyncio.Event(), {"n": 0}
+
+    async def stall_first_call(team_id, league_id, db):
+        calls["n"] += 1
+        if calls["n"] == 1:  # the decline, after it read the trade row
+            stalled.set()
+            await release.wait()
+        return await real(team_id, league_id, db)
+    monkeypatch.setattr(trades_mod, "_get_team_in_league", stall_first_call)
+
+    decline = asyncio.create_task(_respond(client, s, trade["id"], "co", "decline"))
+    await stalled.wait()
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+    assert (await _review(client, s, trade["id"])).status_code == 200
+    release.set()
+    assert (await decline).status_code == 409
+
+    async with f() as db:
+        row = (await db.execute(select(Transaction).where(Transaction.id == trade["id"]))).scalar_one()
+        mine = (await db.execute(select(Team).where(Team.id == s["teams"][0].id))).scalar_one()
+    assert row.status == TransactionStatus.APPROVED
+    assert row.details["recipient_response"] == "accepted"
+    assert s["ps"][2].id in mine.roster
+
+
+@pytest.mark.asyncio
+async def test_commissioner_can_deny_an_unanswered_offer(client, db_session_factory):
+    s = await _setup(db_session_factory)
+    trade = await _propose(client, s)
+    r = await _review(client, s, trade["id"], "deny")
+    assert r.status_code == 200
+    assert r.json()["status"] == "denied"
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_offer_and_accept_notify_the_right_people(client, db_session_factory):
+    f = db_session_factory
+    s = await _setup(f)
+    owner_id = (await _team(f, s["teams"][1].id)).owner_id
+    co_id = (await _team(f, s["teams"][1].id)).co_owner_id
+
+    trade = await _propose(client, s)
+    offer = [(NotificationType.TRADE_OFFER, "Team 0 sent you a trade offer.")]
+    assert await _notes(f, owner_id) == offer
+    assert await _notes(f, co_id) == offer
+
+    await client.post(f"/leagues/{s['league'].id}/trades", headers=s["h"]["commish"],
+                      json={"team_id": s["teams"][0].id, "target_team_id": s["teams"][2].id,
+                            "offered_player_ids": [s["ps"][1].id], "requested_player_ids": []})
+    assert await _notes(f, s["commish"].id) == []  # CPU answers at once, nobody to ping
+
+    assert (await _respond(client, s, trade["id"], "owner", "accept")).status_code == 200
+    # The commissioner is also the proposer here. One message, the review one.
+    assert await _notes(f, s["commish"].id) == [
+        (NotificationType.TRADE_ACCEPTED, "Team 1 accepted a trade from Team 0. It needs your review."),
+    ]
+
+
+async def _team(factory, team_id):
+    async with factory() as db:
+        return (await db.execute(select(Team).where(Team.id == team_id))).scalar_one()
+
+
+def test_respond_is_covered_by_the_private_league_walk():
+    from tests.test_private_league_reads import _scoped_operations
+    ops = {(m, p) for m, p, *_ in _scoped_operations()}
+    assert ("POST", "/leagues/{league_id}/trades/{trade_id}/respond") in ops
+
+
+@pytest.mark.asyncio
+async def test_commissioner_cannot_seat_themselves_on_a_second_team(client, db_session_factory):
+    """Same exploit through the commissioner tools. PATCH /teams and
+    assign-co-owner both used to set any co-owner, including the
+    commissioner, who already owns the proposing team."""
+    f = db_session_factory
+    s = await _setup(f)
+    await _set_league_type(f, s["league"].id, LeagueType.TWO_MAN)
+    await _set_team(f, s["teams"][1].id, co_owner_id=None)
+    team1 = s["teams"][1].id
+
+    r = await client.patch(f"/teams/{team1}", headers=s["h"]["commish"], json={"co_owner_id": s["commish"].id})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "That person already manages a team in this league"
+    r = await client.post(f"/teams/{team1}/assign-co-owner", headers=s["h"]["commish"],
+                          json={"identifier": s["commish"].email})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "That person already manages a team in this league"
+    assert (await _team(f, team1)).co_owner_id is None
+
+    # Seated anyway (an older row): the offer is still not theirs to answer.
+    await _set_team(f, team1, co_owner_id=s["commish"].id)
+    trade = await _propose(client, s)
+    assert "recipient_response" not in trade["details"]
+    assert (await _respond(client, s, trade["id"], "commish", "accept")).status_code == 403
+    assert (await _review(client, s, trade["id"])).status_code == 400

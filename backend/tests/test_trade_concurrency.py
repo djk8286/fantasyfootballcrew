@@ -26,7 +26,7 @@ from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, accepted=True):
     """Directly inserts a PENDING trade Transaction (bypassing the propose
     endpoint -- not what's under test here)."""
     async with db_session_factory() as db:
@@ -37,7 +37,7 @@ async def _make_trade(db_session_factory, league_id, proposer_id, target_id, off
                 "target_team_id": target_id,
                 "offered_player_ids": offered,
                 "requested_player_ids": requested,
-                "recipient_response": "accepted",
+                **({"recipient_response": "accepted"} if accepted else {}),
             },
         )
         db.add(trade)

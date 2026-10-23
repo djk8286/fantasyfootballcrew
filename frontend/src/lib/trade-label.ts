@@ -72,3 +72,9 @@ export function pendingTradeView(
   const note = canRespond ? "Your answer is needed." : `Waiting on ${teamName(target) || "the other team"} to accept or decline.`;
   return { note, canRespond, canCancel };
 }
+
+/** The team a new offer comes from. The one you picked if you still manage
+ *  it, else your first team. Covers 2-Man seats and both Dual-Squad squads. */
+export function pickFromTeam<T extends { id: string }>(myTeams: T[], fromTeamId: string): T | undefined {
+  return myTeams.find((t) => t.id === fromTeamId) ?? myTeams[0];
+}
