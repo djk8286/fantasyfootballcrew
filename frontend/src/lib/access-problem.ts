@@ -52,3 +52,23 @@ export function leagueGate(err: unknown): LeagueGate | null {
     invited: league?.viewer_join_status === "invited",
   };
 }
+
+/** `raw` when it's a path on this site, else `fallback`. Parsed the way the
+ * browser will parse it, so "//evil.com", "/\evil.com" and a tab or
+ * newline that collapses into "//" are all refused. */
+export function safeNext(raw: string | null | undefined, fallback = "/dashboard"): string {
+  if (!raw || !raw.startsWith("/")) return fallback;
+  const base = "https://ffc.invalid";
+  try {
+    const url = new URL(raw, base);
+    return url.origin === base ? `${url.pathname}${url.search}${url.hash}` : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** The log-in link for the page the viewer is on, query string kept. */
+export function loginHref(pathname: string, search: string): string {
+  const next = safeNext(search ? `${pathname}?${search.replace(/^\?/, "")}` : pathname, "/");
+  return `/login?next=${encodeURIComponent(next)}`;
+}

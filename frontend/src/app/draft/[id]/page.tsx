@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { draftsApi, getCurrentUserId } from "@/lib/api-client";
+import { leagueGate, type LeagueGate } from "@/lib/access-problem";
+import LeagueGateCard from "@/components/LeagueGateCard";
 import Toast, { useToast } from "@/components/Toast";
 import {
   Trophy,
@@ -176,6 +178,7 @@ export default function DraftPage() {
   // which is why a failed "Auto-Pick All" used to look like it did nothing.
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [gate, setGate] = useState<LeagueGate | null>(null);
   const { toast, showToast, clearToast } = useToast();
   const [actionLoading, setActionLoading] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -351,8 +354,12 @@ export default function DraftPage() {
       const state = await draftsApi.getState(id);
       setDraft(state as DraftState);
       setLoadError("");
-    } catch {
-      setLoadError("Draft not found. Create a draft from your league page.");
+      setGate(null);
+    } catch (err) {
+      // A PRIVATE league's draft answers 401/403: say so, don't call it missing.
+      const g = leagueGate(err);
+      setGate(g);
+      setLoadError(g ? "" : "Draft not found. Create a draft from your league page.");
     } finally {
       setLoading(false);
     }
@@ -645,6 +652,14 @@ export default function DraftPage() {
           <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
           <span className="text-surface-400">Loading draft room...</span>
         </div>
+      </div>
+    );
+  }
+
+  if (gate && !draft) {
+    return (
+      <div className="min-h-screen bg-surface-900">
+        <LeagueGateCard gate={gate} />
       </div>
     );
   }

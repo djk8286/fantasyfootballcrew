@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { claimedTeamIds, getCurrentUserId, isLoggedIn, leaguesApi, nflApi, syncSession, teamsApi } from "@/lib/api-client";
 import { leagueGate, type LeagueGate } from "@/lib/access-problem";
+import LeagueGateCard from "@/components/LeagueGateCard";
 import { activeTabId, findMyTeamId, leagueTabs, type LeagueTabId } from "@/lib/league-nav";
 import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
 import { switcherLabels } from "@/lib/league-label";
@@ -80,28 +81,6 @@ async function loadShell(leagueId: string): Promise<ShellData> {
     myLeagues,
     week,
   };
-}
-
-function GateCard({ gate, next }: { gate: LeagueGate; next: string }) {
-  return (
-    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="rounded-card border border-ink-700 bg-ink-900 px-4 py-3 text-sm text-ink-300">
-        {gate.kind === "login" ? (
-          <p>
-            <Link href={`/login?next=${encodeURIComponent(next)}`} className="font-semibold text-gold">
-              Log in
-            </Link>{" "}
-            to see this league.
-          </p>
-        ) : (
-          <p>
-            This league is private. Only its members can see it.
-            {gate.invited && " You have an invite: open the link in your email to join."}
-          </p>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function weekLabel(week: ShellData["week"]): string | null {
@@ -248,7 +227,7 @@ export default function LeagueShell({ leagueId, children }: { leagueId: string; 
           <SkeletonRows rows={6} />
         </div>
       ) : gate ? (
-        <GateCard gate={gate} next={pathname} />
+        <LeagueGateCard gate={gate} />
       ) : (
         children
       )}
