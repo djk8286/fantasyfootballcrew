@@ -60,6 +60,8 @@ describe("safeNext", () => {
     "/..//evil.com",
     "/a/..//evil.com",
     "/%2e//evil.com",
+    "/%2e%2e//evil.com",
+    "/./\\evil.com",
     "/\t/evil.com",
     "/\n/evil.com",
     "https://evil.com",

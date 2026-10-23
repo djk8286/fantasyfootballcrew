@@ -145,7 +145,12 @@ def _example(schema, components):
 def _scoped_operations():
     """(method, path, path_params, query, body) for every operation that
     takes a league/team/draft/trade id. An optional scoped query param gets
-    its own request so each one is checked on its own."""
+    its own request so each one is checked on its own.
+
+    Blind spots: ids sent only in a request body aren't scoped, so
+    /ai/trade (trade_id) and /ai/player-comparison (league_id) rely on
+    their own checks. A stranger's 404 counts as refused, so the walk can't
+    tell an access check from a lookup that simply missed."""
     spec = app.openapi()
     components = spec.get("components", {}).get("schemas", {})
     for raw_path, ops in spec["paths"].items():
