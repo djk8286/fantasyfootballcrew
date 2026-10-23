@@ -10,13 +10,19 @@ from sqlalchemy import select
 from app.models.team import Team
 from app.models.league import League, LeagueType
 from app.models.user import User
+from app.services.team_seats import SEAT_TAKEN, require_one_live_seat
 
 
-async def apply_team_claim(db: AsyncSession, team: Team, league: League, user: User) -> None:
+async def apply_team_claim(
+    db: AsyncSession, team: Team, league: League, user: User,
+    seat_detail: str = SEAT_TAKEN,
+) -> None:
     """Mutates `team` (and its Dual-Squad partner, if any) in place --
     caller commits. Does NOT check team.is_cpu or user_can_join_league;
     a caller claiming a specific team the user asked for (claim_team)
-    still needs to check those itself first."""
+    still needs to check those itself first. Raises 409 if the user
+    already holds a live seat elsewhere in the league."""
+    await require_one_live_seat(db, team.league_id, user.id, seat_detail, joining=team)
     team.owner_id = user.id
     team.is_cpu = False
     # Personalize the placeholder name ("CPU Team 3", etc.) the moment a

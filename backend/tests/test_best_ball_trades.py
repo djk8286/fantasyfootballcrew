@@ -53,6 +53,9 @@ async def _make_trade_league(db_session_factory, best_ball_settings=None):
         commissioner = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
                              username=f"bbtcommish{uuid.uuid4().hex[:6]}", hashed_password="x")
         db.add(commissioner)
+        rival = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"rival{uuid.uuid4().hex[:6]}", hashed_password="x")
+        db.add(rival)
         await db.flush()
 
         league = League(id=str(uuid.uuid4()), name="Best Ball Trade Test League", commissioner_id=commissioner.id,
@@ -71,7 +74,7 @@ async def _make_trade_league(db_session_factory, best_ball_settings=None):
 
         team_a = Team(id=str(uuid.uuid4()), name="Team A", league_id=league.id, owner_id=commissioner.id,
                       roster=[players[0].id], roster_version=0)
-        team_b = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id, owner_id=commissioner.id,
+        team_b = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id, owner_id=rival.id,
                       roster=[players[1].id], roster_version=0)
         db.add_all([team_a, team_b])
         await db.commit()
@@ -83,12 +86,13 @@ async def _make_trade_league(db_session_factory, best_ball_settings=None):
         }
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, accepted=True):
     async with db_session_factory() as db:
         trade = Transaction(
             id=str(uuid.uuid4()), league_id=league_id, team_id=proposer_id,
             type=TransactionType.TRADE, status=TransactionStatus.PENDING,
-            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested},
+            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested,
+                     **({"recipient_response": "accepted"} if accepted else {})},
         )
         db.add(trade)
         await db.commit()

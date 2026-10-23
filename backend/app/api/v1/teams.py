@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.team import Team
-from app.models.league import League, LeagueType
+from app.models.league import DraftStatus, League, LeagueType
+from app.models.league_invite import InviteStatus, LeagueInvite
+from app.models.league_join_request import JoinRequestStatus, LeagueJoinRequest
 from app.models.user import User
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
 from app.api.deps import (
@@ -22,6 +24,7 @@ from app.api.deps import (
 from app.services.standings_service import get_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
+from app.services.team_seats import THEIR_SEAT_TAKEN, lock_league_seats, require_one_live_seat
 from app.services.team_news_service import get_team_news, generate_and_save_team_news
 from app.services import espn_news_service
 from app.core.avatars import validate_avatar_url
@@ -56,19 +59,39 @@ async def create_team(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    league_result = await db.execute(select(League).where(League.id == team_data.league_id))
+    # Row lock on the league (no-op on SQLite) serializes concurrent
+    # creates/bulk-adds in the same league, so the max_teams count below
+    # can't be raced past.
+    league_result = await db.execute(
+        select(League).where(League.id == team_data.league_id).with_for_update()
+    )
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    # Same join rules as claim_team/claim_co_owner: OPEN leagues are open
+    # to anyone; INVITE_ONLY/PRIVATE need the commissioner role, an
+    # accepted invite or an approved join request.
+    if not await user_can_join_league(db, league, current_user):
+        raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
+    # Dual-Squad teams only exist as linked pairs (made by bulk-add), so a
+    # lone team here would have no partner.
+    if league.league_type == LeagueType.DUAL_SQUAD:
+        raise HTTPException(status_code=400, detail="Dual-Squad leagues don't take new teams directly -- claim an open team instead")
+    if league.draft_status != DraftStatus.NOT_STARTED:
+        raise HTTPException(status_code=400, detail="Draft has started, claim an open team instead")
+    await require_one_live_seat(db, league.id, current_user.id)  # under the league lock
 
-    if team_data.co_owner_id and league.league_type != LeagueType.TWO_MAN:
-        raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
+    team_count = await db.scalar(select(func.count(Team.id)).where(Team.league_id == league.id))
+    if team_count >= league.max_teams:
+        raise HTTPException(status_code=400, detail="League is full")
 
     validate_avatar_url(team_data.avatar_url)
+    # No co_owner_id here (TeamCreate forbids it): a co-owner joins through
+    # claim_co_owner or the commissioner's assign_co_owner, both of which
+    # apply the league's 2-Man and join rules.
     team = Team(
         name=team_data.name,
         owner_id=current_user.id,
-        co_owner_id=team_data.co_owner_id,
         league_id=team_data.league_id,
         avatar_url=team_data.avatar_url,
         roster=[],
@@ -89,7 +112,7 @@ async def update_team(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update team name, avatar_url, co_owner_id, or conference. Owner,
+    """Update team name, avatar_url, conference or last_words. Owner,
     co-owner, or league commissioner only -- except conference, which is
     commissioner-only (letting owners self-assign could be used to dodge a
     tough conference)."""
@@ -109,18 +132,6 @@ async def update_team(
     if update_data.avatar_url is not None:
         validate_avatar_url(update_data.avatar_url)
         team.avatar_url = update_data.avatar_url
-    if update_data.co_owner_id is not None:
-        # Co-Owner (2-Man Teams) is scoped to TWO_MAN leagues everywhere
-        # else in the app (claim_co_owner/assign_co_owner below both
-        # reject it outright for any other league_type) -- this generic
-        # PATCH was the one path that never checked league_type at all.
-        # None here means "field not provided" (Pydantic default), not
-        # "clear" -- there's no way to null out co_owner_id through this
-        # endpoint either way (that's remove_co_owner's job), so every
-        # branch that reaches here is genuinely trying to SET one.
-        if league.league_type != LeagueType.TWO_MAN:
-            raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
-        team.co_owner_id = update_data.co_owner_id
     if update_data.conference is not None:
         if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
             raise HTTPException(status_code=403, detail="Commissioner access required to change conference")
@@ -218,6 +229,7 @@ async def claim_co_owner(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    await lock_league_seats(db, league.id, team)
     # Visibility gate -- see user_can_join_league's docstring. Without
     # this, INVITE_ONLY/PRIVATE leagues were only "private" in the
     # discovery listing, not in who could actually claim a slot.
@@ -234,6 +246,7 @@ async def claim_co_owner(
         raise HTTPException(status_code=400, detail="This team already has a co-owner")
     if current_user.id == team.owner_id:
         raise HTTPException(status_code=400, detail="You already own this team")
+    await require_one_live_seat(db, league.id, current_user.id, joining=team)
 
     team.co_owner_id = current_user.id
     await db.commit()
@@ -259,6 +272,7 @@ async def claim_team(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    await lock_league_seats(db, league.id, team)
     if not await user_can_join_league(db, league, current_user):
         raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
 
@@ -297,6 +311,40 @@ async def _get_team_and_league_or_404(team_id: str, db: AsyncSession) -> tuple[T
     return team, league
 
 
+async def _revoke_league_access(db: AsyncSession, league: League, user_id: str, removed_from: Team) -> None:
+    """After a commissioner removes someone from a team, withdraw the
+    accepted invite / approved join request that let them in, so they
+    need a fresh invite (or approval) to join again. Skipped while they
+    still hold a seat on another team in the league."""
+    other_seat = await db.execute(
+        select(Team.id).where(
+            Team.league_id == league.id,
+            Team.id != removed_from.id,
+            (Team.owner_id == user_id) | (Team.co_owner_id == user_id),
+        ).limit(1)
+    )
+    if other_seat.first() is not None:
+        return
+    await db.execute(
+        update(LeagueInvite)
+        .where(
+            LeagueInvite.league_id == league.id,
+            LeagueInvite.accepted_by_user_id == user_id,
+            LeagueInvite.status == InviteStatus.ACCEPTED,
+        )
+        .values(status=InviteStatus.REVOKED)
+    )
+    await db.execute(
+        update(LeagueJoinRequest)
+        .where(
+            LeagueJoinRequest.league_id == league.id,
+            LeagueJoinRequest.requested_by_user_id == user_id,
+            LeagueJoinRequest.status == JoinRequestStatus.APPROVED,
+        )
+        .values(status=JoinRequestStatus.DENIED)
+    )
+
+
 @router.post("/{team_id}/remove-owner", response_model=TeamRead)
 @limiter.limit("30/hour")
 async def remove_owner(
@@ -316,12 +364,14 @@ async def remove_owner(
     if team.owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no owner to remove")
 
+    removed_user_id = team.owner_id
     if team.co_owner_id:
         team.owner_id = team.co_owner_id
         team.co_owner_id = None
     else:
         team.owner_id = None
         team.is_cpu = True
+    await _revoke_league_access(db, league, removed_user_id, team)
 
     await db.commit()
     await db.refresh(team)
@@ -343,7 +393,9 @@ async def remove_co_owner(
     if team.co_owner_id is None:
         raise HTTPException(status_code=400, detail="This team has no co-owner to remove")
 
+    removed_user_id = team.co_owner_id
     team.co_owner_id = None
+    await _revoke_league_access(db, league, removed_user_id, team)
     await db.commit()
     await db.refresh(team)
     return team
@@ -367,6 +419,7 @@ async def assign_owner(
     re-check it either."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if not team.is_cpu:
         raise HTTPException(status_code=400, detail="Team is already owned -- remove the current owner first")
@@ -375,7 +428,7 @@ async def assign_owner(
     if not target:
         raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
 
-    await apply_team_claim(db, team, league, target)
+    await apply_team_claim(db, team, league, target, THEIR_SEAT_TAKEN)
     await db.commit()
     await db.refresh(team)
     return team
@@ -394,6 +447,7 @@ async def assign_co_owner(
     behalf."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if league.league_type != LeagueType.TWO_MAN:
         raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
@@ -407,6 +461,7 @@ async def assign_co_owner(
         raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
     if target.id == team.owner_id:
         raise HTTPException(status_code=400, detail="That person already owns this team")
+    await require_one_live_seat(db, league.id, target.id, THEIR_SEAT_TAKEN, joining=team)
 
     team.co_owner_id = target.id
     await db.commit()
@@ -445,6 +500,9 @@ async def delete_team(
         if partner:
             partner.partner_team_id = None
 
+    # Deleting a team removes its managers just like remove-owner does.
+    for user_id in {team.owner_id, team.co_owner_id} - {None}:
+        await _revoke_league_access(db, league, user_id, team)
     await db.delete(team)
     await db.commit()
     return None
@@ -460,8 +518,9 @@ async def bulk_add_cpu_teams(
     current_user: User = Depends(get_current_user),
 ):
     """Fill a league's empty slots with CPU-controlled teams (commissioner only)."""
-    # Check league exists and get current team count
-    result = await db.execute(select(League).where(League.id == league_id))
+    # Check league exists and get current team count. Locked like
+    # create_team so the two can't both fill the last slot at once.
+    result = await db.execute(select(League).where(League.id == league_id).with_for_update())
     league = result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
@@ -471,7 +530,7 @@ async def bulk_add_cpu_teams(
     result = await db.execute(select(Team).where(Team.league_id == league_id))
     existing = result.scalars().all()
     current_count = len(existing)
-    max_teams = league.max_teams or 32
+    max_teams = league.max_teams
     available_slots = max_teams - current_count
 
     if available_slots <= 0:
