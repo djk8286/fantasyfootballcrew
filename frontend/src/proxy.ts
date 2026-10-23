@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { resolveProxyTarget } from "@/lib/proxy-target";
 
 /**
  * First-party API proxy: the browser calls same-origin /api/* on
@@ -7,15 +8,14 @@ import { NextResponse, type NextRequest } from "next/server";
  * this site (no SameSite=None / third-party-cookie / Safari ITP issues).
  *
  * Server-only env (never NEXT_PUBLIC_):
- *   API_PROXY_TARGET  backend origin (default: prod Railway, or localhost:8001 in dev)
+ *   API_PROXY_TARGET  backend origin. Unset, it's prod Railway on Vercel deploys
+ *                     and localhost:8001 everywhere else, including a local
+ *                     production build (see src/lib/proxy-target.ts).
  *   API_PROXY_SECRET  shared with backend PROXY_SHARED_SECRET; authenticates
  *                     X-FFC-Client-IP so the backend rate limiter keys on the
  *                     real visitor instead of Vercel's shared egress IP.
  */
-const DEFAULT_TARGET =
-  process.env.NODE_ENV === "production"
-    ? "https://fantasyfootballcrew-production.up.railway.app"
-    : "http://localhost:8001";
+let warnedLocal = false;
 
 function visitorIp(request: NextRequest): string | null {
   // On Vercel these are set by Vercel's edge from the TCP peer (client-sent
@@ -27,7 +27,14 @@ function visitorIp(request: NextRequest): string | null {
 }
 
 export function proxy(request: NextRequest) {
-  const target = process.env.API_PROXY_TARGET || DEFAULT_TARGET;
+  const { target, source } = resolveProxyTarget(
+    { API_PROXY_TARGET: process.env.API_PROXY_TARGET, VERCEL_ENV: process.env.VERCEL_ENV },
+    request.headers.get("host"),
+  );
+  if (source === "local" && process.env.NODE_ENV === "production" && !warnedLocal) {
+    warnedLocal = true;
+    console.warn(`[proxy] API_PROXY_TARGET is not set and this is not a Vercel deploy; sending /api to ${target}`);
+  }
   const dest = new URL(request.nextUrl.pathname + request.nextUrl.search, target);
 
   const headers = new Headers(request.headers);
