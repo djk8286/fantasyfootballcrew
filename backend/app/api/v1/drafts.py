@@ -26,6 +26,7 @@ from app.models.user import User
 from app.models.player import Player
 from app.schemas.draft import DraftCreate, DraftRead, DraftPickCreate, DraftPickRead, DraftState, MockDraftQuickstart
 from app.api.deps import (
+    league_view_or_raise,
     require_draft_league_view,
     require_league_view,
     get_current_user,
@@ -286,6 +287,9 @@ async def api_auto_pick(
     used to build the entire draft state (the full player board) just to
     find that out, which made this take 8-25 s under load."""
     draft, league = await _get_draft_and_league_or_404(draft_id, db)
+    # Before the status check, so a PRIVATE league's draft state isn't
+    # readable through this route's 400s.
+    await league_view_or_raise(league, current_user, db)
     if draft.status != DraftRunStatus.IN_PROGRESS:
         raise HTTPException(status_code=400, detail="Draft is not in progress")
     num_teams = int(await db.scalar(select(func.count(Team.id)).where(Team.league_id == draft.league_id)) or 0)

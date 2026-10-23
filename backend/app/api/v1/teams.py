@@ -11,8 +11,9 @@ from app.api.deps import (
     can_view_rosters,
     get_current_user,
     get_current_user_optional,
+    league_view_or_raise,
     require_commissioner,
-    require_league_read,
+    require_league_participant,
     require_league_view,
     require_team_league_view,
     require_team_or_league_access,
@@ -580,8 +581,7 @@ async def _team_league_rosters_visible_or_raise(team_id: str, viewer: User | Non
     league = (await db.execute(select(League).where(League.id == team.league_id))).scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
-    if not await can_view_rosters(league, viewer, db):
-        await require_league_read(league, viewer, db)  # raises 401/403
+    await league_view_or_raise(league, viewer, db)
     return team, league
 
 
@@ -660,17 +660,13 @@ async def generate_team_player_news_now(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Manual fallback -- same shape as the dashboard's own
-    top-performers/nfl-scores generate endpoints (open to any
-    authenticated user, not owner/commissioner-gated, since this
-    doesn't do anything besides read+summarize already-public data).
-    Real use is the scheduler's own once-daily automatic refresh; this
-    exists for the very first generation, or if a commissioner/manager
-    wants a fresher read before the next scheduled tick."""
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+    """Manual fallback for the scheduler's once-daily refresh: the very
+    first generation, or a fresher read before the next tick. It spends AI
+    budget, so only the league's own people may run it -- a team owner or
+    co-owner anywhere in the league, or its commissioner (403 for anyone
+    else, 401/403 first for a PRIVATE league they can't see)."""
+    team, league = await _team_league_rosters_visible_or_raise(team_id, current_user, db)
+    await require_league_participant(league, current_user, db)
     news = await generate_and_save_team_news(team, db)
     if not news:
         raise HTTPException(status_code=422, detail="This team has an empty roster -- nothing to report news about")

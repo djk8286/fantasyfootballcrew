@@ -6,7 +6,7 @@ from app.models.player import Player
 from app.models.league import League
 from app.models.team import Team
 from app.models.user import User
-from app.api.deps import can_view_rosters, get_current_user_optional, require_league_read
+from app.api.deps import get_current_user_optional, league_view_or_raise
 from app.services import espn_news_service
 from app.schemas.player import PlayerRead
 from app.services.draft_manager import build_rank_by_id, get_rank_score
@@ -133,12 +133,17 @@ def _serialize_player(p: Player, scoring_config: dict | None = None) -> dict:
     return data
 
 
-async def _get_scoring_config(league_id: str | None, db: AsyncSession) -> dict | None:
+async def _get_scoring_config(league_id: str | None, viewer: User | None, db: AsyncSession) -> dict | None:
+    """A league's scoring rules, under the same gate as
+    GET /leagues/{id}/scoring: 401/403 for a PRIVATE league the viewer
+    can't see. An unknown league_id still falls back to None."""
     if not league_id:
         return None
-    result = await db.execute(select(League).where(League.id == league_id))
-    league = result.scalar_one_or_none()
-    return (league.scoring_config or {}) if league else None
+    league = await db.get(League, league_id)
+    if league is None:
+        return None
+    await league_view_or_raise(league, viewer, db)
+    return league.scoring_config or {}
 
 
 MAX_IDS = 400
@@ -189,8 +194,7 @@ async def list_players(
         if avail_league is None:
             raise HTTPException(status_code=404, detail="League not found")
         # The free-agent pool is the inverse of the rosters: same rule.
-        if not await can_view_rosters(avail_league, viewer, db):
-            await require_league_read(avail_league, viewer, db)
+        await league_view_or_raise(avail_league, viewer, db)
         rostered = await rostered_player_ids(db, available_in_league)
         if rostered:
             query = query.where(~Player.id.in_(rostered))
@@ -212,7 +216,7 @@ async def list_players(
         ]))
         query = query.order_by(Player.search_rank.is_(None), Player.search_rank)
 
-    scoring_config = await _get_scoring_config(league_id, db)
+    scoring_config = await _get_scoring_config(league_id, viewer, db)
 
     if sort_by in SORT_VALUES:
         # Sorting happens in Python over the full filtered set, then
@@ -251,12 +255,17 @@ async def top_prospects(limit: int = 100, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{player_id}", response_model=PlayerRead)
-async def get_player(player_id: str, league_id: str = None, db: AsyncSession = Depends(get_db)):
+async def get_player(
+    player_id: str,
+    league_id: str = None,
+    db: AsyncSession = Depends(get_db),
+    viewer: User | None = Depends(get_current_user_optional),
+):
     result = await db.execute(select(Player).where(Player.id == player_id))
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    scoring_config = await _get_scoring_config(league_id, db)
+    scoring_config = await _get_scoring_config(league_id, viewer, db)
     return _serialize_player(player, scoring_config)
 
 
@@ -279,7 +288,7 @@ async def get_player_detail(
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    scoring_config = (await _get_scoring_config(league_id, db)) or DEFAULT_SCORING
+    scoring_config = (await _get_scoring_config(league_id, current_user, db)) or DEFAULT_SCORING
     data = _serialize_player(player, scoring_config)
     data["number"] = player.number
     data["scoring"] = "league" if league_id else "default"

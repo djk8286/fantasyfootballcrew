@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorStatus, leagueGate, loadProblem } from "./access-problem";
+import { errorStatus, leagueGate, loadProblem, loginHref, safeNext } from "./access-problem";
 
 describe("loadProblem", () => {
   it("asks guests to log in, per page", () => {
@@ -45,5 +45,43 @@ describe("leagueGate", () => {
     expect(leagueGate(err(404, "League not found"))).toBeNull();
     expect(leagueGate(new Error("network"))).toBeNull();
     expect(leagueGate(null)).toBeNull();
+  });
+});
+
+describe("safeNext", () => {
+  it("keeps a same-site path with its query and hash", () => {
+    expect(safeNext("/league/abc/trades?week=7&team=x#offer")).toBe("/league/abc/trades?week=7&team=x#offer");
+    expect(safeNext("/leagues/x/standings?week=3")).toBe("/leagues/x/standings?week=3");
+  });
+  it.each([
+    "//evil.com",
+    "/\\evil.com",
+    "/.//evil.com",
+    "/..//evil.com",
+    "/a/..//evil.com",
+    "/%2e//evil.com",
+    "/%2e%2e//evil.com",
+    "/./\\evil.com",
+    "/\t/evil.com",
+    "/\n/evil.com",
+    "https://evil.com",
+    "javascript:alert(1)",
+    "evil.com",
+    "",
+  ])("refuses %j", (raw) => {
+    expect(safeNext(raw)).toBe("/dashboard");
+  });
+  it("uses the given fallback for null", () => {
+    expect(safeNext(null, "/")).toBe("/");
+  });
+});
+
+describe("loginHref", () => {
+  it("sends the guest back to the same page and query", () => {
+    expect(loginHref("/draft/d1", "view=board&round=2")).toBe(`/login?next=${encodeURIComponent("/draft/d1?view=board&round=2")}`);
+    expect(loginHref("/league/l1", "")).toBe(`/login?next=${encodeURIComponent("/league/l1")}`);
+  });
+  it("never builds an off-site next", () => {
+    expect(loginHref("//evil.com", "")).toBe(`/login?next=${encodeURIComponent("/")}`);
   });
 });

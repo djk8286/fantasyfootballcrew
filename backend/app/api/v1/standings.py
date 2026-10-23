@@ -18,7 +18,7 @@ from app.services.standings_service import (
 )
 from app.services.guillotine_service import process_league_guillotine
 from app.services.nfl_schedule_service import game_teams, get_week_games
-from app.api.deps import can_view_lineups, can_view_rosters, get_current_user, get_current_user_optional, require_commissioner, require_league_read, require_league_view
+from app.api.deps import can_view_lineups, get_current_user, get_current_user_optional, require_commissioner, require_league_view
 
 router = APIRouter(prefix="/leagues/{league_id}/standings", tags=["standings"])
 
@@ -91,8 +91,6 @@ async def get_weekly_scores(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
-    if not await can_view_rosters(league, viewer, db):
-        await require_league_read(league, viewer, db)  # raises 401/403
     show_lineups = await can_view_lineups(league, viewer, db)
 
     # Fetch weekly scores

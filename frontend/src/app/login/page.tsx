@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authApi, friendlyErrorMessage, setSession } from "@/lib/api-client";
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
+import { safeNext } from "@/lib/access-problem";
 
 function LoginForm() {
   const router = useRouter();
@@ -18,8 +19,7 @@ function LoginForm() {
   // other than /dashboard after signing in. Falls back to /dashboard,
   // same as before this existed.
   // Only same-site paths -- never bounce to an external URL after login.
-  const rawNext = searchParams.get("next") || "";
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/dashboard";
+  const next = safeNext(searchParams.get("next"));
   // Set by the invite-accept landing page so a visitor doesn't have to
   // retype the address their invite was sent to.
   const prefillEmail = searchParams.get("email") || "";

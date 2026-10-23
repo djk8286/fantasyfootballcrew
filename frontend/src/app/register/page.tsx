@@ -9,6 +9,7 @@ import { authApi, friendlyErrorMessage, setSession } from "@/lib/api-client";
 // backend/app/schemas/user.py.
 const MIN_PASSWORD_LENGTH = 8;
 import RedirectIfLoggedIn from "@/components/RedirectIfLoggedIn";
+import { safeNext } from "@/lib/access-problem";
 
 function RegisterForm() {
   const router = useRouter();
@@ -16,8 +17,7 @@ function RegisterForm() {
   // See login/page.tsx's identical `next` handling -- set by the
   // invite-accept landing page when a logged-out visitor needs to land
   // back there after creating an account, instead of always /dashboard.
-  const rawNext = searchParams.get("next") || "";
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/dashboard";
+  const next = safeNext(searchParams.get("next"));
   // Set by the invite-accept landing page so a visitor doesn't have to
   // retype the address their invite was sent to.
   const prefillEmail = searchParams.get("email") || "";

@@ -6,11 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     can_view_lineups,
-    can_view_rosters,
     get_current_user,
     get_current_user_optional,
+    league_view_or_raise,
     require_commissioner,
-    require_league_read,
 )
 from app.api.v1.lineups import (
     _current_lineup,
@@ -59,8 +58,7 @@ async def get_team_roster(
     get the roster without lineup data: slots, issues, has_lineup_set are
     null, and each row's slot and is_starter are null."""
     team, league = await _get_team_league_or_404(team_id, db)
-    if not await can_view_rosters(league, viewer, db):
-        await require_league_read(league, viewer, db)  # raises 401/403
+    await league_view_or_raise(league, viewer, db)
     show_lineup = await can_view_lineups(league, viewer, db)
     teams = (await db.execute(select(Team).where(Team.league_id == league.id))).scalars().all()
     roster = await _resolve_roster(team, db)
@@ -147,8 +145,7 @@ async def get_league_home(
     league = (await db.execute(select(League).where(League.id == league_id))).scalar_one_or_none()
     if league is None:
         raise HTTPException(status_code=404, detail="League not found")
-    if not await can_view_rosters(league, viewer, db):
-        await require_league_read(league, viewer, db)  # raises 401/403
+    await league_view_or_raise(league, viewer, db)
     return await league_home(league, week, year, db, viewer.id if viewer else None,
                              show_projections=await can_view_lineups(league, viewer, db))
 
