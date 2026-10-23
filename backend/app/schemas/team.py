@@ -15,9 +15,13 @@ class TeamCreate(BaseModel):
 
 
 class TeamUpdate(BaseModel):
+    # No co_owner_id: co-owners change only through claim-co-owner and the
+    # commissioner's assign-co-owner / remove-co-owner, which apply the
+    # league's 2-Man and join rules. Unknown fields get a 422.
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = None
     avatar_url: Optional[str] = None
-    co_owner_id: Optional[str] = None
     conference: Optional[str] = None
     # Guillotine (Phase 4) -- only settable once the team is actually
     # eliminated, enforced in update_team, not here.
