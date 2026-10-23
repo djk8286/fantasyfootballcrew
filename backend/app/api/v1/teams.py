@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.team import Team
@@ -56,19 +56,32 @@ async def create_team(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    league_result = await db.execute(select(League).where(League.id == team_data.league_id))
+    # Row lock on the league (no-op on SQLite) serializes concurrent
+    # creates/bulk-adds in the same league, so the max_teams count below
+    # can't be raced past.
+    league_result = await db.execute(
+        select(League).where(League.id == team_data.league_id).with_for_update()
+    )
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    # Same join rules as claim_team/claim_co_owner: OPEN leagues are open
+    # to anyone; INVITE_ONLY/PRIVATE need the commissioner role, an
+    # accepted invite or an approved join request.
+    if not await user_can_join_league(db, league, current_user):
+        raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
 
-    if team_data.co_owner_id and league.league_type != LeagueType.TWO_MAN:
-        raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
+    team_count = await db.scalar(select(func.count(Team.id)).where(Team.league_id == league.id))
+    if team_count >= (league.max_teams or 32):
+        raise HTTPException(status_code=400, detail="League is full")
 
     validate_avatar_url(team_data.avatar_url)
+    # No co_owner_id here (TeamCreate forbids it): a co-owner joins through
+    # claim_co_owner or the commissioner's assign_co_owner, both of which
+    # apply the league's 2-Man and join rules.
     team = Team(
         name=team_data.name,
         owner_id=current_user.id,
-        co_owner_id=team_data.co_owner_id,
         league_id=team_data.league_id,
         avatar_url=team_data.avatar_url,
         roster=[],
@@ -460,8 +473,9 @@ async def bulk_add_cpu_teams(
     current_user: User = Depends(get_current_user),
 ):
     """Fill a league's empty slots with CPU-controlled teams (commissioner only)."""
-    # Check league exists and get current team count
-    result = await db.execute(select(League).where(League.id == league_id))
+    # Check league exists and get current team count. Locked like
+    # create_team so the two can't both fill the last slot at once.
+    result = await db.execute(select(League).where(League.id == league_id).with_for_update())
     league = result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")

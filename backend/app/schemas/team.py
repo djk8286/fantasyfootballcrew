@@ -1,12 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from typing import Optional, List
 
 
 class TeamCreate(BaseModel):
+    # Unknown fields (including co_owner_id) are rejected with a 422 rather
+    # than silently ignored. Co-owners are added after creation through
+    # claim-co-owner or the commissioner's assign-co-owner.
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     league_id: str
-    co_owner_id: Optional[str] = None
     avatar_url: Optional[str] = None
 
 
