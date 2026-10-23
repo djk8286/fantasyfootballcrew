@@ -42,7 +42,7 @@ class PlayerAlreadyRostered(ValueError):
 
 async def lock_league_rosters(db: AsyncSession, league_id: str) -> None:
     """Row-lock the league for the rest of this transaction (no-op on SQLite)."""
-    await db.execute(select(League.id).where(League.id == league_id).with_for_update())
+    await db.execute(select(League.id).where(League.id == league_id).with_for_update(key_share=True))
 
 
 async def league_teams_fresh(db: AsyncSession, league_id: str) -> list[Team]:

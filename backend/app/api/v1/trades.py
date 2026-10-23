@@ -33,6 +33,18 @@ def _refuse_eliminated(*teams: Team) -> None:
             raise HTTPException(status_code=400, detail=f"{team.name} has been eliminated and can no longer trade")
 
 
+NEEDS_INDEPENDENT_APPROVER = "needs_independent_approver"
+
+
+def _mark_independent_approver(details: dict, league: League, proposer: Team, target: Team) -> None:
+    """Record on the trade that a commissioner seated on neither team exists.
+    Once set it stays set, so commissioner review keeps requiring someone
+    outside the trade even if the commissioner list changes later."""
+    commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
+    if commissioners - _managers(proposer) - _managers(target):
+        details[NEEDS_INDEPENDENT_APPROVER] = True
+
+
 async def _notify_commissioners_to_review(
     db: AsyncSession, league: League, proposer: Team, target: Team, actor_id: str,
 ) -> set[str]:
@@ -96,6 +108,7 @@ async def propose_trade(
         "offered_player_ids": data.offered_player_ids,
         "requested_player_ids": data.requested_player_ids,
     }
+    _mark_independent_approver(details, league, proposing_team, target_team)
     trade_status = TransactionStatus.PENDING
     # CPU teams answer immediately (they used to leave offers pending
     # forever). Declined -> closed now; accepted -> normal commissioner review.
@@ -231,6 +244,8 @@ async def respond_to_trade(
 
     accepted = data.action == "accept"
     new_details = {**details, "recipient_response": "accepted" if accepted else "declined"}
+    if accepted:
+        _mark_independent_approver(new_details, league, proposer, target)
     trades_link = f"/leagues/{league_id}/trades"
     if accepted:
         await write_pending_trade(db, trade, unanswered=True, details=new_details)
