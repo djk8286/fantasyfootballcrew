@@ -482,9 +482,12 @@ function FinaleCard({ s }: { s: GuillotineState }) {
 
 // ─── Champion ───────────────────────────────────────────────
 
-function ChampionBanner({ s, finaleWeeks }: { s: GuillotineState; finaleWeeks: number[] }) {
+function ChampionBanner({ s }: { s: GuillotineState }) {
+  // The backend sends the champion first (guillotine_placement.py).
   const [c] = s.finale!.finalists;
+  const finaleWeeks = s.finale!.weeks;
   const lastWeek = finaleWeeks[finaleWeeks.length - 1] ?? s.week;
+  const wonOutright = c.series.wins > c.series.losses;
   const range = finaleWeeks.length ? `${finaleWeeks[0]}–${lastWeek}` : `${lastWeek}`;
   const stats: [string, string][] = [
     ["SERIES", seriesText(c.series)],
@@ -521,7 +524,9 @@ function ChampionBanner({ s, finaleWeeks }: { s: GuillotineState; finaleWeeks: n
                 </h2>
                 <div className="font-ffc-ui text-xs text-ffc-text-muted min-[960px]:text-sm">
                   <span className="min-[960px]:hidden">1st of {s.totalTeams}</span>
-                  <span className="hidden min-[960px]:inline">Won the finale series {seriesText(c.series)}</span>
+                  <span className="hidden min-[960px]:inline">
+                    {wonOutright ? `Won the finale series ${seriesText(c.series)}` : `Series ${seriesText(c.series)}, won on the tie-break`}
+                  </span>
                 </div>
               </div>
             </div>
@@ -605,15 +610,15 @@ function Footer({ desk, phone }: { desk: string; phone: string[] }) {
   );
 }
 
-export function GuillotineBody({ s, finaleWeeks }: { s: GuillotineState; finaleWeeks: number[] }) {
+export function GuillotineBody({ s }: { s: GuillotineState }) {
   if (s.phase === "champion" && s.finale) {
     return (
       <div className="mx-auto max-w-[1280px] px-4 pb-10 pt-6 min-[600px]:px-10">
-        <ChampionBanner s={s} finaleWeeks={finaleWeeks} />
+        <ChampionBanner s={s} />
         <RunnerUp s={s} />
         <Eliminated s={s} />
         <Footer
-          desk="Season final. Places come from the final standings: champion and runner-up by finale series, then the order teams were cut."
+          desk="Season final. The finale series decides 1st and 2nd. A level series goes to finale points, then season points. Everyone else places by when they were cut, latest cut highest."
           phone={["Season final. Places come from the final standings."]}
         />
       </div>
@@ -625,8 +630,8 @@ export function GuillotineBody({ s, finaleWeeks }: { s: GuillotineState; finaleW
         <FinaleCard s={s} />
         <Eliminated s={s} />
         <Footer
-          desk="Cuts stop at 2 teams. The finalists play each other every week until the season ends; the series record (then finale points) decides the champion."
-          phone={["Cuts stop at 2 teams. The finalists play every week; the series decides the title."]}
+          desk="Cuts stop at 2 teams. The finalists play each other every week until the season ends. The better series record wins the title. A level series goes to finale points, then season points."
+          phone={["Cuts stop at 2 teams. The finalists play every week.", "Series record decides the title, then finale points, then season points."]}
         />
       </div>
     );

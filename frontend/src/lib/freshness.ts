@@ -11,6 +11,10 @@ export interface SourceStatus {
 
 export interface SyncStatus {
   generated_at: string;
+  /** Sleeper's season_type: "pre" | "regular" | "post" | "off", or null
+   * when the backend couldn't read it. Syncs only pull stats in the
+   * regular season. */
+  season_type?: string | null;
   sources: Partial<Record<SyncSource, SourceStatus>>;
 }
 
@@ -25,6 +29,9 @@ export interface ChipInput {
   syncing?: boolean;
   /** The user's last refresh failed in the browser. */
   clientFailed?: boolean;
+  /** When the page last loaded its data (ms). The page can't be newer
+   * than that, so the age is taken from the older of this and the sync. */
+  dataAt?: number;
   /** Clock skew between server and browser, in ms (server minus client). */
   skewMs?: number;
   locale?: string;
@@ -87,11 +94,22 @@ export function chipState(input: ChipInput): ChipState | null {
   const known = entries.filter((e) => e.st?.last_success_at);
   const sourceLabel = sources.map((s) => SOURCE_NAME[s]).join(" + ");
 
+  // Outside the regular season the syncs skip their work but still log
+  // a success, so a "Synced 2m ago" chip would be wrong. Hide it.
+  if (status?.season_type && status.season_type !== "regular") return null;
+
   // The oldest source decides the age: the page is only as fresh as its slowest feed.
-  const oldest = known.reduce<Date | null>((m, e) => {
+  let oldest = known.reduce<Date | null>((m, e) => {
     const d = new Date(e.st!.last_success_at!);
     return m == null || d < m ? d : m;
   }, null);
+  // A sync after the page loaded isn't on screen yet. The data shown is
+  // at least as old as the load. dataAt is browser time, so shift it by
+  // the skew to compare with server times.
+  if (oldest && input.dataAt != null) {
+    const loaded = new Date(input.dataAt + (input.skewMs ?? 0));
+    if (loaded < oldest) oldest = loaded;
+  }
 
   const failedSources = entries.filter((e) => e.st?.last_attempt_ok === false).map((e) => e.source);
   const failed = input.clientFailed || failedSources.length > 0;
@@ -124,7 +142,7 @@ export function chipState(input: ChipInput): ChipState | null {
       text: who,
       suffix: when ? `showing ${when} data` : "",
       ariaLabel: when ? `${who}. Showing data from ${when}` : `${who}. No data synced yet`,
-      action: { label: "Retry", ariaLabel: `Retry sync with ${retrySource}` },
+      action: { label: "Refresh", ariaLabel: `Refresh data from ${retrySource}` },
       tickMs,
     };
   }

@@ -1,7 +1,9 @@
 // Guillotine standings state, derived from data the API already returns.
-// Mirrors backend guillotine_service.process_league_guillotine: the lowest
-// weekly score is cut, ties go to fewer season points, then the
-// earliest-created team. Cuts stop at 2 alive teams.
+// The live cut line mirrors backend guillotine_service.process_league_guillotine:
+// the lowest weekly score is cut, ties go to fewer season points, then the
+// earliest-created team. Cuts stop at 2 alive teams. The finale series,
+// champion and final places come from the backend summary
+// (guillotine_placement.py) and are drawn as sent.
 
 export type GuillotinePhase = "prekickoff" | "live" | "pending" | "finale" | "champion";
 export type CutLineVariant = "neutral" | "preview" | "live" | "pending" | null;
@@ -66,8 +68,11 @@ export interface Finalist {
 
 export interface FinaleState {
   week: number;
+  /** Champion first once decided, otherwise the series leader first. */
   finalists: [Finalist, Finalist];
   seriesPlayed: number;
+  /** Counted finale weeks, oldest first, from the backend. */
+  weeks: number[];
   seriesTied: boolean;
   /** "Crew Destroyers leads the series 3–1 · +26.5 finale pts" */
   leadLine: string;
@@ -101,10 +106,30 @@ export interface GuillotineInput {
   games: GGame[] | null;
   /** Last week's scores, to catch a cut the rollover held back. */
   prevScores?: GScore[];
-  /** Finale weeks already played, oldest first. */
-  finaleWeeks?: GMatchup[][];
-  /** The regular season has rolled over: the finale is decided. */
-  seasonOver?: boolean;
+  /** The backend's placement (GET /standings "guillotine"). It owns the
+   * finale series, the champion and final places. Required once the
+   * finale is set. */
+  summary?: GSummary | null;
+}
+
+export interface GSummaryFinalist {
+  team_id: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  points: number;
+}
+
+/** backend guillotine_placement.py */
+export interface GSummary {
+  phase: "elimination" | "finale" | "final";
+  champion_team_id: string | null;
+  runner_up_team_id: string | null;
+  /** Leader first: series W-L, then finale points, then season points. */
+  finalists: GSummaryFinalist[];
+  /** Counted finale weeks, oldest first. */
+  finale_weeks: number[];
+  places: Record<string, number | null>;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -136,54 +161,28 @@ export function compareLive(a: { score: number; team: GTeam }, b: { score: numbe
   );
 }
 
-export function finaleSeries(aId: string, bId: string, weeks: GMatchup[][]): { a: SeriesRecord; b: SeriesRecord; played: number } {
-  const a: SeriesRecord = { wins: 0, losses: 0, ties: 0, points: 0 };
-  const b: SeriesRecord = { wins: 0, losses: 0, ties: 0, points: 0 };
-  let played = 0;
-  for (const matchups of weeks) {
-    const m = matchups.find(
-      (x) => (x.home_team_id === aId && x.away_team_id === bId) || (x.home_team_id === bId && x.away_team_id === aId),
-    );
-    if (!m) continue;
-    played += 1;
-    const aPts = m.home_team_id === aId ? m.home_score : m.away_score;
-    const bPts = m.home_team_id === aId ? m.away_score : m.home_score;
-    a.points += aPts;
-    b.points += bPts;
-    if (aPts > bPts) { a.wins += 1; b.losses += 1; }
-    else if (bPts > aPts) { b.wins += 1; a.losses += 1; }
-    else { a.ties += 1; b.ties += 1; }
-  }
-  a.points = round1(a.points);
-  b.points = round1(b.points);
-  return { a, b, played };
-}
-
 export function seriesText(r: SeriesRecord): string {
   return r.ties ? `${r.wins}${DASH}${r.losses}${DASH}${r.ties}` : `${r.wins}${DASH}${r.losses}`;
 }
 
-/** Better W-L first, then more finale points. Season points keep the
- * order stable before the first finale week is played. */
-function seriesOrder(x: Finalist, y: Finalist): number {
-  return (
-    y.series.wins - y.series.losses - (x.series.wins - x.series.losses) ||
-    y.series.points - x.series.points ||
-    y.team.points_for - x.team.points_for
-  );
-}
-
-function buildFinale(week: number, alive: GTeam[], byId: Map<string, GScore>, weeks: GMatchup[][], started: boolean): FinaleState {
-  const [t1, t2] = alive;
-  const { a, b, played } = finaleSeries(t1.id, t2.id, weeks);
-  const mk = (team: GTeam, series: SeriesRecord): Finalist => ({
-    team,
-    score: started ? byId.get(team.id)?.total_score ?? 0 : null,
-    projected: byId.get(team.id)?.projected_score ?? null,
-    series,
+function buildFinale(week: number, alive: GTeam[], byId: Map<string, GScore>, summary: GSummary, started: boolean): FinaleState {
+  const teamById = new Map(alive.map((t) => [t.id, t]));
+  const rows = summary.finalists;
+  if (rows.length !== 2 || !rows.every((r) => teamById.has(r.team_id))) {
+    throw new Error("finale summary does not match the alive teams");
+  }
+  const played = summary.finale_weeks.length;
+  // The backend sends the leader first, so the order is used as is.
+  const [f1, f2] = rows.map((r): Finalist => ({
+    team: teamById.get(r.team_id)!,
+    score: started ? byId.get(r.team_id)?.total_score ?? 0 : null,
+    projected: byId.get(r.team_id)?.projected_score ?? null,
+    series: { wins: r.wins, losses: r.losses, ties: r.ties, points: round1(r.points) },
     leading: false,
-  });
-  const [f1, f2] = [mk(t1, a), mk(t2, b)].sort(seriesOrder);
+  }));
+  if (summary.champion_team_id && summary.champion_team_id !== f1.team.id) {
+    throw new Error("finale summary lists the champion second");
+  }
 
   const seriesLevel = f1.series.wins - f1.series.losses === f2.series.wins - f2.series.losses;
   const pointsGap = round1(f1.series.points - f2.series.points);
@@ -202,6 +201,10 @@ function buildFinale(week: number, alive: GTeam[], byId: Map<string, GScore>, we
       leadLine = `${f1.team.name} ahead on finale points by ${fmt1(pointsGap)} (tie-break)`;
       leadLineShort = `${f1.team.name} ahead on finale pts by ${fmt1(pointsGap)}`;
       tiedTip = `Series tied · tie-break: finale points · ${f1.team.name} +${fmt1(pointsGap)}`;
+    } else if (f1.team.points_for !== f2.team.points_for) {
+      leadLine = `Finale points level. ${f1.team.name} ahead on season points (tie-break)`;
+      leadLineShort = `${f1.team.name} ahead on season pts`;
+      tiedTip = `Series tied · finale points even · tie-break: season points · ${f1.team.name}`;
     } else {
       leadLine = leadLineShort = "Series and finale points level";
       tiedTip = "Series tied · finale points even";
@@ -214,7 +217,7 @@ function buildFinale(week: number, alive: GTeam[], byId: Map<string, GScore>, we
     leadLine = leadLineShort = "First finale week. The series starts when games do.";
   }
 
-  return { week, finalists: [f1, f2], seriesPlayed: played, seriesTied: tiedLabel != null, leadLine, leadLineShort, tiedLabel, tiedTip };
+  return { week, finalists: [f1, f2], seriesPlayed: played, weeks: summary.finale_weeks, seriesTied: tiedLabel != null, leadLine, leadLineShort, tiedLabel, tiedTip };
 }
 
 export function deriveGuillotine(input: GuillotineInput): GuillotineState {
@@ -240,8 +243,9 @@ export function deriveGuillotine(input: GuillotineInput): GuillotineState {
     prev.length > 0 &&
     aliveTeams.some((t) => prev.some((s) => s.team_id === t.id));
 
+  const summary = input.summary ?? null;
   if (aliveTeams.length <= 2 && teams.length > 2) {
-    phase = input.seasonOver && aliveTeams.length === 2 ? "champion" : "finale";
+    phase = summary?.champion_team_id ? "champion" : "finale";
   } else if (allFinal && lastCut < week) {
     phase = "pending";
   } else if (prevHeld) {
@@ -258,7 +262,11 @@ export function deriveGuillotine(input: GuillotineInput): GuillotineState {
   const out: OutRow[] = [...cutTeams]
     .sort((a, b) => (b.eliminated_week ?? 0) - (a.eliminated_week ?? 0) || compareLive(
       { score: 0, team: a }, { score: 0, team: b }))
-    .map((team, i) => ({ team, cutWeek: team.eliminated_week ?? 0, place: aliveTeams.length + i + 1 }));
+    .map((team, i) => ({
+      team,
+      cutWeek: team.eliminated_week ?? 0,
+      place: summary?.places[team.id] ?? aliveTeams.length + i + 1,
+    }));
 
   const base = {
     week,
@@ -269,14 +277,15 @@ export function deriveGuillotine(input: GuillotineInput): GuillotineState {
   };
 
   if (phase === "finale" || phase === "champion") {
+    if (aliveTeams.length === 2 && !summary) throw new Error("finale needs the backend summary");
     return {
       ...base,
       phase,
       cutLine: null,
       alive: [],
       block: null,
-      finale: aliveTeams.length === 2
-        ? buildFinale(week, aliveTeams, byId, input.finaleWeeks ?? [], phase === "finale" && anyStarted)
+      finale: aliveTeams.length === 2 && summary
+        ? buildFinale(week, aliveTeams, byId, summary, phase === "finale" && anyStarted)
         : null,
     };
   }
@@ -347,12 +356,3 @@ export function finalistLabel(f: Finalist, phase: GuillotinePhase): string {
   const live = f.score == null || phase === "champion" ? "" : `; this week ${fmt1(f.score)} live`;
   return `${f.team.name}, ${spokenSeries(f.series)}, ${fmt1(f.series.points)} finale points${f.leading ? ", leading the series" : ""}${live}`;
 }
-
-/** Weeks the finale has run: from the week after the last cut through `lastWeek`. */
-export function finaleWeekRange(teams: GTeam[], lastWeek: number): number[] {
-  const lastCut = teams.reduce((m, t) => Math.max(m, t.eliminated_week ?? 0), 0);
-  const out: number[] = [];
-  for (let w = lastCut + 1; w <= lastWeek; w++) out.push(w);
-  return out;
-}
-

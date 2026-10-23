@@ -23,12 +23,15 @@ const ACTION_CLASS: Record<ChipKind, string> = {
 
 /**
  * Data-freshness chip. Reads the backend's last-sync timestamps, ticks the
- * age locally, and runs `onRefresh` from its Refresh/Retry button.
+ * age locally, and runs `onRefresh` from its Refresh button. The age is
+ * the older of the last sync and the page's own data load, so a page left
+ * open doesn't claim syncs it never loaded. Polling pauses on hidden tabs.
  */
 export default function FreshnessChip({
   sources,
   onRefresh,
   live = false,
+  dataAt,
   className = "",
 }: {
   sources: SyncSource[];
@@ -36,30 +39,62 @@ export default function FreshnessChip({
   onRefresh?: () => Promise<unknown>;
   /** Games are in progress: the fresh dot pulses. */
   live?: boolean;
+  /** When the page last loaded its data (Date.now() ms). Defaults to when
+   * the chip mounted, then to its last successful refresh. */
+  dataAt?: number;
   className?: string;
 }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [skewMs, setSkewMs] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
-  const [clientFailed, setClientFailed] = useState(false);
+  // A failed status poll clears on the next good poll. A failed page
+  // reload stays until a reload works.
+  const [pollFailed, setPollFailed] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const inFlight = useRef(false);
 
   const loadStatus = useCallback(async () => {
-    const s = await nflApi.getSyncStatus();
-    setStatus(s);
-    setSkewMs(new Date(s.generated_at).getTime() - Date.now());
-    setNow(Date.now());
-    return s;
+    try {
+      const s = await nflApi.getSyncStatus();
+      setStatus(s);
+      setSkewMs(new Date(s.generated_at).getTime() - Date.now());
+      setNow(Date.now());
+      setPollFailed(false);
+      return s;
+    } catch (e) {
+      setPollFailed(true);
+      throw e;
+    }
   }, []);
 
   useEffect(() => {
-    loadStatus().catch(() => setClientFailed(true));
-    const id = setInterval(() => loadStatus().catch(() => setClientFailed(true)), POLL_MS);
-    return () => clearInterval(id);
+    let id: ReturnType<typeof setInterval> | null = null;
+    const poll = () => { loadStatus().catch(() => {}); };
+    const start = () => {
+      if (id != null) return;
+      poll();
+      id = setInterval(poll, POLL_MS);
+    };
+    const stop = () => {
+      if (id != null) clearInterval(id);
+      id = null;
+    };
+    const onVisibility = () => (document.hidden ? stop() : start());
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [loadStatus]);
 
-  const state = chipState({ now, status, sources, syncing, clientFailed, skewMs });
+  const state = chipState({
+    now, status, sources, syncing, skewMs,
+    clientFailed: pollFailed || refreshFailed,
+    dataAt: dataAt ?? loadedAt,
+  });
 
   useEffect(() => {
     if (!state) return;
@@ -78,10 +113,14 @@ export default function FreshnessChip({
     inFlight.current = true;
     const timer = setTimeout(() => setSyncing(true), SYNCING_AFTER_MS);
     try {
-      await Promise.all([onRefresh?.(), loadStatus()]);
-      setClientFailed(false);
-    } catch {
-      setClientFailed(true);
+      const startedAt = Date.now();
+      const [page] = await Promise.allSettled([onRefresh?.(), loadStatus()]);
+      if (page.status === "fulfilled") {
+        setRefreshFailed(false);
+        setLoadedAt(startedAt);
+      } else {
+        setRefreshFailed(true);
+      }
     } finally {
       clearTimeout(timer);
       setSyncing(false);

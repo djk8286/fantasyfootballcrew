@@ -10,7 +10,7 @@ from app.models.nfl_game import NFLGame
 from app.models.user import User
 from app.services.standings_service import (
     calculate_week,
-    get_standings,
+    get_standings_detail,
     get_combined_standings,
     get_weekly_matchups,
     get_season_schedule,
@@ -40,12 +40,15 @@ async def get_league_standings(
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
 
-    standings = await get_standings(league_id, db)
+    standings, guillotine = await get_standings_detail(league_id, db)
     return {
         "league_id": league_id,
         "league_name": league.name,
         "league_type": league.league_type.value,
         "standings": standings,
+        # GUILLOTINE only: finale series, champion and final places, so the
+        # standings skin draws what the backend ranks. None otherwise.
+        "guillotine": guillotine,
     }
 
 

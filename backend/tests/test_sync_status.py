@@ -3,8 +3,21 @@ freshness chip. Public, timestamps only."""
 from datetime import datetime, timedelta, timezone
 import pytest
 
+from app.api.v1 import nfl as nfl_module
 from app.models.job_run import JobRun
 from app.models.nfl_game import NFLGame
+
+
+@pytest.fixture(autouse=True)
+def _fresh_status(monkeypatch):
+    nfl_module.reset_sync_status_cache()
+
+    async def _state():
+        return {"season": 2026, "week": 7, "season_type": "regular"}
+
+    monkeypatch.setattr(nfl_module, "current_nfl_week", _state)
+    yield
+    nfl_module.reset_sync_status_cache()
 
 
 def _run(job, finished, ok=True, error=None):
@@ -64,3 +77,31 @@ async def test_newer_game_row_counts_as_an_espn_sync(client, db_session_factory)
     espn = (await client.get("/nfl/sync-status")).json()["sources"]["espn"]
     assert _at(espn["last_success_at"]) == now - timedelta(minutes=1)
     assert _at(espn["last_attempt_at"]) == now - timedelta(hours=3)
+
+
+@pytest.mark.asyncio
+async def test_reports_season_type_and_caches_for_30s(client, db_session_factory):
+    first = (await client.get("/nfl/sync-status")).json()
+    assert first["season_type"] == "regular"
+    assert first["sources"]["sleeper"]["last_success_at"] is None
+
+    async with db_session_factory() as db:
+        db.add(_run("sync_stats", datetime.now(timezone.utc)))
+        await db.commit()
+    # Served from the cache: the new run doesn't show up yet.
+    assert (await client.get("/nfl/sync-status")).json() == first
+
+    nfl_module.reset_sync_status_cache()
+    after = (await client.get("/nfl/sync-status")).json()
+    assert after["sources"]["sleeper"]["last_success_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_season_type_is_null_when_sleeper_state_fails(client, monkeypatch):
+    async def _fail():
+        raise RuntimeError("sleeper down")
+
+    monkeypatch.setattr(nfl_module, "current_nfl_week", _fail)
+    body = (await client.get("/nfl/sync-status")).json()
+    assert body["season_type"] is None
+    assert set(body["sources"]) == {"sleeper", "espn"}

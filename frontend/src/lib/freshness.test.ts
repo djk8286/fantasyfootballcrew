@@ -57,12 +57,12 @@ describe("chipState", () => {
     expect(chipState({ ...base, sources: ["sleeper"], status: status({ last_success_at: ago(ms) }) })!.text).toBe(text);
   });
 
-  it("fails with the clock time of the data on screen and a Retry", () => {
+  it("fails with the clock time of the data on screen and a Refresh", () => {
     const c = chipState({ ...base, sources: ["sleeper"], status: status({ last_success_at: ago(3 * M), last_attempt_ok: false }) })!;
     expect(c).toMatchObject({
       kind: "failed", text: "Sync failed", suffix: "showing 7:39 PM data",
       ariaLabel: "Sync failed. Showing data from 7:39 PM",
-      action: { label: "Retry", ariaLabel: "Retry sync with Sleeper" },
+      action: { label: "Refresh", ariaLabel: "Refresh data from Sleeper" },
     });
   });
 
@@ -72,7 +72,7 @@ describe("chipState", () => {
       status: status({ last_success_at: ago(5 * S), last_attempt_ok: true }, { last_success_at: ago(3 * M), last_attempt_ok: false }),
     })!;
     expect(c.text).toBe("ESPN sync failed");
-    expect(c.action?.ariaLabel).toBe("Retry sync with ESPN");
+    expect(c.action?.ariaLabel).toBe("Refresh data from ESPN");
   });
 
   it("ages a mixed view by its oldest source", () => {
@@ -96,5 +96,25 @@ describe("chipState", () => {
   it("renders nothing before the first sync", () => {
     expect(chipState({ ...base, sources: ["sleeper"], status: status({}) })).toBeNull();
     expect(chipState({ ...base, sources: ["sleeper"], status: null })).toBeNull();
+  });
+
+  it("ages by the page load when a newer sync hasn't been loaded", () => {
+    const st = status({ last_success_at: ago(1 * M), last_attempt_ok: true });
+    const loaded = chipState({ ...base, sources: ["sleeper"], status: st, dataAt: NOW - 14 * M })!;
+    expect([loaded.kind, loaded.text]).toEqual(["stale", "Last synced 14m ago"]);
+    const afterLoad = chipState({ ...base, sources: ["sleeper"], status: st, dataAt: NOW - 5 * S })!;
+    expect(afterLoad.text).toBe("Synced 1m ago");
+    // dataAt is browser time; a server clock 2m ahead shifts it to match.
+    const skewed = chipState({ ...base, now: NOW - 2 * M, skewMs: 2 * M, sources: ["sleeper"], status: st, dataAt: NOW - 2 * M - 30 * S })!;
+    expect(skewed.text).toBe("Synced 1m ago");
+  });
+
+  it("hides outside the regular season", () => {
+    const st = { ...status({ last_success_at: ago(1 * M), last_attempt_ok: false }) };
+    for (const season_type of ["pre", "post", "off"]) {
+      expect(chipState({ ...base, sources: ["sleeper"], status: { ...st, season_type } })).toBeNull();
+    }
+    expect(chipState({ ...base, sources: ["sleeper"], status: { ...st, season_type: "regular" } })!.kind).toBe("failed");
+    expect(chipState({ ...base, sources: ["sleeper"], status: { ...st, season_type: null } })!.kind).toBe("failed");
   });
 });

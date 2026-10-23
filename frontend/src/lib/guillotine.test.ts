@@ -2,13 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   aliveRowLabel,
   deriveGuillotine,
-  finaleSeries,
-  finaleWeekRange,
   finalistLabel,
-  ordinal,
-  outRowLabel,
   type GGame,
   type GScore,
+  type GSummary,
   type GTeam,
 } from "./guillotine";
 
@@ -21,6 +18,17 @@ const pre: GGame = { status_state: "pre", completed: false };
 const live: GGame = { status_state: "in", completed: false };
 const final: GGame = { status_state: "post", completed: true };
 const postponed: GGame = { status_state: "post", completed: false };
+
+type Row = [id: string, wins: number, losses: number, ties: number, points: number];
+/** A backend summary: finalists leader first, as guillotine_placement.py sends them. */
+const summary = (rows: Row[], weeks: number[], champion: string | null = null, places: Record<string, number | null> = {}): GSummary => ({
+  phase: champion ? "final" : "finale",
+  champion_team_id: champion,
+  runner_up_team_id: champion ? rows.find((r) => r[0] !== champion)![0] : null,
+  finalists: rows.map(([team_id, wins, losses, ties, points]) => ({ team_id, wins, losses, ties, points })),
+  finale_weeks: weeks,
+  places,
+});
 
 const midTeams = [team("a", 900), team("b", 850), team("c", 800), team("d", 700, 2), team("e", 400, 1)];
 
@@ -57,100 +65,49 @@ describe("deriveGuillotine phase", () => {
   });
 });
 
-describe("deriveGuillotine live ordering", () => {
-  it("puts the lowest live score on the block with the margin behind the next team", () => {
-    const s = deriveGuillotine({
-      week: 3, teams: midTeams, games: [live],
-      scores: [score("a", 82.7), score("b", 128.4), score("c", 96.1)],
-    });
-    expect(s.alive.map((r) => [r.team.id, r.rank, r.onBlock, r.clearBy])).toEqual([
-      ["b", 1, false, 45.7],
-      ["c", 2, false, 13.4],
-      ["a", 3, true, null],
-    ]);
-    expect(s.block).toMatchObject({ score: 82.7, behindBy: 13.4, behindName: "C" });
-    expect(s.cutLine).toBe("live");
-  });
-
-  it("breaks a tie for lowest like the backend: fewer season points, then earliest team", () => {
-    const teams = [
-      team("old", 500, null, "2026-07-01T00:00:00Z"),
-      team("new", 500, null, "2026-07-05T00:00:00Z"),
-      team("rich", 900),
-    ];
-    const s = deriveGuillotine({ week: 1, teams, games: [live], scores: [score("old", 70), score("new", 70), score("rich", 70)] });
-    expect(s.alive.map((r) => r.team.id)).toEqual(["rich", "new", "old"]);
-    expect(s.block?.team.id).toBe("old");
-  });
-
-  it("previews the line in week 1 before anyone is cut", () => {
-    const s = deriveGuillotine({ week: 1, teams: [team("a", 0), team("b", 0), team("c", 0)], games: [live], scores: [score("a", 10)] });
-    expect(s.noCutsYet).toBe(true);
-    expect(s.cutLine).toBe("preview");
-    expect(s.out).toEqual([]);
-  });
-});
-
-describe("deriveGuillotine pre-kickoff", () => {
-  it("sorts by projection, leaves nobody on the block and draws the neutral line", () => {
-    const s = deriveGuillotine({
-      week: 8, teams: midTeams, games: [pre],
-      scores: [score("a", 0, 101.7), score("b", 0, 126.3), score("c", 0, 101.7)],
-    });
-    expect(s.alive.map((r) => r.team.id)).toEqual(["b", "a", "c"]);
-    expect(s.alive.every((r) => !r.onBlock && r.score == null)).toBe(true);
-    expect(s.block).toBeNull();
-    expect(s.cutLine).toBe("neutral");
-  });
-});
-
-describe("eliminated rows", () => {
-  it("lists the latest cut first and places them under the alive teams", () => {
-    const s = deriveGuillotine({ week: 3, teams: midTeams, games: [pre], scores: [] });
-    expect(s.out.map((r) => [r.team.id, r.cutWeek, r.place])).toEqual([["d", 2, 4], ["e", 1, 5]]);
-    expect(outRowLabel(s.out[0])).toBe("D, eliminated week 2, finished 4th");
-  });
-
-  it.each([[1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [11, "11th"], [12, "12th"], [13, "13th"], [22, "22nd"]])(
-    "ordinal(%i) = %s", (n, out) => expect(ordinal(n)).toBe(out),
-  );
-});
-
-describe("finale", () => {
+describe("deriveGuillotine finale", () => {
   const finalTeams = [team("cd", 1751.9), team("ww", 1691.5), team("bb", 1010.5, 10), team("tt", 902.6, 9)];
-  const wk = (cd: number, ww: number) => [{ home_team_id: "cd", home_score: cd, away_team_id: "ww", away_score: ww }];
+  const none = summary([["cd", 0, 0, 0, 0], ["ww", 0, 0, 0, 0]], []);
 
   it("starts when two teams are left and stops the cut line", () => {
-    const s = deriveGuillotine({ week: 11, teams: finalTeams, games: [final, final], scores: [] });
+    const s = deriveGuillotine({ week: 11, teams: finalTeams, games: [final, final], scores: [], summary: none });
     expect(s.phase).toBe("finale");
     expect(s.cutLine).toBeNull();
     expect(s.alive).toEqual([]);
     expect(s.out.map((r) => r.place)).toEqual([3, 4]);
   });
 
-  it("counts the head-to-head series and finale points", () => {
-    const { a, b, played } = finaleSeries("cd", "ww", [wk(120, 100), wk(90, 110), [], wk(130.1, 101)]);
-    expect(played).toBe(3);
-    expect(a).toEqual({ wins: 2, losses: 1, ties: 0, points: 340.1 });
-    expect(b).toEqual({ wins: 1, losses: 2, ties: 0, points: 311 });
+  it("refuses to draw a finale without the backend summary", () => {
+    expect(() => deriveGuillotine({ week: 11, teams: finalTeams, games: [live], scores: [] })).toThrow();
+    const wrong = summary([["cd", 1, 0, 0, 100], ["bb", 0, 1, 0, 90]], [11]);
+    expect(() => deriveGuillotine({ week: 12, teams: finalTeams, games: [live], scores: [], summary: wrong })).toThrow();
   });
 
   it("gives LEADING to the series leader even when trailing this week", () => {
     const s = deriveGuillotine({
       week: 15, teams: finalTeams, games: [live],
       scores: [score("cd", 90, 100), score("ww", 118.6, 121)],
-      finaleWeeks: [wk(120, 100), wk(110, 90), wk(80, 100), wk(158.2, 151.7)],
+      summary: summary([["cd", 3, 1, 0, 468.2], ["ww", 1, 3, 0, 441.7]], [11, 12, 13, 14]),
     });
     const [left, right] = s.finale!.finalists;
     expect([left.team.id, left.leading, right.leading]).toEqual(["cd", true, false]);
     expect(s.finale!.leadLine).toBe("CD leads the series 3\u20131 · +26.5 finale pts");
     expect(s.finale!.leadLineShort).toBe("CD leads the series 3\u20131");
+    expect(s.finale!.weeks).toEqual([11, 12, 13, 14]);
+  });
+
+  it("keeps the backend order even when this week's score says otherwise", () => {
+    const s = deriveGuillotine({
+      week: 14, teams: finalTeams, games: [live], scores: [score("cd", 150), score("ww", 60)],
+      summary: summary([["ww", 2, 1, 0, 349], ["cd", 1, 2, 0, 290]], [11, 12, 13]),
+    });
+    expect(s.finale!.finalists.map((f) => [f.team.id, f.leading])).toEqual([["ww", true], ["cd", false]]);
   });
 
   it("drops the LEADING tag when the series is level and names the points tie-break", () => {
     const s = deriveGuillotine({
       week: 15, teams: finalTeams, games: [live], scores: [score("cd", 101.2), score("ww", 104.8)],
-      finaleWeeks: [wk(120, 100), wk(100, 120), wk(116.1, 100), wk(116.5, 129.1)],
+      summary: summary([["cd", 2, 2, 0, 452.6], ["ww", 2, 2, 0, 449.1]], [11, 12, 13, 14]),
     });
     expect(s.finale!.finalists.some((f) => f.leading)).toBe(false);
     expect(s.finale!.tiedLabel).toBe("SERIES TIED 2\u20132");
@@ -158,45 +115,38 @@ describe("finale", () => {
     expect(s.finale!.tiedTip).toBe("Series tied · tie-break: finale points · CD +3.5");
   });
 
-  it("orders finalists by series, then finale points, and never by this week's score", () => {
+  it("names season points when the series and finale points are level", () => {
     const s = deriveGuillotine({
-      week: 14, teams: finalTeams, games: [live], scores: [score("cd", 150), score("ww", 60)],
-      finaleWeeks: [wk(100, 120), wk(100, 99), wk(90, 130)],
-    });
-    expect(s.finale!.finalists.map((f) => [f.team.id, f.leading])).toEqual([["ww", true], ["cd", false]]);
-    const tied = deriveGuillotine({
       week: 13, teams: finalTeams, games: [live], scores: [],
-      finaleWeeks: [wk(100, 120), wk(110, 100)],
+      summary: summary([["cd", 1, 1, 0, 220], ["ww", 1, 1, 0, 220]], [11, 12]),
     });
-    expect(tied.finale!.finalists[0].team.id).toBe("ww");
-    expect(tied.finale!.tiedTip).toBe("Series tied · tie-break: finale points · WW +10.0");
+    expect(s.finale!.leadLine).toBe("Finale points level. CD ahead on season points (tie-break)");
+    expect(s.finale!.tiedTip).toBe("Series tied · finale points even · tie-break: season points · CD");
+    const even = [team("cd", 1700), team("ww", 1700), team("bb", 1010.5, 10), team("tt", 902.6, 9)];
+    const flat = deriveGuillotine({
+      week: 13, teams: even, games: [live], scores: [],
+      summary: summary([["cd", 1, 1, 0, 220], ["ww", 1, 1, 0, 220]], [11, 12]),
+    });
+    expect(flat.finale!.leadLine).toBe("Series and finale points level");
   });
 
   it("shows W-L-T only once a finale week has tied", () => {
-    const noTie = deriveGuillotine({ week: 13, teams: finalTeams, games: [live], scores: [], finaleWeeks: [wk(120, 100), wk(99, 100)] });
-    expect(noTie.finale!.tiedLabel).toBe("SERIES TIED 1\u20131");
     const tie = deriveGuillotine({
       week: 14, teams: finalTeams, games: [live], scores: [],
-      finaleWeeks: [wk(120, 100), wk(99, 100), wk(105, 105)],
+      summary: summary([["cd", 1, 1, 1, 324], ["ww", 1, 1, 1, 305]], [11, 12, 13]),
     });
     expect(tie.finale!.tiedLabel).toBe("SERIES TIED 1\u20131\u20131");
     const lead = deriveGuillotine({
       week: 14, teams: finalTeams, games: [live], scores: [],
-      finaleWeeks: [wk(120, 100), wk(120, 100), wk(105, 105)],
+      summary: summary([["cd", 2, 0, 1, 345], ["ww", 0, 2, 1, 305]], [11, 12, 13]),
     });
     expect(lead.finale!.leadLineShort).toBe("CD leads the series 2\u20130\u20131");
-  });
-
-  it("reads a level series and level points without a tie-break winner", () => {
-    const s = deriveGuillotine({ week: 13, teams: finalTeams, games: [live], scores: [], finaleWeeks: [wk(120, 100), wk(100, 120)] });
-    expect(s.finale!.leadLine).toBe("Series and finale points level");
-    expect(s.finale!.tiedTip).toBe("Series tied · finale points even");
   });
 
   it("speaks the series as wins and losses", () => {
     const s = deriveGuillotine({
       week: 15, teams: finalTeams, games: [live], scores: [score("cd", 118.6), score("ww", 100)],
-      finaleWeeks: [wk(120, 100), wk(110, 90), wk(80, 100), wk(158.2, 151.7)],
+      summary: summary([["cd", 3, 1, 0, 468.2], ["ww", 1, 3, 0, 441.7]], [11, 12, 13, 14]),
     });
     expect(finalistLabel(s.finale!.finalists[0], s.phase)).toBe(
       "CD, series 3 wins 1 loss, 468.2 finale points, leading the series; this week 118.6 live",
@@ -204,41 +154,56 @@ describe("finale", () => {
   });
 
   it("uses this week's live score in the first finale week without a LEADING tag", () => {
-    const s = deriveGuillotine({ week: 11, teams: finalTeams, games: [live], scores: [score("cd", 106), score("ww", 118.6)] });
+    const s = deriveGuillotine({ week: 11, teams: finalTeams, games: [live], scores: [score("cd", 106), score("ww", 118.6)], summary: none });
     expect(s.finale!.finalists.map((f) => f.team.id)).toEqual(["cd", "ww"]);
     expect(s.finale!.finalists.some((f) => f.leading)).toBe(false);
     expect(s.finale!.tiedLabel).toBeNull();
     expect(s.finale!.leadLine).toBe("WW leads by 12.6");
-    const tied = deriveGuillotine({ week: 11, teams: finalTeams, games: [live], scores: [score("cd", 112), score("ww", 112)] });
+    const tied = deriveGuillotine({ week: 11, teams: finalTeams, games: [live], scores: [score("cd", 112), score("ww", 112)], summary: none });
     expect(tied.finale!.leadLine).toBe("Tied at 112.0");
-    expect(tied.finale!.finalists.some((f) => f.leading)).toBe(false);
   });
 });
 
 describe("champion", () => {
   const teams = [team("cd", 2126.4), team("ww", 2151.7), team("bb", 1010.5, 10), team("tt", 902.6, 9)];
-  const wk = (cd: number, ww: number) => [{ home_team_id: "ww", home_score: ww, away_team_id: "cd", away_score: cd }];
-  const weeks = [wk(130, 120), wk(120, 130), wk(125, 110), wk(140, 100), wk(90, 110), wk(120, 119.9), wk(117.7, 112)];
+  const weeks = [11, 12, 13, 14, 15, 16, 17, 18];
+  const places = { cd: 1, ww: 2, bb: 3, tt: 4 };
 
-  it("crowns the series winner once the season is over, runner-up 2nd, then cuts by most recent", () => {
-    const s = deriveGuillotine({ week: 17, teams, games: [final], scores: [], finaleWeeks: weeks, seasonOver: true });
+  it("crowns the backend champion, runner-up 2nd, then cuts by most recent", () => {
+    const s = deriveGuillotine({
+      week: 18, teams, games: [final], scores: [],
+      summary: summary([["cd", 5, 3, 0, 973.4], ["ww", 3, 5, 0, 952.1]], weeks, "cd", places),
+    });
     expect(s.phase).toBe("champion");
     expect(s.cutLine).toBeNull();
     const [champ, runnerUp] = s.finale!.finalists;
-    expect([champ.team.id, champ.series.wins, champ.series.losses]).toEqual(["cd", 5, 2]);
+    expect([champ.team.id, champ.series.wins, champ.series.losses]).toEqual(["cd", 5, 3]);
     expect(runnerUp.team.id).toBe("ww");
     expect(s.out.map((r) => [r.team.id, r.place])).toEqual([["bb", 3], ["tt", 4]]);
     expect(champ.score).toBeNull();
   });
 
-  it("stays in the finale until the season rolls over", () => {
-    const s = deriveGuillotine({ week: 17, teams, games: [final], scores: [], finaleWeeks: weeks });
+  it("crowns the series winner even when the runner-up has more season points", () => {
+    const s = deriveGuillotine({
+      week: 18, teams, games: [final], scores: [],
+      summary: summary([["cd", 5, 3, 0, 900], ["ww", 3, 5, 0, 1000]], weeks, "cd", places),
+    });
+    expect(s.finale!.finalists[0].team.id).toBe("cd");
+  });
+
+  it("stays in the finale until the backend names a champion", () => {
+    const s = deriveGuillotine({
+      week: 17, teams, games: [final], scores: [],
+      summary: summary([["cd", 4, 3, 0, 850], ["ww", 3, 4, 0, 840]], weeks.slice(0, 7)),
+    });
     expect(s.phase).toBe("finale");
   });
 
-  it("counts finale weeks from the week after the last cut", () => {
-    expect(finaleWeekRange(teams, 17)).toEqual([11, 12, 13, 14, 15, 16, 17]);
-    expect(finaleWeekRange(teams, 10)).toEqual([]);
+  it("rejects a summary that lists the champion second", () => {
+    expect(() => deriveGuillotine({
+      week: 18, teams, games: [final], scores: [],
+      summary: summary([["ww", 3, 5, 0, 952.1], ["cd", 5, 3, 0, 973.4]], weeks, "cd", places),
+    })).toThrow();
   });
 });
 

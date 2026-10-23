@@ -13,7 +13,11 @@ Wednesday-night opener doesn't roll to week 2 until after the following
 Monday night game), which is exactly the "we know what week we're in"
 behavior a calendar-date heuristic could never get right on its own.
 """
+import asyncio
 import time
+from typing import Dict, Optional
+
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -55,8 +59,43 @@ async def current_nfl_week() -> dict:
     return _state_cache
 
 
-@router.get("/sync-status")
+class SourceStatus(BaseModel):
+    last_success_at: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+    last_attempt_ok: Optional[bool] = None
+
+
+class SyncStatus(BaseModel):
+    generated_at: str
+    # Sleeper's season_type ("pre" | "regular" | "post" | "off"), or None
+    # when Sleeper's state can't be read. The syncs only pull stats in
+    # the regular season, so the chip hides itself outside it.
+    season_type: Optional[str] = None
+    sources: Dict[str, SourceStatus]
+
+
+SYNC_STATUS_TTL = 30.0  # seconds; the chip polls every 60s per open tab
+_sync_cache: dict | None = None
+_sync_cache_at: float = 0.0
+
+
+def reset_sync_status_cache() -> None:
+    global _sync_cache, _sync_cache_at
+    _sync_cache, _sync_cache_at = None, 0.0
+
+
+@router.get("/sync-status", response_model=SyncStatus)
 async def sync_status(db: AsyncSession = Depends(get_db)):
     """When the Sleeper stats and ESPN scoreboard syncs last succeeded,
-    for the freshness chip. Site-wide, no league data."""
-    return await get_sync_status(db)
+    for the freshness chip. Site-wide, no league data. Cached for 30s."""
+    global _sync_cache, _sync_cache_at
+    now = time.monotonic()
+    if _sync_cache is None or (now - _sync_cache_at) > SYNC_STATUS_TTL:
+        body = await get_sync_status(db)
+        try:
+            state = await asyncio.wait_for(current_nfl_week(), timeout=3)
+            body["season_type"] = state.get("season_type")
+        except Exception:
+            body["season_type"] = None
+        _sync_cache, _sync_cache_at = body, now
+    return _sync_cache

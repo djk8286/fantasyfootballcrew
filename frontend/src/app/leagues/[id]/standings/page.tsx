@@ -12,6 +12,7 @@ import GameStatusBadge from "@/components/GameStatusBadge";
 import FreshnessChip from "@/components/ffc/FreshnessChip";
 import { GuillotineBody, GuillotineHeader } from "@/components/ffc/GuillotineSkin";
 import { useGuillotineData } from "@/components/ffc/useGuillotineData";
+import type { GSummary } from "@/lib/guillotine";
 import {
   Trophy,
   Users,
@@ -140,6 +141,14 @@ interface LeagueData {
   conference_b_name?: string | null;
 }
 
+interface LoadedStandings {
+  rows: Standing[];
+  /** GUILLOTINE leagues only; null otherwise or when the load failed. */
+  guillotine: GSummary | null;
+  /** Date.now() when the load started. */
+  at: number;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -153,6 +162,8 @@ export default function StandingsPage() {
 
   const [league, setLeague] = useState<LeagueData | null>(null);
   const [standings, setStandings] = useState<Standing[]>([]);
+  const [gSummary, setGSummary] = useState<GSummary | null>(null);
+  const [dataAt, setDataAt] = useState<number | undefined>(undefined);
   const [combinedStandings, setCombinedStandings] = useState<CombinedStanding[]>([]);
   const [weeklyData, setWeeklyData] = useState<WeeklyScoresResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -218,7 +229,8 @@ export default function StandingsPage() {
   // (owner_id, is_cpu, avatar_url) -- that's why teams is fetched
   // separately and merged in here. Shared by the initial load and both
   // refresh paths below so the fix (and the merge) lives in one place.
-  const loadStandings = useCallback(async (): Promise<Standing[]> => {
+  const loadStandings = useCallback(async (): Promise<LoadedStandings> => {
+    const at = Date.now();
     const [teamsData, standingsResponse] = await Promise.all([
       teamsApi.getByLeague(leagueId).catch(() => [] as RawTeam[]),
       standingsApi.getStandings(leagueId).catch(() => null),
@@ -229,7 +241,8 @@ export default function StandingsPage() {
       ? (standingsResponse as { standings: RawStandingEntry[] }).standings
       : [];
 
-    return rawStandings.map((s) => {
+    const guillotine = (standingsResponse as { guillotine?: GSummary | null } | null)?.guillotine ?? null;
+    const rows = rawStandings.map((s) => {
       const team = teamById.get(s.team_id);
       return {
         id: s.team_id,
@@ -248,7 +261,16 @@ export default function StandingsPage() {
         last_words: team?.last_words ?? null,
       };
     });
+    return { rows, guillotine, at };
   }, [leagueId]);
+
+  // Standings rows, the Guillotine summary and the load time always move
+  // together, so the skin never mixes one load's order with another's.
+  const applyStandings = useCallback((res: LoadedStandings) => {
+    setStandings(res.rows);
+    setGSummary(res.guillotine);
+    setDataAt(res.at);
+  }, []);
 
   useEffect(() => {
     if (!leagueId) return;
@@ -269,7 +291,7 @@ export default function StandingsPage() {
           return;
         }
         setLeague(leagueData as LeagueData);
-        setStandings(st);
+        applyStandings(st);
 
         const wk = nflState?.week ?? 1;
         setMaxWeek(wk);
@@ -279,7 +301,7 @@ export default function StandingsPage() {
         setError(err instanceof Error ? err.message : "Failed to load standings");
       })
       .finally(() => setLoading(false));
-  }, [leagueId, loadStandings]);
+  }, [leagueId, loadStandings, applyStandings]);
 
   // Fetch weekly scores when week changes
   useEffect(() => {
@@ -310,18 +332,23 @@ export default function StandingsPage() {
 
   const isGuillotine = league?.league_type === "guillotine";
   const seasonPoints = useMemo(() => new Map(standings.map((t) => [t.id, t.points_for])), [standings]);
-  const guillotine = useGuillotineData(leagueId, isGuillotine && !loading, seasonPoints);
+  const guillotine = useGuillotineData(leagueId, isGuillotine && !loading, seasonPoints, gSummary);
 
-  // The chip's Refresh/Retry: reload in place, no full-page spinner.
+  // The chip's Refresh: reload in place, no full-page spinner.
   const refreshInPlace = useCallback(async () => {
     const [newStandings, newWeekly] = await Promise.all([
       loadStandings(),
       standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR),
     ]);
-    setStandings(newStandings);
+    applyStandings(newStandings);
     // New standings rebuild seasonPoints, which reloads the guillotine data.
     setWeeklyData(newWeekly as WeeklyScoresResponse);
-  }, [loadStandings, leagueId, selectedWeek]);
+  }, [loadStandings, applyStandings, leagueId, selectedWeek]);
+
+  const retryGuillotine = async () => {
+    // A new standings load hands the hook a new summary, which reloads it.
+    await refreshInPlace().catch(() => guillotine.reload());
+  };
 
   // ─── Actions ────────────────────────────────────────────
 
@@ -333,7 +360,7 @@ export default function StandingsPage() {
       const result = await standingsApi.calculateWeek(leagueId, selectedWeek, CURRENT_YEAR);
       setCalcMessage(`Week ${selectedWeek} scores calculated successfully!`);
       // Refresh standings and weekly data
-      setStandings(await loadStandings());
+      applyStandings(await loadStandings());
       const newWeekly = await standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR);
       setWeeklyData(newWeekly as WeeklyScoresResponse);
       // Clear message after 3 seconds
@@ -358,7 +385,7 @@ export default function StandingsPage() {
         loadStandings(),
         standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR).catch(() => null),
       ]);
-      setStandings(newStandings);
+      applyStandings(newStandings);
       if (newWeekly) setWeeklyData(newWeekly as WeeklyScoresResponse);
       setError("");
     } catch (err) {
@@ -631,7 +658,9 @@ export default function StandingsPage() {
   // points_for ordering; eliminated teams sort below them, most-
   // recently-eliminated first. A strict no-op for every non-Guillotine
   // league, since eliminated_week is always null there.
-  const sortedStandings = [...standings].sort((a, b) => {
+  // A Guillotine league keeps the backend's order: guillotine_placement.py
+  // ranks finalists by series and cuts by most recent.
+  const sortedStandings = isGuillotine ? standings : [...standings].sort((a, b) => {
     const aAlive = a.eliminated_week == null;
     const bAlive = b.eliminated_week == null;
     if (aAlive !== bAlive) return aAlive ? -1 : 1;
@@ -680,9 +709,9 @@ export default function StandingsPage() {
           <GuillotineHeader
             s={skin.state}
             leagueName={league?.name ?? "Standings"}
-            chip={<FreshnessChip sources={["sleeper"]} live={skin.live} onRefresh={refreshInPlace} />}
+            chip={<FreshnessChip sources={["sleeper"]} live={skin.live} onRefresh={refreshInPlace} dataAt={dataAt} />}
           />
-          <GuillotineBody s={skin.state} finaleWeeks={skin.finaleWeeks} />
+          <GuillotineBody s={skin.state} />
         </div>
       ) : (
       <section className="relative overflow-hidden border-b border-surface-700">
@@ -705,8 +734,8 @@ export default function StandingsPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
-              <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} className="hidden sm:inline-flex" />
+            <div className="flex flex-wrap items-center gap-3">
+              <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} dataAt={dataAt} />
               {weekSelect}
 
               <button
@@ -718,9 +747,28 @@ export default function StandingsPage() {
               </button>
             </div>
           </div>
-          <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} className="mt-4 sm:hidden" />
         </div>
       </section>
+      )}
+
+      {isGuillotine && guillotine.error && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+          <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 sm:flex-row sm:items-center">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-red-400" aria-hidden="true" />
+            <p className="flex-1 text-sm text-surface-200">
+              Couldn&apos;t load the Guillotine scores. The cut line and finale stay hidden until they load.
+              The table below shows season records.
+            </p>
+            <button
+              type="button"
+              onClick={retryGuillotine}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-surface-600 px-3 py-2 text-sm text-surface-200 hover:border-surface-500 hover:text-white"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Refresh
+            </button>
+          </div>
+        </section>
       )}
 
       {/* Calculate week scores (commissioner only) */}

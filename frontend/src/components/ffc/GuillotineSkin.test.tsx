@@ -9,11 +9,11 @@ const team = (id: string, season: number, cut: number | null = null): GTeam => (
 });
 const live: GGame = { status_state: "in", completed: false };
 const final: GGame = { status_state: "post", completed: true };
-const render = (s: ReturnType<typeof deriveGuillotine>, finaleWeeks: number[] = []) =>
+const render = (s: ReturnType<typeof deriveGuillotine>) =>
   renderToStaticMarkup(
     <>
       <GuillotineHeader s={s} leagueName="Test League" chip={null} />
-      <GuillotineBody s={s} finaleWeeks={finaleWeeks} />
+      <GuillotineBody s={s} />
     </>,
   );
 
@@ -54,13 +54,24 @@ describe("GuillotineSkin", () => {
 
   it("champion shows the banner and runner-up and drops the tiles", () => {
     const champTeams = [team("cd", 2126.4), team("ww", 2151.7), team("bb", 1010.5, 10), team("tt", 902.6, 9)];
-    const wk = (cd: number, ww: number) => [{ home_team_id: "ww", home_score: ww, away_team_id: "cd", away_score: cd }];
-    const weeks = [wk(130, 120), wk(120, 130), wk(125, 110), wk(140, 100), wk(90, 110), wk(120, 119.9), wk(117.7, 112)];
-    const s = deriveGuillotine({ week: 17, teams: champTeams, games: [final], scores: [], finaleWeeks: weeks, seasonOver: true });
-    const html = render(s, [11, 12, 13, 14, 15, 16, 17]);
+    const s = deriveGuillotine({
+      week: 18, teams: champTeams, games: [final], scores: [],
+      summary: {
+        phase: "final", champion_team_id: "cd", runner_up_team_id: "ww",
+        finalists: [
+          { team_id: "cd", wins: 5, losses: 2, ties: 0, points: 842.7 },
+          { team_id: "ww", wins: 2, losses: 5, ties: 0, points: 801.9 },
+        ],
+        finale_weeks: [11, 12, 13, 14, 15, 16, 17],
+        places: { cd: 1, ww: 2, bb: 3, tt: 4 },
+      },
+    });
+    const html = render(s);
     expect(html).toContain("CHAMPION · SEASON FINAL");
     expect(html).toContain("RUNNER-UP");
     expect(html).not.toContain("TEAMS LEFT");
     expect(html.indexOf("CD")).toBeLessThan(html.indexOf("RUNNER-UP"));
+    expect(html).toContain("finale series weeks 11–17");
+    expect(html).toContain("then season points");
   });
 });
