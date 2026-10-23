@@ -5,6 +5,7 @@ import { leagueLabel } from "@/lib/league-label";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { leaguesApi, playersApi, dashboardApi, standingsApi, nflApi, isLoggedIn } from "@/lib/api-client";
+import { nflGameOffSchedule, nflScoreLine } from "@/lib/nfl-game";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles, Flame, Radio, Bot } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { PositionChip } from "@/components/ui/Badge";
@@ -444,9 +445,13 @@ interface NflGame {
   away_team: string;
   away_team_name: string;
   away_score: number | null;
+  status_state: string;
   status_detail: string;
   completed: boolean;
+  kickoff_at: string;
 }
+
+const kickoffFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 
 function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void }) {
   const [data, setData] = useState<{ week: number; games: NflGame[]; recap: string | null } | null>(null);
@@ -490,17 +495,24 @@ function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void
           </div>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {data.games.map((g, i) => (
-            <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-900 border border-surface-700 text-sm">
-              <div className="min-w-0">
-                <div className="text-white truncate">{g.away_team} @ {g.home_team}</div>
-                <div className="text-surface-500 text-[10px]">{g.status_detail}</div>
+          {data.games.map((g, i) => {
+            const score = nflScoreLine(g);
+            return (
+              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-900 border border-surface-700 text-sm">
+                <div className="min-w-0">
+                  <div className="text-white truncate">{g.away_team} @ {g.home_team}</div>
+                  {score && <div className="text-surface-500 text-[10px]">{g.status_detail}</div>}
+                </div>
+                {score ? (
+                  <div className="text-gold-400 font-semibold shrink-0 ml-2">{score}</div>
+                ) : (
+                  <div className="text-surface-400 text-xs shrink-0 ml-2">
+                    {nflGameOffSchedule(g) && g.status_detail ? g.status_detail : kickoffFormat.format(new Date(g.kickoff_at))}
+                  </div>
+                )}
               </div>
-              {g.home_score !== null && g.away_score !== null && (
-                <div className="text-gold-400 font-semibold shrink-0 ml-2">{g.away_score} - {g.home_score}</div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

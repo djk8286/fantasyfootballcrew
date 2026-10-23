@@ -137,7 +137,8 @@ async def get_nfl_scores(db: AsyncSession = Depends(get_db)):
             {
                 "home_team": g.home_team, "home_team_name": g.home_team_name, "home_score": g.home_score,
                 "away_team": g.away_team, "away_team_name": g.away_team_name, "away_score": g.away_score,
-                "status_detail": g.status_detail, "completed": g.completed, "kickoff_at": g.kickoff_at,
+                "status_state": g.status_state, "status_detail": g.status_detail, "completed": g.completed,
+                "kickoff_at": g.kickoff_at,
             }
             for g in games
         ],

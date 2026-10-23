@@ -221,7 +221,9 @@ async def test_repair_keeps_the_drafting_team_and_voids_the_later_waiver_add(db_
     qa = await _team(f, qa_team)
     assert qa.roster == ["keep-1"] and qa.roster_version == before + 1
     assert (await _team(f, team5)).roster == [star]
-    assert "already on" in (await _tx(f, claim_id)).details["voided"]
+    claim = await _tx(f, claim_id)
+    assert claim.status == TransactionStatus.DENIED
+    assert "already on" in claim.details["voided"]
     async with f() as db:
         c = (await db.execute(select(Contract).where(Contract.team_id == qa_team))).scalar_one()
         assert c.is_active is False

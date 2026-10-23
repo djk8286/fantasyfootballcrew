@@ -24,7 +24,8 @@ player was still free) can't be compared with a pick.
 For every other holder: the player is removed from that roster
 (roster_version bumped), his active contract with that team (cap
 leagues) is deactivated without dead money, an approved waiver claim
-that added him is annotated details.voided, and each change is logged.
+that added him is marked DENIED with the reason in details.voided, and
+each change is logged.
 Saved lineups aren't edited; scoring already ignores starters who
 aren't on the roster. A player listed twice on one roster is collapsed
 to one entry.
@@ -137,6 +138,7 @@ async def repair_duplicate_rostered_players(db: AsyncSession) -> list[dict]:
                     if (c.details or {}).get("add_player_id") == pid and not (c.details or {}).get("voided"):
                         c.details = {**(c.details or {}), "voided": f"player was already on {keep.name}'s roster",
                                      "voided_at": now}
+                        c.status = TransactionStatus.DENIED
                 changes.append({
                     "league_id": league_id, "player_id": pid, "removed_from": loser.id, "removed_from_name": loser.name,
                     "kept_on": keep.id, "kept_on_name": keep.name,

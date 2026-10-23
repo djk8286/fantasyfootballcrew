@@ -56,12 +56,32 @@ async def test_trade_prompt_includes_both_teams_coaching_staff():
 
     service._call_llm = spy
     await service.analyze_trade(
+        team_a_name="Gridiron Gang", team_b_name="Sunday Scaries",
         team_a_players=[], team_b_players=[], scoring={},
         team_a_coaching=[{"position": "HC", "name": "Belichick"}],
         team_b_coaching=[{"position": "OC", "name": "Reid"}],
     )
     assert "Belichick" in captured["prompt"]
     assert "Reid" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_trade_prompt_names_the_real_teams():
+    service = AIService()
+    captured = {}
+
+    async def spy(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "ok"
+
+    service._call_llm = spy
+    await service.analyze_trade(
+        team_a_name="Gridiron Gang", team_b_name="Sunday Scaries",
+        team_a_players=[{"name": "Josh Allen"}], team_b_players=[{"name": "Bijan Robinson"}], scoring={},
+    )
+    p = captured["prompt"]
+    assert "**Gridiron Gang gives up:**" in p and "**Sunday Scaries gives up:**" in p
+    assert "Team A" not in p and "Team B" not in p
 
 
 @pytest.mark.asyncio
@@ -120,6 +140,7 @@ async def test_trade_prompt_includes_both_teams_salary_context():
 
     service._call_llm = spy
     await service.analyze_trade(
+        team_a_name="Gridiron Gang", team_b_name="Sunday Scaries",
         team_a_players=[], team_b_players=[], scoring={},
         team_a_salary={"cap_space": 12.0},
         team_b_salary={"cap_space": -3.5},
@@ -138,7 +159,7 @@ async def test_trade_prompt_renders_without_salary_context():
         return "ok"
 
     service._call_llm = spy
-    await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
+    await service.analyze_trade(team_a_name="Gridiron Gang", team_b_name="Sunday Scaries", team_a_players=[], team_b_players=[], scoring={})
     assert "Salary Cap" in captured["prompt"]
 
 
@@ -189,6 +210,7 @@ async def test_trade_prompt_includes_both_teams_partner_context():
 
     service._call_llm = spy
     await service.analyze_trade(
+        team_a_name="Gridiron Gang", team_b_name="Sunday Scaries",
         team_a_players=[], team_b_players=[], scoring={},
         team_a_partner={"wins": 5, "team_ids": ["a", "b"]},
         team_b_partner={"wins": 1, "team_ids": ["c", "d"]},
@@ -207,7 +229,7 @@ async def test_trade_prompt_renders_without_partner_context():
         return "ok"
 
     service._call_llm = spy
-    await service.analyze_trade(team_a_players=[], team_b_players=[], scoring={})
+    await service.analyze_trade(team_a_name="Gridiron Gang", team_b_name="Sunday Scaries", team_a_players=[], team_b_players=[], scoring={})
     assert "Linked Pair" in captured["prompt"]
 
 

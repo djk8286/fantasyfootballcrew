@@ -103,6 +103,41 @@ async def test_sync_week_scoreboard_upserts_by_espn_event_id(db_session_factory,
         assert rows[0].away_score == 27
 
 
+def test_parse_event_has_no_score_before_kickoff():
+    """ESPN reports "0" for both teams before kickoff. Stored as 0-0 it
+    showed on the dashboard and fed the AI recap a week of 0-0 ties."""
+    event = {
+        "id": "3", "date": "2026-10-25T17:00Z",
+        "status": {"type": {"state": "pre", "completed": False, "shortDetail": "10/25 - 1:00 PM EDT"}},
+        "competitions": [{"competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "NYJ", "displayName": "New York Jets"}, "score": "0"},
+            {"homeAway": "away", "team": {"abbreviation": "MIA", "displayName": "Miami Dolphins"}, "score": "0"},
+        ]}],
+    }
+    parsed = _parse_event(event)
+    assert (parsed["home_score"], parsed["away_score"]) == (None, None)
+
+    event["status"]["type"]["state"] = "in"
+    parsed = _parse_event(event)
+    assert (parsed["home_score"], parsed["away_score"]) == (0, 0)
+
+
+@pytest.mark.parametrize("name,detail", [("STATUS_POSTPONED", "Postponed"), ("STATUS_CANCELED", "Canceled")])
+def test_parse_event_has_no_score_for_a_postponed_or_canceled_game(name, detail):
+    """ESPN marks these state "post" but not completed, still with "0" scores."""
+    event = {
+        "id": "4", "date": "2026-10-25T17:00Z",
+        "status": {"type": {"name": name, "state": "post", "completed": False, "shortDetail": detail}},
+        "competitions": [{"competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "BUF", "displayName": "Buffalo Bills"}, "score": "0"},
+            {"homeAway": "away", "team": {"abbreviation": "NE", "displayName": "New England Patriots"}, "score": "0"},
+        ]}],
+    }
+    parsed = _parse_event(event)
+    assert (parsed["home_score"], parsed["away_score"]) == (None, None)
+    assert (parsed["status_state"], parsed["status_detail"], parsed["completed"]) == ("post", detail, False)
+
+
 def test_parse_event_stores_sleeper_team_codes():
     """Player.team is Sleeper's code, so Washington is stored as WAS, not ESPN's WSH."""
     event = {
