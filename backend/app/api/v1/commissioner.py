@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.league import League
+from app.models.league import League, LeagueType
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.score_adjustment import ScoreAdjustment
@@ -18,6 +18,7 @@ from app.schemas.commissioner import (
 )
 from app.api.deps import get_current_user, require_commissioner, require_league_view
 from app.services.notification_service import notify_team_owners
+from app.services.trade_writes import write_pending_trade
 from app.models.notification import NotificationType
 from app.models.contract import Contract
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary
@@ -188,7 +189,7 @@ async def review_trade(
             Transaction.id == trade_id,
             Transaction.league_id == league_id,
             Transaction.type == TransactionType.TRADE,
-        )
+        ).with_for_update()  # trade lock first, team locks after (see below)
     )
     trade = result.scalar_one_or_none()
     if not trade:
@@ -201,6 +202,9 @@ async def review_trade(
     target_team_id = details.get("target_team_id")
 
     if data.action == "approve":
+        # The other side has to say yes first. A commissioner can still deny.
+        if "accepted" not in {details.get("recipient_response"), details.get("cpu_response")}:
+            raise HTTPException(status_code=400, detail="The receiving team hasn't accepted this trade yet.")
         # Best-Ball (Phase 6): only the APPROVAL action is gated by the
         # management window -- denial isn't a "grant," so there's no
         # fairness/window concern, and blocking it would just trap a
@@ -232,6 +236,21 @@ async def review_trade(
         target = locked_teams.get(target_team_id)
         if not proposer or not target:
             raise HTTPException(status_code=404, detail="One of the trading teams no longer exists")
+        # A commissioner doesn't approve their own trade. Seated on both
+        # sides is never allowed, except your own Dual-Squad pair. Seated
+        # on one side, a commissioner who isn't in the trade has to approve
+        # it, when there is one.
+        sides = [{proposer.owner_id, proposer.co_owner_id}, {target.owner_id, target.co_owner_id}]
+        in_trade = sides[0] | sides[1]
+        dual_pair = league.league_type == LeagueType.DUAL_SQUAD and proposer.partner_team_id == target.id
+        if not dual_pair and all(current_user.id in side for side in sides):
+            raise HTTPException(status_code=400, detail="You manage both teams in this trade, so you can't approve it")
+        commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
+        if current_user.id in in_trade and commissioners - in_trade:
+            raise HTTPException(status_code=400, detail="You manage a team in this trade, so another commissioner has to approve it")
+        for team_obj in (proposer, target):
+            if team_obj.eliminated_week is not None:
+                raise HTTPException(status_code=400, detail=f"{team_obj.name} has been eliminated and can no longer trade")
 
         proposer_roster = set(proposer.roster or [])
         target_roster = set(target.roster or [])
@@ -333,14 +352,18 @@ async def review_trade(
         for contract in requested_contracts.values():
             contract.team_id = proposer.id
 
-        trade.status = TransactionStatus.APPROVED
+        await write_pending_trade(
+            db, trade, status=TransactionStatus.APPROVED, reviewed_by=current_user.id,
+        )
         trade_link = f"/leagues/{league_id}/trades"
         await notify_team_owners(db, proposer, NotificationType.TRADE_APPROVED,
                                   f"Your trade with {target.name} was approved.", league_id, trade_link)
         await notify_team_owners(db, target, NotificationType.TRADE_APPROVED,
                                   f"Your trade with {proposer.name} was approved.", league_id, trade_link)
     elif data.action == "deny":
-        trade.status = TransactionStatus.DENIED
+        await write_pending_trade(
+            db, trade, status=TransactionStatus.DENIED, reviewed_by=current_user.id,
+        )
         result = await db.execute(select(Team).where(Team.id.in_({trade.team_id, target_team_id})))
         teams_by_id = {t.id: t for t in result.scalars().all()}
         proposer = teams_by_id.get(trade.team_id)
@@ -357,7 +380,6 @@ async def review_trade(
     else:
         raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'")
 
-    trade.reviewed_by = current_user.id
     await db.commit()
     await db.refresh(trade)
     return trade
@@ -382,7 +404,6 @@ async def analyze_trade_for_review(
     league = await _get_league(league_id, db)
     require_commissioner(league, current_user)
     _require_ai_enabled(league)
-    await check_and_record_ai_usage(league_id, "trade_review_analyze", db)
 
     result = await db.execute(
         select(Transaction).where(
@@ -396,6 +417,10 @@ async def analyze_trade_for_review(
         raise HTTPException(status_code=404, detail="Trade not found")
     if trade.status != TransactionStatus.PENDING:
         raise HTTPException(status_code=400, detail="Only a pending trade can be analyzed")
+    details = trade.details or {}
+    if "accepted" not in {details.get("recipient_response"), details.get("cpu_response")}:
+        raise HTTPException(status_code=400, detail="The receiving team hasn't accepted this trade yet.")
+    await check_and_record_ai_usage(league_id, "trade_review_analyze", db)
 
     target_team_id = (trade.details or {}).get("target_team_id")
     proposer_result = await db.execute(select(Team).where(Team.id == trade.team_id))

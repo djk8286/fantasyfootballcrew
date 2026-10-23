@@ -24,6 +24,10 @@ class NotificationType(str, enum.Enum):
     # delivered via notify_league_teams. Distinct from every other
     # value here, which are all system-generated from a state change.
     COMMISSIONER_MESSAGE = "commissioner_message"
+    # A human team got a trade offer it needs to answer.
+    TRADE_OFFER = "trade_offer"
+    # The receiving team said yes. Goes to the proposer and the commissioners.
+    TRADE_ACCEPTED = "trade_accepted"
 
 
 class Notification(Base):

@@ -15,12 +15,13 @@ from app.models.team import Team
 from app.services.auth_service import create_access_token
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, accepted=True):
     async with db_session_factory() as db:
         trade = Transaction(
             id=str(uuid.uuid4()), league_id=league_id, team_id=proposer_id,
             type=TransactionType.TRADE, status=TransactionStatus.PENDING,
-            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested},
+            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested,
+                     **({"recipient_response": "accepted"} if accepted else {})},
         )
         db.add(trade)
         await db.commit()
@@ -46,7 +47,7 @@ async def _notifications_for(db_session_factory, user_id):
 
 
 @pytest.mark.asyncio
-async def test_approving_a_trade_notifies_both_teams(client, seed):
+async def test_approving_a_trade_notifies_both_teams(client, seed, referee_token):
     league_id = seed["league_id"]
     team_a, team_b = seed["team_a"], seed["team_b"]
     a0, b0 = seed["players"][0], seed["players"][2]
@@ -54,7 +55,7 @@ async def test_approving_a_trade_notifies_both_teams(client, seed):
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
     assert r.status_code == 200
 
@@ -86,7 +87,7 @@ async def test_denying_a_trade_notifies_both_teams(client, seed):
 
 
 @pytest.mark.asyncio
-async def test_trade_notification_goes_to_the_right_specific_owner(client, seed):
+async def test_trade_notification_goes_to_the_right_specific_owner(client, seed, referee_token):
     """Distinct owners this time (not both teams owned by the seed
     commissioner) -- confirms notifications land on the actual affected
     users, not just "someone"."""
@@ -106,7 +107,7 @@ async def test_trade_notification_goes_to_the_right_specific_owner(client, seed)
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
     assert r.status_code == 200
 
@@ -119,7 +120,7 @@ async def test_trade_notification_goes_to_the_right_specific_owner(client, seed)
 
 
 @pytest.mark.asyncio
-async def test_2man_team_notifies_both_owner_and_co_owner(client, seed):
+async def test_2man_team_notifies_both_owner_and_co_owner(client, seed, referee_token):
     """A 2-Man/Household team's co-owner is exactly as much a real manager
     of that team as the owner -- confirms notify_team_owners' fan-out
     (notification_service.py) actually reaches both humans, not just
@@ -140,7 +141,7 @@ async def test_2man_team_notifies_both_owner_and_co_owner(client, seed):
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
     assert r.status_code == 200
 
@@ -194,15 +195,17 @@ async def test_denied_waiver_claim_notifies_the_claiming_team(client, seed):
 
 
 @pytest.mark.asyncio
-async def test_list_notifications_and_unread_count(client, seed):
+async def test_list_notifications_and_unread_count(client, seed, referee_token):
     league_id = seed["league_id"]
     team_a, team_b = seed["team_a"], seed["team_b"]
     a0, b0 = seed["players"][0], seed["players"][2]
     db_session_factory = seed["db_session_factory"]
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
+    client.headers["Authorization"] = f"Bearer {referee_token}"
+    r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
+    assert r.status_code == 200
     client.headers["Authorization"] = f"Bearer {seed['token']}"
-    await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
 
     r = await client.get("/notifications")
     assert r.status_code == 200
@@ -213,15 +216,17 @@ async def test_list_notifications_and_unread_count(client, seed):
 
 
 @pytest.mark.asyncio
-async def test_mark_read_and_mark_all_read(client, seed):
+async def test_mark_read_and_mark_all_read(client, seed, referee_token):
     league_id = seed["league_id"]
     team_a, team_b = seed["team_a"], seed["team_b"]
     a0, b0 = seed["players"][0], seed["players"][2]
     db_session_factory = seed["db_session_factory"]
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
+    client.headers["Authorization"] = f"Bearer {referee_token}"
+    r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
+    assert r.status_code == 200
     client.headers["Authorization"] = f"Bearer {seed['token']}"
-    await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
 
     r = await client.get("/notifications")
     notes = r.json()["notifications"]
@@ -241,15 +246,17 @@ async def test_mark_read_and_mark_all_read(client, seed):
 
 
 @pytest.mark.asyncio
-async def test_cannot_mark_another_users_notification_read(client, seed):
+async def test_cannot_mark_another_users_notification_read(client, seed, referee_token):
     league_id = seed["league_id"]
     team_a, team_b = seed["team_a"], seed["team_b"]
     a0, b0 = seed["players"][0], seed["players"][2]
     db_session_factory = seed["db_session_factory"]
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
+    client.headers["Authorization"] = f"Bearer {referee_token}"
+    r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
+    assert r.status_code == 200
     client.headers["Authorization"] = f"Bearer {seed['token']}"
-    await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
 
     r = await client.get("/notifications")
     note_id = r.json()["notifications"][0]["id"]

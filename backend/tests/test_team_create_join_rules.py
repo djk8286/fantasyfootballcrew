@@ -404,6 +404,26 @@ async def test_promoted_co_owner_keeps_access_when_owner_removed(client, db_sess
     assert (await _statuses(db_session_factory, league_id, co.id))[0] == [InviteStatus.ACCEPTED]
 
 
+@pytest.mark.asyncio
+async def test_deleted_team_managers_lose_their_access(client, db_session_factory):
+    commish, commish_token = await _make_user(db_session_factory)
+    owner, owner_token = await _make_user(db_session_factory)
+    co, co_token = await _make_user(db_session_factory)
+    league_id = await _make_league(db_session_factory, commish.id, LeagueVisibility.PRIVATE,
+                                   league_type=LeagueType.TWO_MAN)
+    await _invite(db_session_factory, league_id, owner.id)
+    await _invite(db_session_factory, league_id, co.id)
+    team_id = (await _create(client, owner_token, league_id)).json()["id"]
+    assert (await client.post(f"/teams/{team_id}/claim-co-owner",
+                              headers={"Authorization": f"Bearer {co_token}"})).status_code == 200
+
+    r = await client.delete(f"/teams/{team_id}", headers={"Authorization": f"Bearer {commish_token}"})
+    assert r.status_code == 204
+    for user, token in ((owner, owner_token), (co, co_token)):
+        assert (await _statuses(db_session_factory, league_id, user.id))[0] == [InviteStatus.REVOKED]
+        assert (await _create(client, token, league_id)).status_code == 403
+
+
 # ─── max_teams bounds ────────────────────────────────────────────────
 
 @pytest.mark.asyncio

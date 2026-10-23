@@ -16,6 +16,7 @@ from app.models.player import Player
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.services.auth_service import create_access_token
 from app.services.ai_service import AIService
+from app.models.ai_usage_event import AIUsageEvent
 from app.services.trade_review_service import build_trade_review_context, generate_and_save_trade_review
 
 
@@ -24,6 +25,9 @@ async def _make_trade_league(db_session_factory):
         commissioner = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
                              username=f"tradereviewcommish{uuid.uuid4().hex[:6]}", hashed_password="x")
         db.add(commissioner)
+        rival = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"rival{uuid.uuid4().hex[:6]}", hashed_password="x")
+        db.add(rival)
         await db.flush()
         league = League(id=str(uuid.uuid4()), name="Trade Review Test League", commissioner_id=commissioner.id,
                          league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
@@ -41,7 +45,7 @@ async def _make_trade_league(db_session_factory):
         proposer = Team(id=str(uuid.uuid4()), name="Team A", league_id=league.id,
                         owner_id=commissioner.id, roster=[players[0].id], roster_version=0)
         target = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id,
-                      owner_id=commissioner.id, roster=[players[1].id], roster_version=0)
+                      owner_id=rival.id, roster=[players[1].id], roster_version=0)
         db.add_all([proposer, target])
         await db.commit()
 
@@ -53,12 +57,13 @@ async def _make_trade_league(db_session_factory):
         }
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, status=TransactionStatus.PENDING):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, status=TransactionStatus.PENDING, accepted=True):
     async with db_session_factory() as db:
         trade = Transaction(
             id=str(uuid.uuid4()), league_id=league_id, team_id=proposer_id,
             type=TransactionType.TRADE, status=status,
-            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested},
+            details={"target_team_id": target_id, "offered_player_ids": offered, "requested_player_ids": requested,
+                     **({"recipient_response": "accepted"} if accepted else {})},
         )
         db.add(trade)
         await db.commit()
@@ -192,6 +197,30 @@ async def test_analyze_endpoint_400s_for_non_pending_trade(client, db_session_fa
     client.headers["Authorization"] = f"Bearer {setup['token']}"
     r = await client.post(f"/leagues/{setup['league_id']}/commissioner/trades/{trade_id}/analyze")
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_analyze_refuses_an_unanswered_offer_without_spending_ai(client, db_session_factory, monkeypatch):
+    calls = []
+
+    async def spy(self, prompt):
+        calls.append(prompt)
+        return "RECOMMENDATION: APPROVE\n\nok"
+    monkeypatch.setattr(AIService, "_call_llm", spy)
+
+    setup = await _make_trade_league(db_session_factory)
+    p0, p1 = setup["players"]
+    trade_id = await _make_trade(db_session_factory, setup["league_id"], setup["proposer_id"], setup["target_id"],
+                                  [p0], [p1], accepted=False)
+
+    client.headers["Authorization"] = f"Bearer {setup['token']}"
+    r = await client.post(f"/leagues/{setup['league_id']}/commissioner/trades/{trade_id}/analyze")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "The receiving team hasn't accepted this trade yet."
+    assert calls == []
+    async with db_session_factory() as db:
+        used = (await db.execute(select(AIUsageEvent).where(AIUsageEvent.league_id == setup["league_id"]))).scalars().all()
+    assert used == []
 
 
 @pytest.mark.asyncio

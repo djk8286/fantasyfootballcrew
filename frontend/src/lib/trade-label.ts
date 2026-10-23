@@ -39,3 +39,44 @@ export function defaultComparePair(
   const b = teams.find((t) => t.id !== a)?.id ?? "";
   return [a, b];
 }
+
+export interface TradeAnswer {
+  team_id: string;
+  status: string;
+  details?: {
+    target_team_id?: string;
+    cpu_response?: "accepted" | "rejected";
+    recipient_response?: "accepted" | "declined";
+  };
+}
+
+/** The receiving team (human or CPU) said yes, so the commissioner can approve. */
+export function tradeAccepted(details?: Record<string, unknown>): boolean {
+  return details?.recipient_response === "accepted" || details?.cpu_response === "accepted";
+}
+
+/** What a pending trade is waiting on, and what this viewer can do about it. */
+export function pendingTradeView(
+  t: TradeAnswer,
+  myTeamIds: string[],
+  teamName: (id: string) => string | undefined,
+): { note: string | null; canRespond: boolean; canCancel: boolean } {
+  if (t.status !== "pending") return { note: null, canRespond: false, canCancel: false };
+  const target = t.details?.target_team_id || "";
+  const canCancel = myTeamIds.includes(t.team_id);
+  if (tradeAccepted(t.details)) {
+    const who = t.details?.cpu_response ? "" : `${teamName(target) || "They"} accepted. `;
+    return { note: `${who}Awaiting commissioner approval.`, canRespond: false, canCancel };
+  }
+  // Managing both sides is not consent. Your own Dual-Squad pair is
+  // accepted on propose, so it takes the branch above.
+  const canRespond = myTeamIds.includes(target) && !myTeamIds.includes(t.team_id);
+  const note = canRespond ? "Your answer is needed." : `Waiting on ${teamName(target) || "the other team"} to accept or decline.`;
+  return { note, canRespond, canCancel };
+}
+
+/** The team a new offer comes from. The one you picked if you still manage
+ *  it, else your first team. Covers 2-Man seats and both Dual-Squad squads. */
+export function pickFromTeam<T extends { id: string }>(myTeams: T[], fromTeamId: string): T | undefined {
+  return myTeams.find((t) => t.id === fromTeamId) ?? myTeams[0];
+}

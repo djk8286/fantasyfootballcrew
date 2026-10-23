@@ -570,14 +570,17 @@ async def update_league(
     current_user: User = Depends(get_current_user),
 ):
     """Update league settings (commissioner only)."""
-    # Lock the league row first (same lock create_team/bulk-add take), then
-    # count, so max_teams can't be lowered below a count that's changing
-    # underneath it. FOR UPDATE can't be combined with the GROUP BY count.
-    result = await db.execute(select(League).where(League.id == league_id).with_for_update())
+    result = await db.execute(select(League).where(League.id == league_id))
     league = result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
     require_commissioner(league, current_user)
+    # Only a commissioner takes the league lock (the one create_team and
+    # bulk-add take), then counts, so max_teams can't be lowered below a
+    # count that's changing underneath it. FOR UPDATE can't be combined
+    # with the GROUP BY count.
+    await db.execute(select(League.id).where(League.id == league.id).with_for_update())
+    await db.refresh(league)
     team_count = await db.scalar(select(func.count(Team.id)).where(Team.league_id == league.id))
 
     if update_data.name is not None:

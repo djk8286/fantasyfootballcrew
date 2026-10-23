@@ -26,7 +26,7 @@ from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 
 
-async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested):
+async def _make_trade(db_session_factory, league_id, proposer_id, target_id, offered, requested, accepted=True):
     """Directly inserts a PENDING trade Transaction (bypassing the propose
     endpoint -- not what's under test here)."""
     async with db_session_factory() as db:
@@ -37,6 +37,7 @@ async def _make_trade(db_session_factory, league_id, proposer_id, target_id, off
                 "target_team_id": target_id,
                 "offered_player_ids": offered,
                 "requested_player_ids": requested,
+                **({"recipient_response": "accepted"} if accepted else {}),
             },
         )
         db.add(trade)
@@ -121,7 +122,7 @@ async def test_cas_update_rejects_stale_version_instead_of_overwriting(seed):
 
 
 @pytest.mark.asyncio
-async def test_review_trade_endpoint_approve_happy_path(client, seed):
+async def test_review_trade_endpoint_approve_happy_path(client, seed, referee_token):
     """End-to-end sanity check through the real endpoint: approving a
     single pending trade actually swaps the rosters and bumps
     roster_version, exactly once."""
@@ -132,7 +133,7 @@ async def test_review_trade_endpoint_approve_happy_path(client, seed):
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
     assert r.status_code == 200
 
@@ -149,7 +150,7 @@ async def test_review_trade_endpoint_approve_happy_path(client, seed):
 
 
 @pytest.mark.asyncio
-async def test_review_trade_endpoint_rejects_already_reviewed_trade(client, seed):
+async def test_review_trade_endpoint_rejects_already_reviewed_trade(client, seed, referee_token):
     """A trade that's already been approved/denied can't be reviewed
     again -- confirms the endpoint's own guard, independent of the CAS
     layer underneath it."""
@@ -160,7 +161,7 @@ async def test_review_trade_endpoint_rejects_already_reviewed_trade(client, seed
 
     trade_id = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r1 = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_id}/review", json={"action": "approve"})
     assert r1.status_code == 200
 
@@ -169,7 +170,7 @@ async def test_review_trade_endpoint_rejects_already_reviewed_trade(client, seed
 
 
 @pytest.mark.asyncio
-async def test_sequential_trades_on_the_same_team_both_succeed(client, seed):
+async def test_sequential_trades_on_the_same_team_both_succeed(client, seed, referee_token):
     """Two trades on the same team, reviewed one after another (no actual
     race -- each request reads fresh state), should both apply cleanly,
     each bumping roster_version by 1. Confirms the CAS isn't over-strict
@@ -182,7 +183,7 @@ async def test_sequential_trades_on_the_same_team_both_succeed(client, seed):
     trade_ab = await _make_trade(db_session_factory, league_id, team_a, team_b, [a0], [b0])
     trade_ac = await _make_trade(db_session_factory, league_id, team_a, team_c, [a1], [c0])
 
-    client.headers["Authorization"] = f"Bearer {seed['token']}"
+    client.headers["Authorization"] = f"Bearer {referee_token}"
     r1 = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_ab}/review", json={"action": "approve"})
     r2 = await client.post(f"/leagues/{league_id}/commissioner/trades/{trade_ac}/review", json={"action": "approve"})
 

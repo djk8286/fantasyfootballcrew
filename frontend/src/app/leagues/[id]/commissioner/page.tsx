@@ -39,6 +39,7 @@ import type { AdminLeague, AdminTeam } from "@/components/commissioner/types";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { Card, CardHeader } from "@/components/ui/Card";
 import CoachStaffPanel from "@/components/CoachStaffPanel";
+import { tradeAccepted } from "@/lib/trade-label";
 
 // Explicit "AI-generated" labeling on every real LLM output (digest,
 // trade review, drafted messages, chat replies) -- distinct from the
@@ -882,7 +883,7 @@ function TradesPanel({
                 </div>
                 {trade.status === "pending" && (
                   <div className="flex items-center gap-2">
-                    {aiEnabled && (
+                    {aiEnabled && tradeAccepted(trade.details) && (
                       <button
                         onClick={() => handleAnalyze(trade.id)}
                         disabled={analyzing === trade.id}
@@ -896,18 +897,24 @@ function TradesPanel({
                         {trade.details?.ai_review ? "Re-analyze" : "Analyze with AI"}
                       </button>
                     )}
-                    <button
-                      onClick={() => handleReview(trade.id, "approve")}
-                      disabled={processing === trade.id}
-                      className="inline-flex items-center gap-1 bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
-                    >
-                      {processing === trade.id ? (
-                        <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="w-3 h-3" />
-                      )}
-                      Approve
-                    </button>
+                    {tradeAccepted(trade.details) ? (
+                      <button
+                        onClick={() => handleReview(trade.id, "approve")}
+                        disabled={processing === trade.id}
+                        className="inline-flex items-center gap-1 bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                      >
+                        {processing === trade.id ? (
+                          <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3 h-3" />
+                        )}
+                        Approve
+                      </button>
+                    ) : (
+                      <span className="text-xs text-surface-400">
+                        Waiting on {teamMap[String(trade.details?.target_team_id)] || "the other team"}
+                      </span>
+                    )}
                     <button
                       onClick={() => handleReview(trade.id, "deny")}
                       disabled={processing === trade.id}
