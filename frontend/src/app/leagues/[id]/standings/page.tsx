@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { standingsApi, leaguesApi, teamsApi, nflApi, isCurrentUser, claimedTeamIds, getCurrentUserId } from "@/lib/api-client";
@@ -9,6 +9,9 @@ import Avatar from "@/components/Avatar";
 import { conferenceFullLabel, EliminatedBadge } from "@/components/LeagueBadges";
 import RankBadge from "@/components/ui/RankBadge";
 import GameStatusBadge from "@/components/GameStatusBadge";
+import FreshnessChip from "@/components/ffc/FreshnessChip";
+import { GuillotineBody, GuillotineHeader } from "@/components/ffc/GuillotineSkin";
+import { useGuillotineData } from "@/components/ffc/useGuillotineData";
 import {
   Trophy,
   Users,
@@ -304,6 +307,21 @@ export default function StandingsPage() {
       })
       .catch(() => setCombinedStandings([]));
   }, [leagueId, league?.league_type]);
+
+  const isGuillotine = league?.league_type === "guillotine";
+  const seasonPoints = useMemo(() => new Map(standings.map((t) => [t.id, t.points_for])), [standings]);
+  const guillotine = useGuillotineData(leagueId, isGuillotine && !loading, seasonPoints);
+
+  // The chip's Refresh/Retry: reload in place, no full-page spinner.
+  const refreshInPlace = useCallback(async () => {
+    const [newStandings, newWeekly] = await Promise.all([
+      loadStandings(),
+      standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR),
+    ]);
+    setStandings(newStandings);
+    // New standings rebuild seasonPoints, which reloads the guillotine data.
+    setWeeklyData(newWeekly as WeeklyScoresResponse);
+  }, [loadStandings, leagueId, selectedWeek]);
 
   // ─── Actions ────────────────────────────────────────────
 
@@ -623,9 +641,50 @@ export default function StandingsPage() {
   const myStanding = sortedStandings.find(isMyTeam);
   const myTeamEliminated = league?.league_type === "guillotine" && myStanding?.eliminated_week != null;
 
+  const skin = isGuillotine ? guillotine.data : null;
+  if (isGuillotine && !skin && !guillotine.error) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+          <span className="text-surface-400">Loading standings...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const weekSelect = (
+    <div className="relative">
+      <select
+        aria-label="Select week"
+        value={selectedWeek}
+        onChange={(e) => setSelectedWeek(Number(e.target.value))}
+        className="appearance-none bg-surface-800 border border-surface-600 text-white rounded-lg pl-4 pr-10 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400/50 cursor-pointer"
+      >
+        {Array.from({ length: maxWeek + 4 }, (_, i) => i + 1).map(
+          (wk) => (
+            <option key={wk} value={wk}>
+              Week {wk}
+            </option>
+          )
+        )}
+      </select>
+      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400 pointer-events-none" />
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-surface-900">
-      {/* Header */}
+      {skin ? (
+        <div className="bg-ffc-bg pb-2">
+          <GuillotineHeader
+            s={skin.state}
+            leagueName={league?.name ?? "Standings"}
+            chip={<FreshnessChip sources={["sleeper"]} live={skin.live} onRefresh={refreshInPlace} />}
+          />
+          <GuillotineBody s={skin.state} finaleWeeks={skin.finaleWeeks} />
+        </div>
+      ) : (
       <section className="relative overflow-hidden border-b border-surface-700">
         <div className="absolute inset-0 bg-gradient-to-b from-surface-850 via-surface-900 to-surface-900" />
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gold-400/5 rounded-full blur-3xl" />
@@ -647,24 +706,8 @@ export default function StandingsPage() {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Week selector */}
-              <div className="relative">
-                <select
-                  aria-label="Select week"
-                  value={selectedWeek}
-                  onChange={(e) => setSelectedWeek(Number(e.target.value))}
-                  className="appearance-none bg-surface-800 border border-surface-600 text-white rounded-lg pl-4 pr-10 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400/50 cursor-pointer"
-                >
-                  {Array.from({ length: maxWeek + 4 }, (_, i) => i + 1).map(
-                    (wk) => (
-                      <option key={wk} value={wk}>
-                        Week {wk}
-                      </option>
-                    )
-                  )}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400 pointer-events-none" />
-              </div>
+              <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} className="hidden sm:inline-flex" />
+              {weekSelect}
 
               <button
                 onClick={handleRefresh}
@@ -675,8 +718,10 @@ export default function StandingsPage() {
               </button>
             </div>
           </div>
+          <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} className="mt-4 sm:hidden" />
         </div>
       </section>
+      )}
 
       {/* Calculate week scores (commissioner only) */}
       {isLeagueManager && (
@@ -735,7 +780,7 @@ export default function StandingsPage() {
                 tables show conference-relative rank, matching how real
                 conference standings read. */}
             <div className="xl:col-span-3 space-y-6">
-              {league?.league_type === "conference" ? (
+              {skin ? null : league?.league_type === "conference" ? (
                 <>
                   {renderStandingsTable(
                     sortedStandings.filter((t) => t.conference === "A"),
@@ -797,6 +842,7 @@ export default function StandingsPage() {
                     <h2 className="text-sm font-bold text-white">
                       Week {selectedWeek} Matchups
                     </h2>
+                    {skin && <div className="ml-auto">{weekSelect}</div>}
                   </div>
                   <p className="text-surface-500 text-xs mt-1">
                     {weeklyData?.matchups?.length || 0} matchup

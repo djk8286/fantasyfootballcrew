@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../styles/ffc-tokens.css";
 
 /* Black + Gold Theme for FantasyFootballCrew */
 @theme {
@@ -85,6 +86,44 @@
   --radius-chip: 4px;
 }
 
+/* Guillotine skin utilities (bg-ffc-surface, text-ffc-cut-text,
+   font-ffc-display, ...). Namespaced so the gold/surface/ink scales and
+   --color-live/--color-warn above keep their meaning. */
+@theme inline {
+  --color-ffc-bg: var(--ffc-bg);
+  --color-ffc-surface: var(--ffc-surface);
+  --color-ffc-raised: var(--ffc-raised);
+  --color-ffc-border: var(--ffc-border);
+  --color-ffc-border-strong: var(--ffc-border-strong);
+  --color-ffc-text: var(--ffc-text);
+  --color-ffc-text-muted: var(--ffc-text-muted);
+  --color-ffc-text-faded: var(--ffc-text-faded);
+  --color-ffc-cut: var(--ffc-cut);
+  --color-ffc-cut-text: var(--ffc-cut-text);
+  --color-ffc-live: var(--ffc-live);
+  --color-ffc-warn: var(--ffc-warn);
+  --color-ffc-error: var(--ffc-error);
+  --color-ffc-focus: var(--ffc-focus);
+  --color-ffc-finale: var(--ffc-finale);
+  --color-ffc-crest-faded: var(--ffc-crest-faded);
+
+  --font-ffc-display: var(--ffc-font-display);
+  --font-ffc-ui: var(--ffc-font-ui);
+  --font-ffc-mono: var(--ffc-font-mono);
+}
+
+@keyframes ffc-pulse {
+  from { transform: scale(1); opacity: var(--ffc-motion-pulse-opacity-from); }
+  to { transform: scale(var(--ffc-motion-pulse-scale-to)); opacity: 0; }
+}
+@keyframes ffc-spin { to { transform: rotate(360deg); } }
+.ffc-halo-pulse { animation: ffc-pulse var(--ffc-motion-pulse-duration) var(--ffc-motion-pulse-easing) infinite; }
+.ffc-spin { animation: ffc-spin var(--ffc-motion-spin-duration) linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .ffc-halo-pulse, .ffc-spin { animation: none !important; }
+  .ffc-halo-pulse { display: none; }
+}
+
 /* Every score, total and record renders through this so columns line up. */
 @utility num {
   font-family: var(--font-mono);
@@ -145,3 +184,19 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-gold-400);
 }
+
+@keyframes ffc-shine {
+  from { transform: translateX(-100%) rotate(var(--ffc-motion-champion-shine-angle)); }
+  to { transform: translateX(400%) rotate(var(--ffc-motion-champion-shine-angle)); }
+}
+.ffc-shine {
+  position: absolute; inset: -50% auto -50% 0; width: var(--ffc-motion-champion-shine-band);
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ffc-champion-shine-peak), transparent);
+  animation: ffc-shine var(--ffc-motion-champion-shine-duration) var(--ffc-motion-champion-shine-easing)
+    var(--ffc-motion-champion-shine-delay) 1 both;
+}
+@media (prefers-reduced-motion: reduce) { .ffc-shine { display: none; } }
+
+.ffc-chip { transition: background-color 160ms ease, border-color 160ms ease; }
+@media (prefers-reduced-motion: reduce) { .ffc-chip { transition: none; } }

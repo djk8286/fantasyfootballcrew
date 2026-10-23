@@ -2,6 +2,7 @@
 // so the HttpOnly auth cookies are first-party. (NEXT_PUBLIC_API_URL is no
 // longer used for API calls; it only feeds the CSP in next.config.ts.)
 import { getCurrentNflState } from "./current-week";
+import type { SyncStatus } from "./freshness";
 
 const API_BASE_URL = "";
 
@@ -742,6 +743,8 @@ export const nflApi = {
     if (!s) throw new Error("Couldn't load the current NFL week");
     return s as { season: number; week: number; season_type: string };
   },
+  /** When the Sleeper stats and ESPN scoreboard syncs last ran. Public. */
+  getSyncStatus: () => apiRequest<SyncStatus>("/api/v1/nfl/sync-status"),
 };
 
 // AI

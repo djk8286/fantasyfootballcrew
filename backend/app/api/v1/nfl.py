@@ -14,7 +14,10 @@ Monday night game), which is exactly the "we know what week we're in"
 behavior a calendar-date heuristic could never get right on its own.
 """
 import time
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.services.job_run_service import get_sync_status
 from app.services.scheduler import fetch_nfl_state
 
 router = APIRouter(prefix="/nfl", tags=["nfl"])
@@ -50,3 +53,10 @@ async def current_nfl_week() -> dict:
         }
         _state_cache_at = now
     return _state_cache
+
+
+@router.get("/sync-status")
+async def sync_status(db: AsyncSession = Depends(get_db)):
+    """When the Sleeper stats and ESPN scoreboard syncs last succeeded,
+    for the freshness chip. Site-wide, no league data."""
+    return await get_sync_status(db)
