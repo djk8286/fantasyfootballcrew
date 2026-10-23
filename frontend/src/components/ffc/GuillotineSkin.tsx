@@ -488,12 +488,22 @@ function ChampionBanner({ s }: { s: GuillotineState }) {
   const finaleWeeks = s.finale!.weeks;
   const lastWeek = finaleWeeks[finaleWeeks.length - 1] ?? s.week;
   const wonOutright = c.series.wins > c.series.losses;
+  // The last cut came in week 18, so no finale games were played and
+  // season points decided it. A 0-0 series would read as a tie-break.
+  const noFinale = s.finale!.seriesPlayed === 0;
   const range = finaleWeeks.length ? `${finaleWeeks[0]}–${lastWeek}` : `${lastWeek}`;
-  const stats: [string, string][] = [
-    ["SERIES", seriesText(c.series)],
-    ["FINALE PTS", fmt1(c.series.points)],
-    ["SEASON PTS", fmt1(c.team.points_for)],
-  ];
+  const stats: [string, string][] = noFinale
+    ? [["SEASON PTS", fmt1(c.team.points_for)]]
+    : [
+        ["SERIES", seriesText(c.series)],
+        ["FINALE PTS", fmt1(c.series.points)],
+        ["SEASON PTS", fmt1(c.team.points_for)],
+      ];
+  const subline = noFinale
+    ? "Won on season points"
+    : wonOutright
+      ? `Won the finale series ${seriesText(c.series)}`
+      : `Series ${seriesText(c.series)}, won on the tie-break`;
   return (
     <section
       aria-label="Champion, season final"
@@ -525,7 +535,7 @@ function ChampionBanner({ s }: { s: GuillotineState }) {
                 <div className="font-ffc-ui text-xs text-ffc-text-muted min-[960px]:text-sm">
                   <span className="min-[960px]:hidden">1st of {s.totalTeams}</span>
                   <span className="hidden min-[960px]:inline">
-                    {wonOutright ? `Won the finale series ${seriesText(c.series)}` : `Series ${seriesText(c.series)}, won on the tie-break`}
+                    {subline}
                   </span>
                 </div>
               </div>
@@ -540,7 +550,7 @@ function ChampionBanner({ s }: { s: GuillotineState }) {
             ))}
           </dl>
         </div>
-        <dl className="mt-3 grid grid-cols-3 border-t pt-3 min-[960px]:hidden" style={{ borderColor: "rgba(255,216,115,0.25)" }}>
+        <dl className={`mt-3 grid ${noFinale ? "grid-cols-1" : "grid-cols-3"} border-t pt-3 min-[960px]:hidden`} style={{ borderColor: "rgba(255,216,115,0.25)" }}>
           {stats.map(([k, v]) => (
             <div key={k} className="text-center">
               <dt className={label}>{k}</dt>
@@ -549,8 +559,8 @@ function ChampionBanner({ s }: { s: GuillotineState }) {
           ))}
         </dl>
         <div className="mt-3 flex items-center justify-between border-t pt-3 font-ffc-ui text-xs text-ffc-text-muted min-[960px]:mt-5 min-[960px]:text-[13px]" style={{ borderColor: "rgba(255,216,115,0.25)" }}>
-          <span className="w-full text-center min-[960px]:hidden">Season complete · finale weeks {range}</span>
-          <span className="hidden min-[960px]:inline">Season complete · 1st of {s.totalTeams} · finale series weeks {range}</span>
+          <span className="w-full text-center min-[960px]:hidden">{noFinale ? "Season complete" : `Season complete · finale weeks ${range}`}</span>
+          <span className="hidden min-[960px]:inline">Season complete · 1st of {s.totalTeams}{noFinale ? "" : ` · finale series weeks ${range}`}</span>
           <a href="#final-standings" className="hidden font-semibold text-ffc-finale hover:underline min-[960px]:inline">Final standings</a>
         </div>
       </div>
@@ -560,8 +570,10 @@ function ChampionBanner({ s }: { s: GuillotineState }) {
 
 function RunnerUp({ s }: { s: GuillotineState }) {
   const r = s.finale!.finalists[1];
+  const noFinale = s.finale!.seriesPlayed === 0;
+  const spoken = noFinale ? `${r.team.name}, ${fmt1(r.team.points_for)} season points` : finalistLabel(r, s.phase);
   return (
-    <section aria-label={`Runner-up, ${r.team.name}, 2nd, ${finalistLabel(r, s.phase)}`} className="mt-3 flex h-16 items-center gap-2.5 rounded-xl border border-ffc-border bg-ffc-surface px-3.5 min-[960px]:mt-4 min-[960px]:h-[72px] min-[960px]:gap-3 min-[960px]:px-6">
+    <section aria-label={`Runner-up, ${r.team.name}, 2nd, ${spoken}`} className="mt-3 flex h-16 items-center gap-2.5 rounded-xl border border-ffc-border bg-ffc-surface px-3.5 min-[960px]:mt-4 min-[960px]:h-[72px] min-[960px]:gap-3 min-[960px]:px-6">
       <span className={`w-5 shrink-0 ${mono} text-sm text-ffc-text-muted min-[960px]:w-10 min-[960px]:text-[15px]`}>
         <span className="min-[960px]:hidden">2</span><span className="hidden min-[960px]:inline">2nd</span>
       </span>
@@ -575,13 +587,25 @@ function RunnerUp({ s }: { s: GuillotineState }) {
         <span className="mt-0.5 inline-flex min-[960px]:hidden"><Tag kind="runnerup" compact>RUNNER-UP</Tag></span>
       </div>
       <div className={`shrink-0 text-right ${mono} text-ffc-text-muted`}>
-        <span className="hidden text-[15px] min-[960px]:inline">
-          {seriesText(r.series)} series · {fmt1(r.series.points)} finale pts · {fmt1(r.team.points_for)} season
-        </span>
-        <span className="min-[960px]:hidden">
-          <span className="block text-base font-semibold">{seriesText(r.series)}</span>
-          <span className="block text-[11px]">{fmt1(r.series.points)} finale pts</span>
-        </span>
+        {noFinale ? (
+          <>
+            <span className="hidden text-[15px] min-[960px]:inline">{fmt1(r.team.points_for)} season pts</span>
+            <span className="min-[960px]:hidden">
+              <span className="block text-base font-semibold">{fmt1(r.team.points_for)}</span>
+              <span className="block text-[11px]">season pts</span>
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="hidden text-[15px] min-[960px]:inline">
+              {seriesText(r.series)} series · {fmt1(r.series.points)} finale pts · {fmt1(r.team.points_for)} season
+            </span>
+            <span className="min-[960px]:hidden">
+              <span className="block text-base font-semibold">{seriesText(r.series)}</span>
+              <span className="block text-[11px]">{fmt1(r.series.points)} finale pts</span>
+            </span>
+          </>
+        )}
       </div>
     </section>
   );

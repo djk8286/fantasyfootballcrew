@@ -71,6 +71,29 @@ def test_weeks_where_finalists_did_not_meet_are_not_in_the_series():
     assert {f["team_id"]: f["wins"] for f in p["finalists"]} == {"a": 1, "b": 1}
 
 
+def test_last_cut_in_week_18_crowns_on_season_points_with_no_finale_games():
+    # Two teams left after the week-18 cut: no finale weeks remain, so the
+    # season is final and season points decide it.
+    teams = [_t("a", order=0), _t("b", order=1), _t("c", cut=18, order=2), _t("d", cut=1, order=3)]
+    scores = _weeks({1: {"a": 90, "b": 80, "c": 70, "d": 10}, 18: {"a": 90, "b": 100, "c": 20}})
+    p = guillotine_placement(teams, scores, {"a": 1500, "b": 1600, "c": 900, "d": 10})
+    assert p["phase"] == "final"
+    assert p["finale_weeks"] == []
+    assert p["champion_team_id"] == "b"
+    assert p["runner_up_team_id"] == "a"
+    assert all((f["wins"], f["losses"], f["ties"], f["points"]) == (0, 0, 0, 0) for f in p["finalists"])
+    assert p["places"] == {"b": 1, "a": 2, "c": 3, "d": 4}
+
+
+def test_three_alive_after_week_18_stays_undecided():
+    teams = [_t("a"), _t("b"), _t("c"), _t("d", cut=17)]
+    scores = _weeks({17: {"a": 90, "b": 80, "c": 70, "d": 10}, 18: {"a": 90, "b": 100, "c": 20}})
+    p = guillotine_placement(teams, scores, {"a": 1500, "b": 1600, "c": 900, "d": 10})
+    assert p["phase"] == "elimination"
+    assert p["champion_team_id"] is None
+    assert p["places"] == {"a": None, "b": None, "c": None, "d": 4}
+
+
 def test_before_the_finale_alive_teams_keep_standings_order():
     teams = [_t("a"), _t("b"), _t("c"), _t("d", cut=1)]
     p = guillotine_placement(teams, _weeks({1: {"a": 1, "b": 2, "c": 3, "d": 0}}), {})

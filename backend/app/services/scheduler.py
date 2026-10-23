@@ -53,6 +53,7 @@ from app.core.config import settings
 from app.services import top_performers_service, team_recap_service, nfl_schedule_service, nfl_projections_service, team_news_service, espn_news_service
 from app.services.ai_service import AIService
 from app.services.job_run_service import run_job, prune_job_runs
+from app.services.nfl_state import record_nfl_state
 from app.models.weekly_scores_recap import WeeklyScoresRecap
 from app.models.weekly_top_players_summary import WeeklyTopPlayersSummary
 from app.models.team import Team
@@ -79,7 +80,10 @@ async def fetch_nfl_state() -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{SLEEPER_API}/state/nfl", timeout=15)
         response.raise_for_status()
-        return response.json()
+        state = response.json()
+    # Kept for GET /nfl/sync-status, so that public route never calls Sleeper.
+    record_nfl_state(state)
+    return state
 
 
 async def _sync_stats_once() -> tuple[int, int] | None:

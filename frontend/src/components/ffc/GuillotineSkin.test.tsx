@@ -74,4 +74,52 @@ describe("GuillotineSkin", () => {
     expect(html).toContain("finale series weeks 11–17");
     expect(html).toContain("then season points");
   });
+
+  it("a week-18 last cut with no finale games reads won on season points", () => {
+    const teams = [team("cd", 2151.7), team("ww", 2126.4), team("bb", 1010.5, 18), team("tt", 902.6, 9)];
+    const s = deriveGuillotine({
+      week: 18, teams, games: [final], scores: [],
+      summary: {
+        phase: "final", champion_team_id: "cd", runner_up_team_id: "ww",
+        finalists: [
+          { team_id: "cd", wins: 0, losses: 0, ties: 0, points: 0 },
+          { team_id: "ww", wins: 0, losses: 0, ties: 0, points: 0 },
+        ],
+        finale_weeks: [],
+        places: { cd: 1, ww: 2, bb: 3, tt: 4 },
+      },
+    });
+    const html = render(s);
+    expect(html).toContain("CHAMPION · SEASON FINAL");
+    expect(html).toContain("Won on season points");
+    expect(html).not.toContain("tie-break</span>");
+    expect(html).not.toMatch(/Series 0.0/);
+    expect(html).not.toContain(">SERIES<");
+    expect(html).not.toContain(">FINALE PTS<");
+    expect(html).not.toContain("finale series weeks");
+    expect(html).not.toContain("finale weeks 18");
+    expect(html).toContain(">SEASON PTS<");
+    expect(html).toContain("2126.4 season pts");
+    expect(html).toContain("Runner-up, WW, 2nd, WW, 2126.4 season points");
+  });
+
+  it("a series tied after real finale games still says won on the tie-break", () => {
+    const teams = [team("cd", 2151.7), team("ww", 2126.4), team("bb", 1010.5, 10), team("tt", 902.6, 9)];
+    const s = deriveGuillotine({
+      week: 18, teams, games: [final], scores: [],
+      summary: {
+        phase: "final", champion_team_id: "cd", runner_up_team_id: "ww",
+        finalists: [
+          { team_id: "cd", wins: 4, losses: 4, ties: 0, points: 900 },
+          { team_id: "ww", wins: 4, losses: 4, ties: 0, points: 880 },
+        ],
+        finale_weeks: [11, 12, 13, 14, 15, 16, 17, 18],
+        places: { cd: 1, ww: 2, bb: 3, tt: 4 },
+      },
+    });
+    const html = render(s);
+    expect(html).toContain("Series 4–4, won on the tie-break");
+    expect(html).toContain(">SERIES<");
+    expect(html).not.toContain("Won on season points");
+  });
 });

@@ -32,6 +32,7 @@ export default function FreshnessChip({
   onRefresh,
   live = false,
   dataAt,
+  failed = false,
   className = "",
 }: {
   sources: SyncSource[];
@@ -42,6 +43,8 @@ export default function FreshnessChip({
   /** When the page last loaded its data (Date.now() ms). Defaults to when
    * the chip mounted, then to its last successful refresh. */
   dataAt?: number;
+  /** The page's own last reload failed (it kept the old data). */
+  failed?: boolean;
   className?: string;
 }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
@@ -92,7 +95,7 @@ export default function FreshnessChip({
 
   const state = chipState({
     now, status, sources, syncing, skewMs,
-    clientFailed: pollFailed || refreshFailed,
+    clientFailed: failed || pollFailed || refreshFailed,
     dataAt: dataAt ?? loadedAt,
   });
 

@@ -12,7 +12,13 @@ import GameStatusBadge from "@/components/GameStatusBadge";
 import FreshnessChip from "@/components/ffc/FreshnessChip";
 import { GuillotineBody, GuillotineHeader } from "@/components/ffc/GuillotineSkin";
 import { useGuillotineData } from "@/components/ffc/useGuillotineData";
-import type { GSummary } from "@/lib/guillotine";
+import {
+  applyStandingsLoad,
+  EMPTY_SNAPSHOT,
+  fetchStandings,
+  type LoadedStandings,
+  type StandingsSnapshot,
+} from "@/lib/standingsSnapshot";
 import {
   Trophy,
   Users,
@@ -141,14 +147,6 @@ interface LeagueData {
   conference_b_name?: string | null;
 }
 
-interface LoadedStandings {
-  rows: Standing[];
-  /** GUILLOTINE leagues only; null otherwise or when the load failed. */
-  guillotine: GSummary | null;
-  /** Date.now() when the load started. */
-  at: number;
-}
-
 // ─── Helpers ──────────────────────────────────────────────────
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -161,9 +159,8 @@ export default function StandingsPage() {
   const leagueId = params.id as string;
 
   const [league, setLeague] = useState<LeagueData | null>(null);
-  const [standings, setStandings] = useState<Standing[]>([]);
-  const [gSummary, setGSummary] = useState<GSummary | null>(null);
-  const [dataAt, setDataAt] = useState<number | undefined>(undefined);
+  const [snap, setSnap] = useState<StandingsSnapshot<Standing>>(EMPTY_SNAPSHOT);
+  const { rows: standings, guillotine: gSummary, at: dataAt, refreshFailed } = snap;
   const [combinedStandings, setCombinedStandings] = useState<CombinedStanding[]>([]);
   const [weeklyData, setWeeklyData] = useState<WeeklyScoresResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -229,19 +226,14 @@ export default function StandingsPage() {
   // (owner_id, is_cpu, avatar_url) -- that's why teams is fetched
   // separately and merged in here. Shared by the initial load and both
   // refresh paths below so the fix (and the merge) lives in one place.
-  const loadStandings = useCallback(async (): Promise<LoadedStandings> => {
-    const at = Date.now();
-    const [teamsData, standingsResponse] = await Promise.all([
-      teamsApi.getByLeague(leagueId).catch(() => [] as RawTeam[]),
-      standingsApi.getStandings(leagueId).catch(() => null),
-    ]);
-    const teams = Array.isArray(teamsData) ? (teamsData as RawTeam[]) : [];
+  // Rejects when either request fails, so a failed reload never swaps
+  // the table for an empty one.
+  const loadStandings = useCallback(async (): Promise<LoadedStandings<Standing>> => {
+    const { teams, entries: rawStandings, guillotine, at } = await fetchStandings<RawTeam, RawStandingEntry>(
+      { getTeams: (id) => teamsApi.getByLeague(id), getStandings: (id) => standingsApi.getStandings(id) },
+      leagueId,
+    );
     const teamById = new Map(teams.map((t) => [t.id, t]));
-    const rawStandings: RawStandingEntry[] = Array.isArray((standingsResponse as { standings?: unknown } | null)?.standings)
-      ? (standingsResponse as { standings: RawStandingEntry[] }).standings
-      : [];
-
-    const guillotine = (standingsResponse as { guillotine?: GSummary | null } | null)?.guillotine ?? null;
     const rows = rawStandings.map((s) => {
       const team = teamById.get(s.team_id);
       return {
@@ -266,11 +258,11 @@ export default function StandingsPage() {
 
   // Standings rows, the Guillotine summary and the load time always move
   // together, so the skin never mixes one load's order with another's.
-  const applyStandings = useCallback((res: LoadedStandings) => {
-    setStandings(res.rows);
-    setGSummary(res.guillotine);
-    setDataAt(res.at);
-  }, []);
+  const applyStandings = useCallback(
+    (res: LoadedStandings<Standing> | null, othersFailed = false) =>
+      setSnap((prev) => applyStandingsLoad(prev, res, othersFailed)),
+    [],
+  );
 
   useEffect(() => {
     if (!leagueId) return;
@@ -335,14 +327,17 @@ export default function StandingsPage() {
   const guillotine = useGuillotineData(leagueId, isGuillotine && !loading, seasonPoints, gSummary);
 
   // The chip's Refresh: reload in place, no full-page spinner.
+  // A failure keeps the rows and load time on screen, marks the chip
+  // failed, and rejects so the chip's own Refresh knows too.
   const refreshInPlace = useCallback(async () => {
-    const [newStandings, newWeekly] = await Promise.all([
+    const [st, wk] = await Promise.allSettled([
       loadStandings(),
       standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR),
     ]);
-    applyStandings(newStandings);
     // New standings rebuild seasonPoints, which reloads the guillotine data.
-    setWeeklyData(newWeekly as WeeklyScoresResponse);
+    applyStandings(st.status === "fulfilled" ? st.value : null, wk.status === "rejected");
+    if (wk.status === "fulfilled") setWeeklyData(wk.value as WeeklyScoresResponse);
+    if (st.status === "rejected" || wk.status === "rejected") throw new Error("Refresh failed");
   }, [loadStandings, applyStandings, leagueId, selectedWeek]);
 
   const retryGuillotine = async () => {
@@ -357,12 +352,11 @@ export default function StandingsPage() {
     setCalculating(true);
     setCalcMessage("");
     try {
-      const result = await standingsApi.calculateWeek(leagueId, selectedWeek, CURRENT_YEAR);
+      await standingsApi.calculateWeek(leagueId, selectedWeek, CURRENT_YEAR);
       setCalcMessage(`Week ${selectedWeek} scores calculated successfully!`);
-      // Refresh standings and weekly data
-      applyStandings(await loadStandings());
-      const newWeekly = await standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR);
-      setWeeklyData(newWeekly as WeeklyScoresResponse);
+      // Refresh standings and weekly data. A failed reload keeps the old
+      // rows and shows on the chip; the scores did calculate.
+      await refreshInPlace().catch(() => {});
       // Clear message after 3 seconds
       setTimeout(() => setCalcMessage(""), 3000);
     } catch (err) {
@@ -381,15 +375,12 @@ export default function StandingsPage() {
     // handleCalculate (below) already refreshed both; this now matches it.
     setLoading(true);
     try {
-      const [newStandings, newWeekly] = await Promise.all([
-        loadStandings(),
-        standingsApi.getWeeklyScores(leagueId, selectedWeek, CURRENT_YEAR).catch(() => null),
-      ]);
-      applyStandings(newStandings);
-      if (newWeekly) setWeeklyData(newWeekly as WeeklyScoresResponse);
+      // A failure keeps the old rows and shows on the chip, rather than
+      // replacing the page with an error.
+      await refreshInPlace();
       setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh");
+    } catch {
+      // refreshInPlace already marked the snapshot failed.
     }
     setLoading(false);
   };
@@ -709,7 +700,7 @@ export default function StandingsPage() {
           <GuillotineHeader
             s={skin.state}
             leagueName={league?.name ?? "Standings"}
-            chip={<FreshnessChip sources={["sleeper"]} live={skin.live} onRefresh={refreshInPlace} dataAt={dataAt} />}
+            chip={<FreshnessChip sources={["sleeper"]} live={skin.live} onRefresh={refreshInPlace} dataAt={dataAt} failed={refreshFailed} />}
           />
           <GuillotineBody s={skin.state} />
         </div>
@@ -735,7 +726,7 @@ export default function StandingsPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} dataAt={dataAt} />
+              <FreshnessChip sources={["sleeper"]} onRefresh={refreshInPlace} dataAt={dataAt} failed={refreshFailed} />
               {weekSelect}
 
               <button

@@ -15,13 +15,16 @@ behavior a calendar-date heuristic could never get right on its own.
 """
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.services.job_run_service import get_sync_status
+from app.core.limiter import limiter
+from app.services.nfl_state import latest_season_type
 from app.services.scheduler import fetch_nfl_state
 
 router = APIRouter(prefix="/nfl", tags=["nfl"])
@@ -68,34 +71,49 @@ class SourceStatus(BaseModel):
 class SyncStatus(BaseModel):
     generated_at: str
     # Sleeper's season_type ("pre" | "regular" | "post" | "off"), or None
-    # when Sleeper's state can't be read. The syncs only pull stats in
-    # the regular season, so the chip hides itself outside it.
+    # when the scheduler hasn't read a known value in the last 30 minutes.
+    # The syncs only pull stats in the regular season, so the chip hides
+    # itself outside it.
     season_type: Optional[str] = None
     sources: Dict[str, SourceStatus]
 
 
 SYNC_STATUS_TTL = 30.0  # seconds; the chip polls every 60s per open tab
-_sync_cache: dict | None = None
+# Only the job_runs read is cached. generated_at is stamped per response,
+# so the chip's clock-skew math never sees a 30s-old server time, and
+# season_type is read from memory per response.
+_sync_cache: dict | None = None  # {source: SourceStatus dict}
 _sync_cache_at: float = 0.0
+_sync_lock = asyncio.Lock()
 
 
 def reset_sync_status_cache() -> None:
-    global _sync_cache, _sync_cache_at
+    global _sync_cache, _sync_cache_at, _sync_lock
     _sync_cache, _sync_cache_at = None, 0.0
+    _sync_lock = asyncio.Lock()
+
+
+async def _cached_sources(db: AsyncSession) -> dict:
+    global _sync_cache, _sync_cache_at
+    if _sync_cache is not None and time.monotonic() - _sync_cache_at <= SYNC_STATUS_TTL:
+        return _sync_cache
+    # One reader refills an expired cache; requests that queue behind it
+    # get the fresh copy instead of each running the query.
+    async with _sync_lock:
+        if _sync_cache is None or time.monotonic() - _sync_cache_at > SYNC_STATUS_TTL:
+            _sync_cache = (await get_sync_status(db))["sources"]
+            _sync_cache_at = time.monotonic()
+        return _sync_cache
 
 
 @router.get("/sync-status", response_model=SyncStatus)
-async def sync_status(db: AsyncSession = Depends(get_db)):
+@limiter.limit("120/minute")
+async def sync_status(request: Request, db: AsyncSession = Depends(get_db)):
     """When the Sleeper stats and ESPN scoreboard syncs last succeeded,
-    for the freshness chip. Site-wide, no league data. Cached for 30s."""
-    global _sync_cache, _sync_cache_at
-    now = time.monotonic()
-    if _sync_cache is None or (now - _sync_cache_at) > SYNC_STATUS_TTL:
-        body = await get_sync_status(db)
-        try:
-            state = await asyncio.wait_for(current_nfl_week(), timeout=3)
-            body["season_type"] = state.get("season_type")
-        except Exception:
-            body["season_type"] = None
-        _sync_cache, _sync_cache_at = body, now
-    return _sync_cache
+    for the freshness chip. Site-wide, no league data, and no outbound
+    call: season_type is whatever the scheduler last saw from Sleeper."""
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "season_type": latest_season_type(),
+        "sources": await _cached_sources(db),
+    }
