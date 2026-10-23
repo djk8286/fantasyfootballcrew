@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { resolveProxyTarget } from "@/lib/proxy-target";
+import { onVercel, resolveProxyTarget, type ProxyEnv } from "@/lib/proxy-target";
 
 /**
  * First-party API proxy: the browser calls same-origin /api/* on
@@ -17,9 +17,11 @@ import { resolveProxyTarget } from "@/lib/proxy-target";
  */
 let warnedLocal = false;
 
-function visitorIp(request: NextRequest): string | null {
-  // On Vercel these are set by Vercel's edge from the TCP peer (client-sent
-  // values are overwritten), so they're trustworthy here -- unlike at Railway.
+function visitorIp(request: NextRequest, env: ProxyEnv): string | null {
+  // Only Vercel's edge sets these from the TCP peer (client-sent values are
+  // overwritten). Anywhere else a caller can type any IP into them, and
+  // Next's proxy has no socket address to use instead, so send none.
+  if (!onVercel(env)) return null;
   const real = request.headers.get("x-real-ip")?.trim();
   if (real) return real;
   const xff = request.headers.get("x-forwarded-for");
@@ -27,10 +29,12 @@ function visitorIp(request: NextRequest): string | null {
 }
 
 export function proxy(request: NextRequest) {
-  const { target, source } = resolveProxyTarget(
-    { API_PROXY_TARGET: process.env.API_PROXY_TARGET, VERCEL_ENV: process.env.VERCEL_ENV },
-    request.headers.get("host"),
-  );
+  const env: ProxyEnv = {
+    API_PROXY_TARGET: process.env.API_PROXY_TARGET,
+    VERCEL: process.env.VERCEL,
+    VERCEL_ENV: process.env.VERCEL_ENV,
+  };
+  const { target, source } = resolveProxyTarget(env);
   if (source === "local" && process.env.NODE_ENV === "production" && !warnedLocal) {
     warnedLocal = true;
     console.warn(`[proxy] API_PROXY_TARGET is not set and this is not a Vercel deploy; sending /api to ${target}`);
@@ -44,7 +48,7 @@ export function proxy(request: NextRequest) {
   // Railway routes on Host; the destination URL determines it.
   headers.delete("host");
   const secret = process.env.API_PROXY_SECRET;
-  const ip = visitorIp(request);
+  const ip = visitorIp(request, env);
   if (secret && ip) {
     headers.set("x-ffc-proxy-secret", secret);
     headers.set("x-ffc-client-ip", ip);
