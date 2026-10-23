@@ -201,6 +201,9 @@ async def review_trade(
     target_team_id = details.get("target_team_id")
 
     if data.action == "approve":
+        # The other side has to say yes first. A commissioner can still deny.
+        if "accepted" not in {details.get("recipient_response"), details.get("cpu_response")}:
+            raise HTTPException(status_code=400, detail="The receiving team hasn't accepted this trade yet.")
         # Best-Ball (Phase 6): only the APPROVAL action is gated by the
         # management window -- denial isn't a "grant," so there's no
         # fairness/window concern, and blocking it would just trap a

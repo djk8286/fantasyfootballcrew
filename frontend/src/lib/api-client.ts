@@ -974,6 +974,8 @@ export const tradesApi = {
   },
   cancel: (leagueId: string, tradeId: string) =>
     apiRequest(`/api/v1/leagues/${leagueId}/trades/${tradeId}/cancel`, { method: "POST" }),
+  respond: (leagueId: string, tradeId: string, action: "accept" | "decline") =>
+    apiRequest(`/api/v1/leagues/${leagueId}/trades/${tradeId}/respond`, { method: "POST", body: { action } }),
 };
 
 // Waivers

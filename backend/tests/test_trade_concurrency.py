@@ -37,6 +37,7 @@ async def _make_trade(db_session_factory, league_id, proposer_id, target_id, off
                 "target_team_id": target_id,
                 "offered_player_ids": offered,
                 "requested_player_ids": requested,
+                "recipient_response": "accepted",
             },
         )
         db.add(trade)

@@ -8,9 +8,11 @@ from app.models.league import League
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User
-from app.schemas.trade import TradeProposalCreate
+from app.models.notification import NotificationType
+from app.schemas.trade import TradeProposalCreate, TradeResponse
 from app.api.deps import get_current_user, require_league_view
 from app.services.cpu_trade_service import evaluate_cpu_response, apply_cpu_verdict, answer_pending_cpu_trades
+from app.services.notification_service import notify_team_owners
 
 router = APIRouter(prefix="/leagues/{league_id}/trades", tags=["trades"])
 
@@ -32,7 +34,8 @@ async def propose_trade(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Propose a trade between two teams. Goes straight to the commissioner's review queue."""
+    """Propose a trade. The target team answers first (CPU teams at once,
+    humans via /respond). Only an accepted trade reaches commissioner review."""
     league_result = await db.execute(select(League).where(League.id == league_id))
     league = league_result.scalar_one_or_none()
     if not league:
@@ -69,6 +72,9 @@ async def propose_trade(
     if target_team.is_cpu:
         verdict = await evaluate_cpu_response(db, data.offered_player_ids, data.requested_player_ids)
         trade_status = apply_cpu_verdict(details, verdict)
+    elif current_user.id in {target_team.owner_id, target_team.co_owner_id}:
+        # Dual-Squad: both squads are yours, so you already said yes.
+        details["recipient_response"] = "accepted"
 
     trade = Transaction(
         league_id=league_id,
@@ -138,6 +144,51 @@ async def cancel_trade(
         raise HTTPException(status_code=400, detail=f"Trade already {trade.status.value}")
     trade.status = TransactionStatus.DENIED
     trade.details = {**(trade.details or {}), "cancelled_by_proposer": True}
+    await db.commit()
+    await db.refresh(trade)
+    return trade
+
+
+@router.post("/{trade_id}/respond")
+@limiter.limit("30/hour")
+async def respond_to_trade(
+    request: Request,
+    league_id: str,
+    trade_id: str,
+    data: TradeResponse,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The target team's owner or co-owner accepts or declines a pending
+    offer. Decline closes it. Accept sends it to commissioner review."""
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.id == trade_id,
+            Transaction.league_id == league_id,
+            Transaction.type == TransactionType.TRADE,
+        )
+    )
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    details = trade.details or {}
+    target = await _get_team_in_league(details.get("target_team_id") or "", league_id, db)
+    if current_user.id not in {target.owner_id, target.co_owner_id}:
+        raise HTTPException(status_code=403, detail="Only the team receiving this offer can answer it")
+    if trade.status != TransactionStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Trade already {trade.status.value}")
+    if details.get("recipient_response") or details.get("cpu_response"):
+        raise HTTPException(status_code=400, detail="This offer was already answered")
+
+    accepted = data.action == "accept"
+    trade.details = {**details, "recipient_response": "accepted" if accepted else "declined"}
+    if not accepted:
+        trade.status = TransactionStatus.DENIED
+        proposer = await _get_team_in_league(trade.team_id, league_id, db)
+        await notify_team_owners(
+            db, proposer, NotificationType.TRADE_DENIED, f"{target.name} declined your trade offer.",
+            league_id=league_id, link=f"/leagues/{league_id}/trades",
+        )
     await db.commit()
     await db.refresh(trade)
     return trade

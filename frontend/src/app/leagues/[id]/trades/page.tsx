@@ -5,9 +5,10 @@ import Toast, { useToast } from "@/components/Toast";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeftRight, Send } from "lucide-react";
+import { ArrowLeftRight, CheckCircle2, Send, XCircle } from "lucide-react";
 import { leaguesApi, teamsApi, tradesApi, playersApi, getCurrentUserId, isCurrentUser, isLoggedIn } from "@/lib/api-client";
 import ManagementWindowIndicator from "@/components/ManagementWindowIndicator";
+import { pendingTradeView } from "@/lib/trade-label";
 
 interface Team {
   id: string;
@@ -32,6 +33,7 @@ interface TradeItem {
     requested_player_ids?: string[];
     cpu_response?: "accepted" | "rejected";
     cpu_reason?: string;
+    recipient_response?: "accepted" | "declined";
     cancelled_by_proposer?: boolean;
   };
   processed_at: string;
@@ -55,6 +57,7 @@ export default function TradesPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [cancellingId, setCancellingId] = useState("");
+  const [respondingId, setRespondingId] = useState("");
   const { toast, showToast, clearToast } = useToast();
 
   const [targetTeamId, setTargetTeamId] = useState("");
@@ -63,6 +66,7 @@ export default function TradesPage() {
 
   const userId = getCurrentUserId();
   const myTeam = teams.find((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id));
+  const myTeamIds = teams.filter((t) => isCurrentUser(t.owner_id) || isCurrentUser(t.co_owner_id)).map((t) => t.id);
   const targetTeam = teams.find((t) => t.id === targetTeamId);
 
   const loadTrades = useCallback(async () => {
@@ -140,7 +144,9 @@ export default function TradesPage() {
           ? `${targetTeam?.name || "CPU"} accepted -- awaiting commissioner approval.`
           : cpu === "rejected"
             ? `${targetTeam?.name || "CPU"} declined the trade.`
-            : "Trade proposed -- sent for review.",
+            : created?.details?.recipient_response === "accepted"
+              ? "Trade sent to the commissioner."
+              : `Trade sent. ${targetTeam?.name || "They"} can accept or decline it.`,
       );
       setOfferedIds([]);
       setRequestedIds([]);
@@ -164,6 +170,20 @@ export default function TradesPage() {
       setError(err instanceof Error ? err.message : "Failed to cancel trade");
     } finally {
       setCancellingId("");
+    }
+  };
+
+  const handleRespond = async (tradeId: string, action: "accept" | "decline") => {
+    setRespondingId(tradeId);
+    setError("");
+    try {
+      await tradesApi.respond(leagueId, tradeId, action);
+      showToast(action === "accept" ? "Trade accepted. It goes to the commissioner next." : "Trade declined.");
+      await loadTrades();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to answer trade");
+    } finally {
+      setRespondingId("");
     }
   };
 
@@ -313,6 +333,7 @@ export default function TradesPage() {
               {trades.map((t) => {
                 const proposer = teams.find((tm) => tm.id === t.team_id);
                 const target = teams.find((tm) => tm.id === t.details?.target_team_id);
+                const view = pendingTradeView(t, myTeamIds, (id) => teams.find((tm) => tm.id === id)?.name);
                 return (
                   <div
                     key={t.id}
@@ -330,13 +351,34 @@ export default function TradesPage() {
                         {t.details?.cancelled_by_proposer ? "cancelled" : t.status}
                       </span>
                     </div>
-                    {t.details?.cpu_reason && (
-                      <p className="text-xs text-surface-300">
-                        {t.details.cpu_reason}
-                        {t.status === "pending" && t.details.cpu_response === "accepted" ? " Awaiting commissioner approval." : ""}
-                      </p>
+                    {t.details?.cpu_reason && <p className="text-xs text-surface-300">{t.details.cpu_reason}</p>}
+                    {t.details?.recipient_response === "declined" && (
+                      <p className="text-xs text-surface-300">{target?.name || "They"} declined.</p>
                     )}
-                    {t.status === "pending" && myTeam && t.team_id === myTeam.id && (
+                    {view.note && <p className="text-xs text-surface-300">{view.note}</p>}
+                    {view.canRespond && (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleRespond(t.id, "accept")}
+                          disabled={respondingId === t.id}
+                          className="inline-flex items-center gap-1 bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRespond(t.id, "decline")}
+                          disabled={respondingId === t.id}
+                          className="inline-flex items-center gap-1 bg-red-500 hover:bg-red-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                        >
+                          <XCircle className="w-3 h-3" />
+                          Decline
+                        </button>
+                      </div>
+                    )}
+                    {view.canCancel && (
                       <button
                         type="button"
                         onClick={() => handleCancel(t.id)}
