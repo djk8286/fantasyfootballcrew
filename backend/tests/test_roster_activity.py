@@ -208,3 +208,26 @@ async def test_activity_404s_for_a_team_outside_the_league(client, db_session_fa
     s = await _league(db_session_factory, weeks=_season())
     r = await client.get(f"/leagues/{s['league']}/activity", params={"team_id": "nope"})
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_voided_claim_still_shows_its_drop_to_the_league(client, db_session_factory):
+    """Roster repair marks a claim DENIED when it voids the add, but the
+    drop already happened, so the league still sees it."""
+    s = await _league(db_session_factory, weeks=_season())
+    amon, bijan, cam, drake = s["players"]
+    async with db_session_factory() as db:
+        db.add_all([
+            Transaction(league_id=s["league"], team_id="team-a", type=TransactionType.WAIVER,
+                        status=TransactionStatus.DENIED, processed_at=NOW - timedelta(days=1),
+                        details={"add_player_id": cam, "drop_player_id": amon, "voided": "player was already on Bolts's roster"}),
+            Transaction(league_id=s["league"], team_id="team-a", type=TransactionType.WAIVER,
+                        status=TransactionStatus.DENIED, processed_at=NOW - timedelta(hours=12),
+                        details={"add_player_id": drake, "voided": "player was already on Bolts's roster"}),
+        ])
+        await db.commit()
+
+    items = (await client.get(f"/leagues/{s['league']}/activity", headers=s["bob"])).json()["items"]
+    claims = [i for i in items if i["kind"] == "claim"]
+    assert [(i["status"], i["text"]) for i in claims] == [("done", "Aces dropped Amon X.")]
+    assert [p["name"] for p in claims[0]["players"]] == ["Amon X"]

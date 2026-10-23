@@ -122,6 +122,22 @@ def test_parse_event_has_no_score_before_kickoff():
     assert (parsed["home_score"], parsed["away_score"]) == (0, 0)
 
 
+@pytest.mark.parametrize("name,detail", [("STATUS_POSTPONED", "Postponed"), ("STATUS_CANCELED", "Canceled")])
+def test_parse_event_has_no_score_for_a_postponed_or_canceled_game(name, detail):
+    """ESPN marks these state "post" but not completed, still with "0" scores."""
+    event = {
+        "id": "4", "date": "2026-10-25T17:00Z",
+        "status": {"type": {"name": name, "state": "post", "completed": False, "shortDetail": detail}},
+        "competitions": [{"competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "BUF", "displayName": "Buffalo Bills"}, "score": "0"},
+            {"homeAway": "away", "team": {"abbreviation": "NE", "displayName": "New England Patriots"}, "score": "0"},
+        ]}],
+    }
+    parsed = _parse_event(event)
+    assert (parsed["home_score"], parsed["away_score"]) == (None, None)
+    assert (parsed["status_state"], parsed["status_detail"], parsed["completed"]) == ("post", detail, False)
+
+
 def test_parse_event_stores_sleeper_team_codes():
     """Player.team is Sleeper's code, so Washington is stored as WAS, not ESPN's WSH."""
     event = {

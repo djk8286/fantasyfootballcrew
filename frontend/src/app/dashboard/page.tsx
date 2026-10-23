@@ -5,7 +5,7 @@ import { leagueLabel } from "@/lib/league-label";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { leaguesApi, playersApi, dashboardApi, standingsApi, nflApi, isLoggedIn } from "@/lib/api-client";
-import { nflScoreLine } from "@/lib/nfl-game";
+import { nflGameOffSchedule, nflScoreLine } from "@/lib/nfl-game";
 import { Trophy, Plus, Users, Shield, Swords, ExternalLink, Calendar, ArrowRight, Sparkles, Flame, Radio, Bot } from "lucide-react";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { PositionChip } from "@/components/ui/Badge";
@@ -506,7 +506,9 @@ function NFLScoresWidget({ onHasData }: { onHasData?: (hasData: boolean) => void
                 {score ? (
                   <div className="text-gold-400 font-semibold shrink-0 ml-2">{score}</div>
                 ) : (
-                  <div className="text-surface-400 text-xs shrink-0 ml-2">{kickoffFormat.format(new Date(g.kickoff_at))}</div>
+                  <div className="text-surface-400 text-xs shrink-0 ml-2">
+                    {nflGameOffSchedule(g) && g.status_detail ? g.status_detail : kickoffFormat.format(new Date(g.kickoff_at))}
+                  </div>
                 )}
               </div>
             );

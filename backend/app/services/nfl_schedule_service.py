@@ -84,10 +84,12 @@ def _parse_event(event: dict) -> dict | None:
 
     status = event.get("status", {}).get("type", {})
     state = status.get("state", "pre")
+    completed = bool(status.get("completed", False))
 
     def _score(c: dict) -> int | None:
-        # ESPN sends "0" before kickoff. That's no score yet, not a 0-0 game.
-        if state == "pre":
+        # ESPN sends "0" for games that haven't been played, including
+        # postponed and canceled ones. That's no score, not a 0-0 game.
+        if not completed and state != "in":
             return None
         raw = c.get("score")
         try:
@@ -105,7 +107,7 @@ def _parse_event(event: dict) -> dict | None:
         "away_score": _score(away),
         "status_state": state,
         "status_detail": status.get("shortDetail", ""),
-        "completed": bool(status.get("completed", False)),
+        "completed": completed,
         "kickoff_at": datetime.fromisoformat(event["date"].replace("Z", "+00:00")),
     }
 

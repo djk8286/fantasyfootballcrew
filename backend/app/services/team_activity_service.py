@@ -152,13 +152,17 @@ async def league_activity(
             add, drop = d.get("add_player_id"), d.get("drop_player_id")
             involved = [t.team_id]
             dropping = f", dropping {_names([drop], players)}" if drop else ""
+            shown = [p for p in (add, drop) if p]
             if t.status == TransactionStatus.APPROVED:
                 status, text = "done", f"{tname(t.team_id)} added {_names([add], players)}{dropping}."
             elif t.status == TransactionStatus.PENDING:
                 status, text = "pending", f"{tname(t.team_id)} put in a claim for {_names([add], players)}{dropping}."
+            elif d.get("voided") and drop:
+                # Roster repair voided the add after the fact. The drop still happened.
+                status, text, shown = "done", f"{tname(t.team_id)} dropped {_names([drop], players)}.", [drop]
             else:
                 status, text = "declined", f"{tname(t.team_id)}'s claim for {_names([add], players)} didn't go through."
-            item = {"kind": "claim", "players": _player_refs([p for p in (add, drop) if p], players)}
+            item = {"kind": "claim", "players": _player_refs(shown, players)}
 
         if status != "done" and not (mine & set(involved)):
             continue
