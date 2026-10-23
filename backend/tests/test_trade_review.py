@@ -25,6 +25,9 @@ async def _make_trade_league(db_session_factory):
         commissioner = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
                              username=f"tradereviewcommish{uuid.uuid4().hex[:6]}", hashed_password="x")
         db.add(commissioner)
+        rival = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"rival{uuid.uuid4().hex[:6]}", hashed_password="x")
+        db.add(rival)
         await db.flush()
         league = League(id=str(uuid.uuid4()), name="Trade Review Test League", commissioner_id=commissioner.id,
                          league_type=LeagueType.STANDARD, scoring_config={}, roster_slots={})
@@ -42,7 +45,7 @@ async def _make_trade_league(db_session_factory):
         proposer = Team(id=str(uuid.uuid4()), name="Team A", league_id=league.id,
                         owner_id=commissioner.id, roster=[players[0].id], roster_version=0)
         target = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id,
-                      owner_id=commissioner.id, roster=[players[1].id], roster_version=0)
+                      owner_id=rival.id, roster=[players[1].id], roster_version=0)
         db.add_all([proposer, target])
         await db.commit()
 

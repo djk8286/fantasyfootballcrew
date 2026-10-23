@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.league import League
+from app.models.league import League, LeagueType
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.score_adjustment import ScoreAdjustment
@@ -236,6 +236,21 @@ async def review_trade(
         target = locked_teams.get(target_team_id)
         if not proposer or not target:
             raise HTTPException(status_code=404, detail="One of the trading teams no longer exists")
+        # A commissioner doesn't approve their own trade. Seated on both
+        # sides is never allowed, except your own Dual-Squad pair. Seated
+        # on one side, a commissioner who isn't in the trade has to approve
+        # it, when there is one.
+        sides = [{proposer.owner_id, proposer.co_owner_id}, {target.owner_id, target.co_owner_id}]
+        in_trade = sides[0] | sides[1]
+        dual_pair = league.league_type == LeagueType.DUAL_SQUAD and proposer.partner_team_id == target.id
+        if not dual_pair and all(current_user.id in side for side in sides):
+            raise HTTPException(status_code=400, detail="You manage both teams in this trade, so you can't approve it")
+        commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
+        if current_user.id in in_trade and commissioners - in_trade:
+            raise HTTPException(status_code=400, detail="You manage a team in this trade, so another commissioner has to approve it")
+        for team_obj in (proposer, target):
+            if team_obj.eliminated_week is not None:
+                raise HTTPException(status_code=400, detail=f"{team_obj.name} has been eliminated and can no longer trade")
 
         proposer_roster = set(proposer.roster or [])
         target_roster = set(target.roster or [])

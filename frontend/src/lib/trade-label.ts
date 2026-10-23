@@ -68,7 +68,9 @@ export function pendingTradeView(
     const who = t.details?.cpu_response ? "" : `${teamName(target) || "They"} accepted. `;
     return { note: `${who}Awaiting commissioner approval.`, canRespond: false, canCancel };
   }
-  const canRespond = myTeamIds.includes(target);
+  // Managing both sides is not consent. Your own Dual-Squad pair is
+  // accepted on propose, so it takes the branch above.
+  const canRespond = myTeamIds.includes(target) && !myTeamIds.includes(t.team_id);
   const note = canRespond ? "Your answer is needed." : `Waiting on ${teamName(target) || "the other team"} to accept or decline.`;
   return { note, canRespond, canCancel };
 }

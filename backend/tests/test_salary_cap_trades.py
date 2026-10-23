@@ -25,6 +25,9 @@ async def _make_trade_league(db_session_factory, cap_settings=None):
     async with db_session_factory() as db:
         commissioner = User(id=str(uuid.uuid4()), email="tradecommish@test.local", username="tradecommish", hashed_password="x")
         db.add(commissioner)
+        rival = User(id=str(uuid.uuid4()), email=f"{uuid.uuid4()}@test.local",
+                     username=f"rival{uuid.uuid4().hex[:6]}", hashed_password="x")
+        db.add(rival)
         await db.flush()
 
         league = League(id=str(uuid.uuid4()), name="Salary Cap Trade Test League", commissioner_id=commissioner.id,
@@ -33,7 +36,7 @@ async def _make_trade_league(db_session_factory, cap_settings=None):
         await db.flush()
 
         team_a = Team(id=str(uuid.uuid4()), name="Team A", league_id=league.id, owner_id=commissioner.id, roster=[], roster_version=0)
-        team_b = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id, owner_id=commissioner.id, roster=[], roster_version=0)
+        team_b = Team(id=str(uuid.uuid4()), name="Team B", league_id=league.id, owner_id=rival.id, roster=[], roster_version=0)
         db.add_all([team_a, team_b])
 
         players = [

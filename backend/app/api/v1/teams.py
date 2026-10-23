@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.team import Team
@@ -22,6 +22,7 @@ from app.api.deps import (
 from app.services.standings_service import get_standings
 from app.services.salary_cap_service import get_salary_cap_settings, team_cap_summary, release_player
 from app.services.team_claim_service import apply_team_claim
+from app.services.team_seats import lock_league_seats, require_one_live_seat
 from app.services.team_news_service import get_team_news, generate_and_save_team_news
 from app.services import espn_news_service
 from app.core.avatars import validate_avatar_url
@@ -120,7 +121,7 @@ async def update_team(
         # branch that reaches here is genuinely trying to SET one.
         if league.league_type != LeagueType.TWO_MAN:
             raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
-        await _require_one_live_seat(db, team, update_data.co_owner_id, "That person already manages a team in this league")
+        await require_one_live_seat(db, team, update_data.co_owner_id, "That person already manages a team in this league")
         team.co_owner_id = update_data.co_owner_id
     if update_data.conference is not None:
         if current_user.id not in {league.commissioner_id, *(league.co_commissioner_ids or [])}:
@@ -198,23 +199,6 @@ async def release_player_route(
     return team
 
 
-async def _require_one_live_seat(db: AsyncSession, team: Team, user_id: str, detail: str) -> None:
-    """One live seat per person per league before they become `team`'s
-    co-owner. Holding two teams lets you answer your own trade offers. A
-    Dual-Squad partner is the exception, and so is an eliminated team
-    (Guillotine: its manager may join a survivor)."""
-    other_teams = await db.execute(
-        select(Team.id).where(
-            Team.league_id == team.league_id,
-            Team.id != team.id,
-            Team.eliminated_week.is_(None),
-            or_(Team.owner_id == user_id, Team.co_owner_id == user_id),
-        )
-    )
-    if any(other_id != team.partner_team_id for other_id in other_teams.scalars()):
-        raise HTTPException(status_code=400, detail=detail)
-
-
 @router.post("/{team_id}/claim-co-owner", response_model=TeamRead)
 @limiter.limit("20/hour")
 async def claim_co_owner(
@@ -236,6 +220,7 @@ async def claim_co_owner(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    await lock_league_seats(db, league.id, team)
     # Visibility gate -- see user_can_join_league's docstring. Without
     # this, INVITE_ONLY/PRIVATE leagues were only "private" in the
     # discovery listing, not in who could actually claim a slot.
@@ -252,7 +237,7 @@ async def claim_co_owner(
         raise HTTPException(status_code=400, detail="This team already has a co-owner")
     if current_user.id == team.owner_id:
         raise HTTPException(status_code=400, detail="You already own this team")
-    await _require_one_live_seat(db, team, current_user.id, "You already manage a team in this league")
+    await require_one_live_seat(db, team, current_user.id, "You already manage a team in this league")
 
     team.co_owner_id = current_user.id
     await db.commit()
@@ -278,6 +263,7 @@ async def claim_team(
     league = league_result.scalar_one_or_none()
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
+    await lock_league_seats(db, league.id, team)
     if not await user_can_join_league(db, league, current_user):
         raise HTTPException(status_code=403, detail="You need an accepted invite or approved join request to join this league")
 
@@ -386,6 +372,7 @@ async def assign_owner(
     re-check it either."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if not team.is_cpu:
         raise HTTPException(status_code=400, detail="Team is already owned -- remove the current owner first")
@@ -394,7 +381,7 @@ async def assign_owner(
     if not target:
         raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
 
-    await apply_team_claim(db, team, league, target)
+    await apply_team_claim(db, team, league, target, "That person already manages a team in this league")
     await db.commit()
     await db.refresh(team)
     return team
@@ -413,6 +400,7 @@ async def assign_co_owner(
     behalf."""
     team, league = await _get_team_and_league_or_404(team_id, db)
     require_commissioner(league, current_user)
+    await lock_league_seats(db, league.id, team)
 
     if league.league_type != LeagueType.TWO_MAN:
         raise HTTPException(status_code=400, detail="Co-owners are only available in 2-Man Team leagues")
@@ -426,7 +414,7 @@ async def assign_co_owner(
         raise HTTPException(status_code=404, detail=f"No user found matching {data.identifier!r}")
     if target.id == team.owner_id:
         raise HTTPException(status_code=400, detail="That person already owns this team")
-    await _require_one_live_seat(db, team, target.id, "That person already manages a team in this league")
+    await require_one_live_seat(db, team, target.id, "That person already manages a team in this league")
 
     team.co_owner_id = target.id
     await db.commit()

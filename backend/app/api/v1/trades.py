@@ -26,6 +26,26 @@ def _dual_squad_pair(league: League, a: Team, b: Team) -> bool:
     return league.league_type == LeagueType.DUAL_SQUAD and a.partner_team_id == b.id
 
 
+def _refuse_eliminated(*teams: Team) -> None:
+    # Same rule as waiver claims. An eliminated Guillotine team is out.
+    for team in teams:
+        if team.eliminated_week is not None:
+            raise HTTPException(status_code=400, detail=f"{team.name} has been eliminated and can no longer trade")
+
+
+async def _notify_commissioners_to_review(
+    db: AsyncSession, league: League, proposer: Team, target: Team, actor_id: str,
+) -> set[str]:
+    commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
+    for user_id in commissioners - {actor_id}:
+        await create_notification(
+            db, user_id, NotificationType.TRADE_ACCEPTED,
+            f"{target.name} accepted a trade from {proposer.name}. It needs your review.",
+            league_id=league.id, link=f"/leagues/{league.id}/commissioner?tab=trades",
+        )
+    return commissioners
+
+
 async def _get_team_in_league(team_id: str, league_id: str, db: AsyncSession) -> Team:
     result = await db.execute(select(Team).where(Team.id == team_id, Team.league_id == league_id))
     team = result.scalar_one_or_none()
@@ -58,6 +78,7 @@ async def propose_trade(
 
     if current_user.id not in {proposing_team.owner_id, proposing_team.co_owner_id}:
         raise HTTPException(status_code=403, detail="You do not own the proposing team")
+    _refuse_eliminated(proposing_team, target_team)
 
     proposing_roster = set(proposing_team.roster or [])
     target_roster = set(target_team.roster or [])
@@ -93,12 +114,17 @@ async def propose_trade(
         details=details,
     )
     db.add(trade)
-    if trade_status == TransactionStatus.PENDING and not details.get("recipient_response") and not target_team.is_cpu:
-        await notify_team_owners(
-            db, target_team, NotificationType.TRADE_OFFER,
-            f"{proposing_team.name} sent you a trade offer.",
-            league_id=league_id, link=f"/leagues/{league_id}/trades",
-        )
+    if trade_status == TransactionStatus.PENDING:
+        if "accepted" in {details.get("recipient_response"), details.get("cpu_response")}:
+            await _notify_commissioners_to_review(db, league, proposing_team, target_team, current_user.id)
+        elif not target_team.is_cpu:
+            # Someone on both teams can't answer it, so they get no offer.
+            for user_id in _managers(target_team) - _managers(proposing_team):
+                await create_notification(
+                    db, user_id, NotificationType.TRADE_OFFER,
+                    f"{proposing_team.name} sent you a trade offer.",
+                    league_id=league_id, link=f"/leagues/{league_id}/trades",
+                )
     await db.commit()
     await db.refresh(trade)
     return trade
@@ -208,18 +234,12 @@ async def respond_to_trade(
     trades_link = f"/leagues/{league_id}/trades"
     if accepted:
         await write_pending_trade(db, trade, unanswered=True, details=new_details)
-        commissioners = {league.commissioner_id, *(league.co_commissioner_ids or [])} - {None}
+        commissioners = await _notify_commissioners_to_review(db, league, proposer, target, current_user.id)
         for user_id in _managers(proposer) - commissioners:
             await create_notification(
                 db, user_id, NotificationType.TRADE_ACCEPTED,
                 f"{target.name} accepted your trade offer. It now goes to the commissioner.",
                 league_id=league_id, link=trades_link,
-            )
-        for user_id in commissioners:
-            await create_notification(
-                db, user_id, NotificationType.TRADE_ACCEPTED,
-                f"{target.name} accepted a trade from {proposer.name}. It needs your review.",
-                league_id=league_id, link=f"/leagues/{league_id}/commissioner?tab=trades",
             )
     else:
         await write_pending_trade(

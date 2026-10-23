@@ -18,6 +18,7 @@ from app.services.auth_service import hash_token
 from app.services.email_service import send_league_invite_email
 from app.services.notification_service import create_notification
 from app.services.team_claim_service import apply_team_claim, find_open_team
+from app.services.team_seats import lock_league_seats
 from app.api.deps import get_current_user, require_commissioner
 
 # No router-level prefix -- unlike every other feature router, this one
@@ -187,6 +188,7 @@ async def accept_invite(
     invite.accepted_by_user_id = current_user.id
 
     league = await _get_league_or_404(invite.league_id, db)
+    await lock_league_seats(db, league.id)
     # Notify whoever specifically sent this invite, not every commissioner
     # -- they're the one with context on who they invited and why. Skip
     # if that account's since been deleted (invited_by_user_id nulled) --

@@ -38,6 +38,17 @@ describe("pendingTradeView", () => {
       note: "Waiting on Waiver Wolves to accept or decline.", canRespond: false, canCancel: true,
     });
   });
+  it("does not let someone on both teams answer", () => {
+    expect(pendingTradeView(offer, ["a", "b"], name)).toEqual({
+      note: "Waiting on Waiver Wolves to accept or decline.", canRespond: false, canCancel: true,
+    });
+  });
+  it("leaves your own accepted Dual-Squad offer with the commissioner", () => {
+    const pair = { ...offer, details: { target_team_id: "b", recipient_response: "accepted" as const } };
+    expect(pendingTradeView(pair, ["a", "b"], name)).toEqual({
+      note: "Waiver Wolves accepted. Awaiting commissioner approval.", canRespond: false, canCancel: true,
+    });
+  });
   it("hands an accepted offer to the commissioner", () => {
     const accepted = { ...offer, details: { target_team_id: "b", recipient_response: "accepted" as const } };
     expect(pendingTradeView(accepted, ["b"], name)).toEqual({

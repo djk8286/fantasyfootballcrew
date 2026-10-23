@@ -229,6 +229,20 @@ async def seed(db_session_factory):
 
 
 @pytest_asyncio.fixture
+async def referee_token(seed):
+    """A co-commissioner on no team. The seed commissioner owns every
+    team, so it can't approve trades between them itself."""
+    async with seed["db_session_factory"]() as db:
+        referee = User(id=str(uuid.uuid4()), email="referee@test.local", username="referee",
+                       hashed_password="x")
+        db.add(referee)
+        league = await db.get(League, seed["league_id"])
+        league.co_commissioner_ids = [referee.id]
+        await db.commit()
+        return create_access_token({"sub": referee.id, "email": referee.email})
+
+
+@pytest_asyncio.fixture
 async def guillotine_seed(db_session_factory):
     """4-team GUILLOTINE league (t1..t4), all empty rosters -- score is
     entirely controlled per-test via flat_weekly Coach bonuses (see
