@@ -191,12 +191,13 @@ Provide:
 """
 
 TRADE_ANALYSIS_PROMPT = """
-You are an expert fantasy football trade analyzer. Evaluate this trade proposal:
+You are an expert fantasy football trade analyzer. Evaluate this trade proposal
+between {team_a_name} and {team_b_name}. Refer to each team by its name.
 
-**Team A gives up:**
+**{team_a_name} gives up:**
 {team_a_players}
 
-**Team B gives up:**
+**{team_b_name} gives up:**
 {team_b_players}
 
 **League Settings:**
@@ -206,16 +207,16 @@ You are an expert fantasy football trade analyzer. Evaluate this trade proposal:
 {standings_context}
 
 **Coaching Staff:**
-- Team A: {team_a_coaching}
-- Team B: {team_b_coaching}
+- {team_a_name}: {team_a_coaching}
+- {team_b_name}: {team_b_coaching}
 
 **Salary Cap:**
-- Team A: {team_a_salary}
-- Team B: {team_b_salary}
+- {team_a_name}: {team_a_salary}
+- {team_b_name}: {team_b_salary}
 
 **Linked Pair (Dual-Squad):**
-- Team A: {team_a_partner}
-- Team B: {team_b_partner}
+- {team_a_name}: {team_a_partner}
+- {team_b_name}: {team_b_partner}
 
 Provide:
 1. Trade grade for each team (A-F)
@@ -771,6 +772,8 @@ class AIService:
 
     async def analyze_trade(
         self,
+        team_a_name: str,
+        team_b_name: str,
         team_a_players: list,
         team_b_players: list,
         scoring: Dict[str, Any],
@@ -784,6 +787,8 @@ class AIService:
     ) -> str:
         """Analyze a trade proposal between two teams."""
         prompt = TRADE_ANALYSIS_PROMPT.format(
+            team_a_name=team_a_name,
+            team_b_name=team_b_name,
             team_a_players=json.dumps(team_a_players, indent=2),
             team_b_players=json.dumps(team_b_players, indent=2),
             scoring_settings=json.dumps(scoring, indent=2),

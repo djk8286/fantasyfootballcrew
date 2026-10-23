@@ -426,6 +426,7 @@ async def analyze_trade(
     await record_ai_usage(db, "trade", league_id=trade.league_id, user_id=current_user.id)
     service = _get_ai_service()
     analysis = await service.analyze_trade(
+        team_a_name=proposer.name, team_b_name=target.name,
         team_a_players=offered, team_b_players=requested, scoring=scoring, standings={"standings": standings},
         team_a_coaching=team_a_coaching, team_b_coaching=team_b_coaching,
         team_a_salary=team_a_salary, team_b_salary=team_b_salary,

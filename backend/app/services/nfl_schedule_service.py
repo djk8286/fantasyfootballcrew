@@ -83,8 +83,12 @@ def _parse_event(event: dict) -> dict | None:
         return None
 
     status = event.get("status", {}).get("type", {})
+    state = status.get("state", "pre")
 
     def _score(c: dict) -> int | None:
+        # ESPN sends "0" before kickoff. That's no score yet, not a 0-0 game.
+        if state == "pre":
+            return None
         raw = c.get("score")
         try:
             return int(raw) if raw is not None else None
@@ -99,7 +103,7 @@ def _parse_event(event: dict) -> dict | None:
         "away_team": nfl_team_code(away["team"].get("abbreviation", "??")),
         "away_team_name": away["team"].get("displayName", "Unknown"),
         "away_score": _score(away),
-        "status_state": status.get("state", "pre"),
+        "status_state": state,
         "status_detail": status.get("shortDetail", ""),
         "completed": bool(status.get("completed", False)),
         "kickoff_at": datetime.fromisoformat(event["date"].replace("Z", "+00:00")),

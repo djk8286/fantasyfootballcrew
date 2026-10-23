@@ -16,6 +16,7 @@ from app.models.league import League, LeagueVisibility
 from app.models.team import Team
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.ai_usage_event import AIUsageEvent
+from app.services.ai_service import AIService
 from app.services.auth_service import create_access_token
 
 
@@ -75,7 +76,7 @@ async def test_lineup_analysis_records_usage_with_league_and_user(client, db_ses
 
 
 @pytest.mark.asyncio
-async def test_trade_analysis_records_usage_with_league_and_user(client, db_session_factory):
+async def test_trade_analysis_records_usage_with_league_and_user(client, db_session_factory, monkeypatch):
     proposer_owner, token = await _make_user(db_session_factory)
     target_owner, _ = await _make_user(db_session_factory)
     async with db_session_factory() as db:
@@ -96,9 +97,17 @@ async def test_trade_analysis_records_usage_with_league_and_user(client, db_sess
         await db.commit()
         league_id, trade_id = league.id, trade.id
 
+    prompts = []
+
+    async def spy(self, prompt: str) -> str:
+        prompts.append(prompt)
+        return "ok"
+
+    monkeypatch.setattr(AIService, "_call_llm", spy)
     client.headers["Authorization"] = f"Bearer {token}"
     r = await client.post("/ai/trade", json={"trade_id": trade_id})
     assert r.status_code == 200
+    assert "**Proposer gives up:**" in prompts[0] and "**Target gives up:**" in prompts[0]
 
     async with db_session_factory() as db:
         result = await db.execute(select(AIUsageEvent).where(AIUsageEvent.endpoint == "trade", AIUsageEvent.user_id == proposer_owner.id))

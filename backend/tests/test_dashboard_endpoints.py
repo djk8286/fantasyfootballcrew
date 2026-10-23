@@ -122,6 +122,7 @@ async def test_get_nfl_scores_returns_games_and_null_recap_before_generation(cli
     assert body["week"] == 1
     assert len(body["games"]) == 1
     assert body["games"][0]["home_team"] == "KC"
+    assert body["games"][0]["status_state"] == "post"
     assert body["recap"] is None
 
 
