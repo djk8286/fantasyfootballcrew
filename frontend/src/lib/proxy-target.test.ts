@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_BACKEND, PROD_BACKEND, onVercel, resolveProxyTarget } from "./proxy-target";
+import { LOCAL_BACKEND, PROD_BACKEND, isProdBackend, onVercel, resolveProxyTarget } from "./proxy-target";
 
 describe("resolveProxyTarget", () => {
   it("never sends a non-Vercel run to prod by default", () => {
@@ -28,5 +28,20 @@ describe("resolveProxyTarget", () => {
   it("only counts VERCEL=1 as Vercel", () => {
     expect(onVercel({ VERCEL: "1" })).toBe(true);
     for (const v of [undefined, "", "0", "true"]) expect(onVercel({ VERCEL: v })).toBe(false);
+  });
+
+  it("isProdBackend matches the prod origin only", () => {
+    expect(isProdBackend(PROD_BACKEND)).toBe(true);
+    expect(isProdBackend(`${PROD_BACKEND}/`)).toBe(true);
+    expect(isProdBackend(`${PROD_BACKEND}/api`)).toBe(true);
+    for (const t of [
+      LOCAL_BACKEND,
+      "https://someone-tunnel.trycloudflare.com",
+      "https://fantasyfootballcrew-production.up.railway.app.evil.example",
+      "http://fantasyfootballcrew-production.up.railway.app",
+      "https://fantasyfootballcrew-production.up.railway.app:8443",
+      "not a url",
+      "",
+    ]) expect(isProdBackend(t)).toBe(false);
   });
 });

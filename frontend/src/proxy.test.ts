@@ -47,8 +47,8 @@ describe("proxy()", () => {
     expect(r.fwd("x-ffc-client-ip")).toBe("203.0.113.77");
   });
 
-  it("off Vercel: a prod Host header doesn't reach prod, and no client IP or secret is sent", () => {
-    env({ API_PROXY_SECRET: "local-copy-of-secret" });
+  it("off Vercel with no secret: a prod Host header doesn't reach prod, and no client IP or secret is sent", () => {
+    env({});
     const r = run("http://192.168.1.50:3000/api/v1/auth/login", visitor);
     expect(r.rewrite).toBe(`${LOCAL_BACKEND}/api/v1/auth/login`);
     expect(r.fwd("cookie")).toBe(visitor.cookie);
@@ -58,9 +58,74 @@ describe("proxy()", () => {
   });
 
   it("off Vercel with a copied VERCEL_ENV=production: still local", () => {
-    env({ VERCEL_ENV: "production", API_PROXY_SECRET: "s" });
+    env({ VERCEL_ENV: "production" });
     const r = run("http://localhost:3000/api/v1/x", { ...visitor, host: "localhost:3000" });
     expect(r.rewrite).toBe(`${LOCAL_BACKEND}/api/v1/x`);
+    expect(r.fwd("x-ffc-client-ip")).toBeNull();
+  });
+
+  it("API_PROXY_SECRET set but VERCEL !== '1': fails closed with a 503 and logs one error", async () => {
+    // Fresh module so the log-once flag starts clear.
+    vi.resetModules();
+    const { proxy: freshProxy } = await import("./proxy");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const cases: Record<string, string>[] = [
+        { API_PROXY_SECRET: "real-secret", VERCEL_ENV: "production" },
+        { API_PROXY_SECRET: "real-secret", VERCEL: "true", VERCEL_ENV: "production" },
+        { API_PROXY_SECRET: "real-secret", API_PROXY_TARGET: PROD_BACKEND },
+        { API_PROXY_SECRET: "real-secret" },
+      ];
+      for (const c of cases) {
+        env(c);
+        const res = freshProxy(new NextRequest("https://fantasyfootballcrew.com/api/v1/leagues", { headers: visitor }));
+        expect(res.status).toBe(503);
+        expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+        expect(await res.json()).toEqual({ detail: "Service unavailable" });
+      }
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(String(err.mock.calls[0][0])).toContain("API_PROXY_SECRET is set but VERCEL");
+      expect(String(err.mock.calls[0][0])).not.toContain("real-secret");
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("on Vercel, an explicit target that isn't the prod backend gets neither the secret nor the client IP", () => {
+    env({ VERCEL: "1", VERCEL_ENV: "preview", API_PROXY_SECRET: "real-secret", API_PROXY_TARGET: "https://someone-tunnel.trycloudflare.com" });
+    const r = run("https://fantasyfootballcrew-abc123-the-crew2.vercel.app/api/v1/me", { ...visitor, host: "fantasyfootballcrew-abc123-the-crew2.vercel.app" });
+    expect(r.rewrite).toBe("https://someone-tunnel.trycloudflare.com/api/v1/me");
+    expect(r.fwd("cookie")).toBe(visitor.cookie);
+    expect(r.fwd("x-ffc-proxy-secret")).toBeNull();
+    expect(r.fwd("x-ffc-client-ip")).toBeNull();
+  });
+
+  it("on Vercel, a lookalike host or different scheme/port isn't the prod backend", () => {
+    for (const t of [
+      "https://fantasyfootballcrew-production.up.railway.app.evil.example",
+      "http://fantasyfootballcrew-production.up.railway.app",
+      "https://fantasyfootballcrew-production.up.railway.app:8443",
+    ]) {
+      env({ VERCEL: "1", VERCEL_ENV: "production", API_PROXY_SECRET: "real-secret", API_PROXY_TARGET: t });
+      const r = run("https://fantasyfootballcrew.com/api/v1/x", visitor);
+      expect(r.fwd("x-ffc-proxy-secret")).toBeNull();
+      expect(r.fwd("x-ffc-client-ip")).toBeNull();
+    }
+  });
+
+  it("on Vercel, an explicit target equal to the prod backend (with a path or trailing slash) still gets them", () => {
+    env({ VERCEL: "1", VERCEL_ENV: "production", API_PROXY_SECRET: "real-secret", API_PROXY_TARGET: `${PROD_BACKEND}/` });
+    const r = run("https://fantasyfootballcrew.com/api/v1/x", visitor);
+    expect(r.rewrite).toBe(`${PROD_BACKEND}/api/v1/x`);
+    expect(r.fwd("x-ffc-proxy-secret")).toBe("real-secret");
+    expect(r.fwd("x-ffc-client-ip")).toBe("203.0.113.77");
+  });
+
+  it("vercel dev (VERCEL=1, development) goes local and sends neither", () => {
+    env({ VERCEL: "1", VERCEL_ENV: "development", API_PROXY_SECRET: "real-secret" });
+    const r = run("http://localhost:3000/api/v1/x", { ...visitor, host: "localhost:3000" });
+    expect(r.rewrite).toBe(`${LOCAL_BACKEND}/api/v1/x`);
+    expect(r.fwd("x-ffc-proxy-secret")).toBeNull();
     expect(r.fwd("x-ffc-client-ip")).toBeNull();
   });
 

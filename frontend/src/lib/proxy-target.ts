@@ -11,11 +11,12 @@
  * Order:
  *   1. API_PROXY_TARGET, when set, always wins.
  *   2. A Vercel production or preview deploy (VERCEL === "1" and
- *      VERCEL_ENV is "production" or "preview") uses the prod backend.
- *      Previews have always proxied to prod; that stays until there is a
- *      staging backend. Both variables are Vercel system env vars, so the
- *      project must keep "Automatically expose System Environment
- *      Variables" on, or set API_PROXY_TARGET.
+ *      VERCEL_ENV is "production" or "preview") with no API_PROXY_TARGET
+ *      uses the prod backend. The Vercel project sets API_PROXY_TARGET for
+ *      both Production and Preview, so in practice previews go wherever
+ *      that value points, and this default is only the fallback. Both
+ *      variables are Vercel system env vars, so the project must keep
+ *      "Automatically expose System Environment Variables" on.
  *   3. Everything else: http://localhost:8001.
  *
  * Nothing here reads the request's Host header. Anyone can send any Host,
@@ -44,4 +45,18 @@ export function resolveProxyTarget(env: ProxyEnv): { target: string; source: Pro
     return { target: PROD_BACKEND, source: "vercel" };
   }
   return { target: LOCAL_BACKEND, source: "local" };
+}
+
+/**
+ * True only when `target` has the same origin as PROD_BACKEND. The proxy
+ * secret and the visitor IP go to that backend and nowhere else, so an
+ * explicit API_PROXY_TARGET pointing at a tunnel or any other host never
+ * receives them.
+ */
+export function isProdBackend(target: string): boolean {
+  try {
+    return new URL(target).origin === new URL(PROD_BACKEND).origin;
+  } catch {
+    return false;
+  }
 }
