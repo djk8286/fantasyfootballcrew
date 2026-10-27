@@ -1,8 +1,9 @@
+import Link from "next/link";
 import LegalPageLayout, { LegalSection } from "@/components/LegalPageLayout";
 
 export default function ContactPage() {
   return (
-    <LegalPageLayout title="Contact" lastUpdated="August 11, 2026">
+    <LegalPageLayout title="Contact" lastUpdated="October 27, 2026">
       <LegalSection heading="Get in touch">
         <p>
           Bug reports, feature requests, questions about your account or data — all of it goes to
@@ -19,6 +20,16 @@ export default function ContactPage() {
         <p>
           It&apos;s a solo-run project, so replies aren&apos;t instant, but every message gets
           read.
+        </p>
+      </LegalSection>
+
+      <LegalSection heading="System status">
+        <p>
+          To see whether the site is up and when NFL data last synced, check the{" "}
+          <Link href="/status" className="text-gold-400 hover:text-gold-300">
+            status page
+          </Link>
+          .
         </p>
       </LegalSection>
     </LegalPageLayout>
