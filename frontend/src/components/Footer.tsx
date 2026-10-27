@@ -94,6 +94,14 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link
+                  href="/status"
+                  className="text-surface-400 hover:text-gold-400 text-sm transition-colors"
+                >
+                  Status
+                </Link>
+              </li>
+              <li>
                 <span className="text-surface-500 text-sm">
                   Beta 2026
                 </span>

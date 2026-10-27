@@ -159,6 +159,19 @@ async def root():
     }
 
 
+def _health_body() -> dict:
+    return {"status": "healthy", "app": settings.APP_NAME}
+
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "app": settings.APP_NAME}
+    # Railway healthcheck (railway.json healthcheckPath). No auth, no database.
+    return _health_body()
+
+
+@app.get("/api/v1/health")
+async def api_health():
+    # Same payload on the /api prefix. The Next.js proxy only forwards
+    # /api/*, so the public status page reads this instead of calling
+    # Railway directly.
+    return _health_body()
